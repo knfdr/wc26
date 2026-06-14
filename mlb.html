@@ -452,6 +452,15 @@ async function fetchMLBGames(apiKey, { force = false } = {}) {
   return data;
 }
 
+// Odds API sometimes uses non-standard or city-less team names
+const TEAM_NAME_MAP = {
+  "Athletics": "Oakland Athletics",
+  "Cleveland Guardians": "Cleveland Guardians",
+};
+function normalizeTeamName(name) {
+  return TEAM_NAME_MAP[name] || name;
+}
+
 function parseOddsGame(game) {
   // Find best available odds from FanDuel then DraftKings
   const books = game.bookmakers || [];
@@ -482,8 +491,8 @@ function parseOddsGame(game) {
 
   return {
     id: game.id,
-    homeTeam: game.home_team,
-    awayTeam: game.away_team,
+    homeTeam: normalizeTeamName(game.home_team),
+    awayTeam: normalizeTeamName(game.away_team),
     commenceTime: game.commence_time,
     h2h, spread, total,
   };
