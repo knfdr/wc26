@@ -252,11 +252,12 @@ async function loadStats() {
     const content = data.files[GIST_FILE] && data.files[GIST_FILE].content;
     const bets = JSON.parse(content||"[]");
     const resolved = bets.filter(b=>b.result!=="pending");
-    if (resolved.length===0) return;
+    if (bets.length===0) return;
     const wins = resolved.filter(b=>b.result==="win").length;
     const losses = resolved.filter(b=>b.result==="loss").length;
     const pushes = resolved.filter(b=>b.result==="push").length;
-    const winPct = resolved.length ? ((wins/(resolved.length-pushes))*100).toFixed(1) : "—";
+    const decidable = resolved.length - pushes;
+    const winPct = decidable > 0 ? ((wins/decidable)*100).toFixed(1) : "—";
     const units = resolved.reduce((a,b)=>a+(b.result==="win"?b.units:b.result==="loss"?-b.units:0),0).toFixed(1);
     const pending = bets.filter(b=>b.result==="pending").length;
     const bySport = {};
