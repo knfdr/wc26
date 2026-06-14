@@ -527,7 +527,6 @@ async function autoResolveBets(bets, oddsKey) {
   const pending = bets.filter(b => b.result === "pending");
   if (!pending.length || !oddsKey) return bets;
 
-  // Fetch scores for both sports
   const sports = [...new Set(pending.map(b => b.sport))];
   const scoreMap = {};
 
@@ -540,11 +539,16 @@ async function autoResolveBets(bets, oddsKey) {
       if (!res.ok) continue;
       const scores = await res.json();
       scores.forEach(g => {
-        if (g.completed && g.scores) {
-          scoreMap[g.id] = g;
-          scoreMap[g.home_team + "|" + g.away_team] = g;
-          scoreMap[g.away_team + "|" + g.home_team] = g;
-        }
+        // STRICT: only resolve if completed is explicitly true AND scores exist
+        // Also guard: game must have started at least 3 hours ago (MLB games ~3hrs)
+        // to avoid resolving in-progress games with partial scores
+        if (g.completed !== true || !g.scores || !g.scores.length) return;
+        const commenceTime = new Date(g.commence_time).getTime();
+        const threeHoursMs = 3 * 60 * 60 * 1000;
+        if (Date.now() - commenceTime < threeHoursMs) return;
+        scoreMap[g.id] = g;
+        scoreMap[g.home_team + "|" + g.away_team] = g;
+        scoreMap[g.away_team + "|" + g.home_team] = g;
       });
     } catch(e) {}
   }
@@ -552,7 +556,8 @@ async function autoResolveBets(bets, oddsKey) {
   return bets.map(bet => {
     if (bet.result !== "pending") return bet;
     const game = scoreMap[bet.gameId] || scoreMap[bet.homeTeam + "|" + bet.awayTeam];
-    if (!game || !game.completed) return bet;
+    // Double-check completed flag on the matched game too
+    if (!game || game.completed !== true) return bet;
 
     const homeScore = parseInt((game.scores.find(s => s.name === game.home_team) || {}).score || "0");
     const awayScore = parseInt((game.scores.find(s => s.name !== game.home_team) || {}).score || "0");
@@ -1404,13 +1409,40 @@ function App() {
   const [error, setError]   = useState("");
   const [activeTab, setActiveTab] = useState("game_0");
   const [simData, setSimData] = useState({});
+  const [runningId, setRunningId] = useState(null);
   const [running, setRunning] = useState(false);
   const [runCounts, setRunCounts] = useState({});
   const [manualMode, setManualMode] = useState(false);
   const [manualHome, setManualHome] = useState(TEAM_NAMES[0]);
   const [manualAway, setManualAway] = useState(TEAM_NAMES[1]);
+  const autoRanRef = useRef(false);
 
   const betLogger = useBetLogger(ghToken, oddsKey);
+
+  // Auto-sim all games sequentially once games are loaded
+  useEffect(() => {
+    if (!games.length || autoRanRef.current) return;
+    autoRanRef.current = true;
+    let idx = 0;
+    function runNext() {
+      if (idx >= games.length) return;
+      const game = games[idx];
+      idx++;
+      if (!TEAM_PARAMS[game.homeTeam] || !TEAM_PARAMS[game.awayTeam]) { runNext(); return; }
+      const key = game.homeTeam + "|" + game.awayTeam;
+      setRunningId(key);
+      setTimeout(() => {
+        const result = runMLBSim(game.homeTeam, game.awayTeam);
+        if (result) {
+          setSimData(prev => ({ ...prev, [key]: result }));
+          setRunCounts(prev => ({ ...prev, [key]: 1 }));
+        }
+        setRunningId(null);
+        setTimeout(runNext, 30);
+      }, 50);
+    }
+    setTimeout(runNext, 200);
+  }, [games]);
 
   async function loadGames(key) {
     setLoading(true); setError("");
@@ -1438,26 +1470,29 @@ function App() {
 
   function runSim(game) {
     const g = game || activeGame;
-    if (!g || running) return;
+    if (!g || runningId) return;
     const key = g.homeTeam+"|"+g.awayTeam;
-    setRunning(true);
+    setRunningId(key);
     setTimeout(() => {
       const result = runMLBSim(g.homeTeam, g.awayTeam);
       if (result) {
         setSimData(prev => ({ ...prev, [key]: result }));
         setRunCounts(prev => ({ ...prev, [key]: (prev[key]||0)+1 }));
       }
-      setRunning(false);
+      setRunningId(null);
     }, 50);
   }
 
   useEffect(() => {
-    if (gameKey && !simData[gameKey] && !running && activeGame && TEAM_PARAMS[activeGame.homeTeam] && TEAM_PARAMS[activeGame.awayTeam]) {
+    if (gameKey && !simData[gameKey] && !runningId && activeGame && TEAM_PARAMS[activeGame.homeTeam] && TEAM_PARAMS[activeGame.awayTeam]) {
       runSim(activeGame);
     }
   }, [gameKey, activeTab]);
 
   if (!oddsKey || !ghToken) return <div style={S.wrap}><ApiKeyGate onKeys={handleKeys}/></div>;
+
+  const simsLoaded = games.filter(g => simData[g.homeTeam+"|"+g.awayTeam]).length;
+  const allSimsReady = games.length > 0 && simsLoaded === games.length;
 
   const topBetCount = games.reduce((acc,g) => {
     const agg = simData[g.homeTeam+"|"+g.awayTeam];
@@ -1478,7 +1513,7 @@ function App() {
           </div>
         )}
         <div style={{ fontSize:9, color:T.muted }}>{games.length > 0 ? games.length+" games" : loading?"Loading...":""}</div>
-        <button onClick={()=>loadGames(oddsKey)} disabled={loading} style={{ ...S.btn(loading,T.green), width:"auto", padding:"6px 14px", marginTop:0, fontSize:9 }}>
+        <button onClick={()=>{ autoRanRef.current=false; loadGames(oddsKey); }} disabled={loading||!!runningId} style={{ ...S.btn((loading||!!runningId),T.green), width:"auto", padding:"6px 14px", marginTop:0, fontSize:9 }}>
           {loading?"Loading...":"↻ Refresh"}
         </button>
         <button onClick={()=>{ localStorage.removeItem("sharp_odds_key"); localStorage.removeItem("sharp_gh_token"); setOddsKey(null); setGhToken(null); }}
@@ -1487,6 +1522,18 @@ function App() {
         </button>
       </div>
 
+      {/* LOADING PROGRESS BAR */}
+      {!allSimsReady && games.length > 0 && (
+        <div style={{ background:T.navy, padding:"8px 16px", borderBottom:"1px solid "+T.border, display:"flex", alignItems:"center", gap:12 }}>
+          <div style={{ flex:1, height:4, background:T.border, borderRadius:2, overflow:"hidden" }}>
+            <div style={{ height:"100%", width:(simsLoaded/games.length*100)+"%", background:"linear-gradient(90deg,"+T.green+","+T.gold+")", borderRadius:2, transition:"width 0.5s" }}/>
+          </div>
+          <div style={{ fontSize:9, color:T.muted, whiteSpace:"nowrap" }}>
+            {runningId ? ("Simulating "+(runningId.split("|")[0])+"...") : "Initializing..."} {simsLoaded}/{games.length}
+          </div>
+        </div>
+      )}
+
       {error && <div style={{ background:"#1a0a0a", border:"1px solid "+T.red+"44", padding:"10px 16px", fontSize:10, color:T.red }}>{error}</div>}
 
       {/* TABS */}
@@ -1494,7 +1541,7 @@ function App() {
         {games.map((g,i) => (
           <button key={g.id} style={S.tab(activeTab==="game_"+i&&!manualMode)} onClick={()=>{ setActiveTab("game_"+i); setManualMode(false); }}>
             {TEAM_PARAMS[g.awayTeam]?.abbr||g.awayTeam.split(" ").pop()} @ {TEAM_PARAMS[g.homeTeam]?.abbr||g.homeTeam.split(" ").pop()}
-            {simData[g.homeTeam+"|"+g.awayTeam]?"":""  }
+            {runningId===(g.homeTeam+"|"+g.awayTeam) ? " ⟳" : !simData[g.homeTeam+"|"+g.awayTeam] ? " ·" : ""}
           </button>
         ))}
         <button style={{ ...S.tab(manualMode), color:manualMode?T.purple:T.muted, borderBottom:manualMode?"2px solid "+T.purple:"2px solid transparent" }} onClick={()=>{ setManualMode(true); setActiveTab("custom"); }}>
@@ -1530,8 +1577,10 @@ function App() {
       {activeTab==="top_picks" && <TopPicksTab simData={simData} games={games} betLogger={betLogger}/>}
       {activeTab==="parlays" && <MLBParlayTab simData={simData} games={games} betLogger={betLogger}/>}
       {!["top_picks","parlays"].includes(activeTab) && activeGame && TEAM_PARAMS[activeGame.homeTeam] && TEAM_PARAMS[activeGame.awayTeam] && (
-        <GameSimView game={activeGame} agg={simData[gameKey]} running={running && gameKey && running}
-          runCount={runCounts[gameKey]||0} onRun={()=>runSim(activeGame)}
+        <GameSimView game={activeGame} agg={simData[gameKey]}
+          running={runningId === gameKey}
+          runCount={runCounts[gameKey]||0}
+          onRun={()=>runSim(activeGame)}
           betLogger={betLogger}
         />
       )}
