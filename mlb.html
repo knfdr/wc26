@@ -1556,8 +1556,6 @@ function App() {
     }
   }, [gameKey, activeTab]);
 
-  if (!oddsKey || !ghToken) return <div style={S.wrap}><ApiKeyGate onKeys={handleKeys}/></div>;
-
   const simsLoaded = games.filter(g => simData[g.homeTeam+"|"+g.awayTeam]).length;
   const allSimsReady = games.length > 0 && simsLoaded === games.length;
 
@@ -1575,6 +1573,8 @@ function App() {
     appAutoLoggedRef.current = true;
     betLogger.logAllBets(allBets);
   }, [allSimsReady, betLogger.loaded]);
+
+  if (!oddsKey || !ghToken) return <div style={S.wrap}><ApiKeyGate onKeys={handleKeys}/></div>;
 
   const topBetCount = games.reduce((acc,g) => {
     const agg = simData[g.homeTeam+"|"+g.awayTeam];
