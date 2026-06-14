@@ -765,22 +765,33 @@ async function gistWrite(ghToken, bets) {
 }
 
 // ── Auto-resolve via Odds API scores ─────────────────────────────────────────
+const SCORES_CACHE_TTL = 30 * 60 * 1000;
+async function fetchScores(sportKey, oddsKey) {
+  const cacheKey = "sharp_scores_cache_" + sportKey;
+  try {
+    const cached = JSON.parse(localStorage.getItem(cacheKey) || "null");
+    if (cached && Date.now() - cached.ts < SCORES_CACHE_TTL) return cached.data;
+  } catch(e) {}
+  const res = await fetch(
+    "https://api.the-odds-api.com/v4/sports/" + sportKey + "/scores/?daysFrom=3&apiKey=" + oddsKey
+  );
+  if (!res.ok) throw new Error("scores API error: " + res.status);
+  const data = await res.json();
+  localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data }));
+  return data;
+}
+
 async function autoResolveBets(bets, oddsKey) {
   const pending = bets.filter(b => b.result === "pending");
   if (!pending.length || !oddsKey) return bets;
 
-  // Fetch scores for both sports
   const sports = [...new Set(pending.map(b => b.sport))];
   const scoreMap = {};
 
   for (const sport of sports) {
     const sportKey = sport === "MLB" ? "baseball_mlb" : "soccer_fifa_world_cup";
     try {
-      const res = await fetch(
-        "https://api.the-odds-api.com/v4/sports/" + sportKey + "/scores/?daysFrom=3&apiKey=" + oddsKey
-      );
-      if (!res.ok) continue;
-      const scores = await res.json();
+      const scores = await fetchScores(sportKey, oddsKey);
       const today = new Date().toLocaleDateString("en-CA");
       scores.forEach(g => {
         if (g.completed !== true || !g.scores || !g.scores.length) return;
