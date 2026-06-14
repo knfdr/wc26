@@ -1500,8 +1500,9 @@ function App() {
       const data = await fetchMLBGames(key, { force });
       const now = Date.now();
       setLastFetched(JSON.parse(localStorage.getItem(ODDS_CACHE_KEY)||"{}").ts || now);
+      const today = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD local
       const parsed = data
-        .filter(g => new Date(g.commence_time).getTime() <= now)
+        .filter(g => new Date(g.commence_time).toLocaleDateString("en-CA") === today)
         .map(parseOddsGame)
         .filter(Boolean);
       setGames(parsed);
