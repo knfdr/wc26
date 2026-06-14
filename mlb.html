@@ -1473,7 +1473,11 @@ function App() {
     setLoading(true); setError("");
     try {
       const data = await fetchMLBGames(key);
-      const parsed = data.map(parseOddsGame).filter(Boolean);
+      const now = Date.now();
+      const parsed = data
+        .filter(g => new Date(g.commence_time).getTime() <= now)
+        .map(parseOddsGame)
+        .filter(Boolean);
       setGames(parsed);
       setActiveTab("game_0");
     } catch(e) { setError(e.message); }
