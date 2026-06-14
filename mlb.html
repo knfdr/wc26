@@ -479,6 +479,7 @@ function impliedProb(ml) {
   if (!ml) return 0;
   if (ml < 0) return (-ml)/(-ml+100)*100;
   return 100/(ml+100)*100;
+}
 // ════════════════════════════════════════════════════════════════════════════════
 // SHARED BET TRACKING ENGINE
 // Gist ID: 8a76d2b09c709882e4364528a0152ccc
@@ -807,7 +808,6 @@ function useBetLogger(ghToken, oddsKey) {
 
   return { bets, stats, logBet, removeBet, saving, loaded, isLogged };
 }
-}
 
 // ════════════════════════════════════════════════════════════════════════════════
 // UI COMPONENTS
@@ -845,59 +845,6 @@ function signal(simPct, impliedPct, lockThresh=70, highThresh=60, leanThresh=52)
 // ════════════════════════════════════════════════════════════════════════════════
 // API KEY GATE
 // ════════════════════════════════════════════════════════════════════════════════
-function ApiKeyGate({ onKey }) {
-  const [val, setVal] = useState("");
-  const [err, setErr] = useState("");
-  const [testing, setTesting] = useState(false);
-
-  const stored = localStorage.getItem("sharp_odds_key");
-
-  useEffect(() => {
-    if (stored) onKey(stored);
-  }, []);
-
-  async function test() {
-    if (!val.trim()) { setErr("Enter your API key"); return; }
-    setTesting(true); setErr("");
-    try {
-      const res = await fetch("https://api.the-odds-api.com/v4/sports?apiKey=" + val.trim());
-      if (!res.ok) throw new Error("Invalid key or quota exceeded");
-      localStorage.setItem("sharp_odds_key", val.trim());
-      onKey(val.trim());
-    } catch(e) {
-      setErr(e.message);
-    }
-    setTesting(false);
-  }
-
-  return (
-    <div style={{ maxWidth:520, margin:"80px auto", padding:"0 20px" }}>
-      <div style={{ ...S.card, border:"1px solid "+T.green+"44" }}>
-        <div style={S.badge(T.green)}>⚾ MLB SIM · API KEY REQUIRED</div>
-        <div style={{ fontSize:13, fontWeight:700, marginBottom:8, marginTop:8 }}>Enter your Odds API key</div>
-        <div style={{ fontSize:10, color:T.muted, lineHeight:1.7, marginBottom:16 }}>
-          Your key is stored only in your browser's localStorage — never in source code or sent anywhere except The Odds API directly. Get a free key at <span style={{ color:T.green }}>the-odds-api.com</span>
-        </div>
-        <input
-          style={S.input}
-          type="password"
-          placeholder="Paste your API key..."
-          value={val}
-          onChange={e=>setVal(e.target.value)}
-          onKeyDown={e=>e.key==="Enter"&&test()}
-        />
-        {err && <div style={{ fontSize:10, color:T.red, marginTop:8 }}>{err}</div>}
-        <button style={S.btn(testing, T.green)} onClick={test} disabled={testing}>
-          {testing ? "Verifying..." : "Connect & Load Today's Games"}
-        </button>
-        <div style={{ fontSize:9, color:T.muted, marginTop:10, lineHeight:1.6 }}>
-          Free tier: 500 req/month · MLB h2h, spreads, totals · Clear key: <span style={{ color:T.red, cursor:"pointer" }} onClick={()=>{ localStorage.removeItem("sharp_odds_key"); setVal(""); }}>reset</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ════════════════════════════════════════════════════════════════════════════════
 // GAME SIM VIEW
 // ════════════════════════════════════════════════════════════════════════════════
