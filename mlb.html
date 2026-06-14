@@ -425,12 +425,31 @@ function aggregateMLB(homeTeam, awayTeam, results, hp, ap, n) {
 // ════════════════════════════════════════════════════════════════════════════════
 // ODDS API FETCH
 // ════════════════════════════════════════════════════════════════════════════════
-async function fetchMLBGames(apiKey) {
+function formatAge(ts) {
+  const mins = Math.floor((Date.now() - ts) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return mins + "m ago";
+  const hrs = Math.floor(mins / 60);
+  return hrs + "h " + (mins % 60) + "m ago";
+}
+
+const ODDS_CACHE_KEY = "sharp_odds_cache";
+const ODDS_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+
+async function fetchMLBGames(apiKey, { force = false } = {}) {
+  if (!force) {
+    try {
+      const cached = JSON.parse(localStorage.getItem(ODDS_CACHE_KEY) || "null");
+      if (cached && Date.now() - cached.ts < ODDS_CACHE_TTL) return cached.data;
+    } catch(e) {}
+  }
   const url = "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/?apiKey="
     + apiKey + "&regions=us&markets=h2h,spreads,totals&oddsFormat=american&bookmakers=fanduel,draftkings";
   const res = await fetch(url);
   if (!res.ok) throw new Error("API error: " + res.status);
-  return res.json();
+  const data = await res.json();
+  localStorage.setItem(ODDS_CACHE_KEY, JSON.stringify({ ts: Date.now(), data }));
+  return data;
 }
 
 function parseOddsGame(game) {
@@ -1436,6 +1455,12 @@ function App() {
   const [simData, setSimData] = useState({});
   const [runningId, setRunningId] = useState(null);
   const [running, setRunning] = useState(false);
+  const [lastFetched, setLastFetched] = useState(() => {
+    try {
+      const c = JSON.parse(localStorage.getItem(ODDS_CACHE_KEY) || "null");
+      return c ? c.ts : null;
+    } catch(e) { return null; }
+  });
   const [runCounts, setRunCounts] = useState({});
   const [manualMode, setManualMode] = useState(false);
   const [manualHome, setManualHome] = useState(TEAM_NAMES[0]);
@@ -1469,11 +1494,12 @@ function App() {
     setTimeout(runNext, 200);
   }, [games]);
 
-  async function loadGames(key) {
+  async function loadGames(key, { force = false } = {}) {
     setLoading(true); setError("");
     try {
-      const data = await fetchMLBGames(key);
+      const data = await fetchMLBGames(key, { force });
       const now = Date.now();
+      setLastFetched(JSON.parse(localStorage.getItem(ODDS_CACHE_KEY)||"{}").ts || now);
       const parsed = data
         .filter(g => new Date(g.commence_time).getTime() <= now)
         .map(parseOddsGame)
@@ -1542,7 +1568,8 @@ function App() {
           </div>
         )}
         <div style={{ fontSize:9, color:T.muted }}>{games.length > 0 ? games.length+" games" : loading?"Loading...":""}</div>
-        <button onClick={()=>{ autoRanRef.current=false; loadGames(oddsKey); }} disabled={loading||!!runningId} style={{ ...S.btn((loading||!!runningId),T.green), width:"auto", padding:"6px 14px", marginTop:0, fontSize:9 }}>
+        {lastFetched && <div style={{ fontSize:8, color:T.muted, letterSpacing:"0.5px" }}>cached {formatAge(lastFetched)}</div>}
+        <button onClick={()=>{ autoRanRef.current=false; loadGames(oddsKey, { force: true }); }} disabled={loading||!!runningId} style={{ ...S.btn((loading||!!runningId),T.green), width:"auto", padding:"6px 14px", marginTop:0, fontSize:9 }}>
           {loading?"Loading...":"↻ Refresh"}
         </button>
         <button onClick={()=>{ localStorage.removeItem("sharp_odds_key"); localStorage.removeItem("sharp_gh_token"); setOddsKey(null); setGhToken(null); }}
