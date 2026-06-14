@@ -268,8 +268,9 @@ async function loadStats() {
       else if(b.result==="loss") bySport[b.sport].losses++;
     });
     const unitColor = parseFloat(units)>=0?"#22c55e":"#ef4444";
+    const winPctDisplay = winPct === "—" ? "—" : winPct+"%";
     let html = '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center">';
-    html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Overall Win %</div><div style="font-size:26px;font-weight:700;color:#22c55e">'+winPct+'%</div></div>';
+    html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Overall Win %</div><div style="font-size:26px;font-weight:700;color:#22c55e">'+winPctDisplay+'</div></div>';
     html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Record</div><div style="font-size:18px;font-weight:700"><span style="color:#22c55e">'+wins+'W</span>-<span style="color:#ef4444">'+losses+'L</span>-<span style="color:#4b6280">'+pushes+'P</span></div></div>';
     html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Total Units</div><div style="font-size:26px;font-weight:700;color:'+unitColor+'">'+(parseFloat(units)>=0?"+":"")+units+'u</div></div>';
     html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Pending</div><div style="font-size:18px;font-weight:700;color:#fbbf24">'+pending+'</div></div>';

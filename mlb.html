@@ -1452,7 +1452,10 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError]   = useState("");
   const [activeTab, setActiveTab] = useState("game_0");
-  const [simData, setSimData] = useState({});
+  const SIM_CACHE_KEY = "sharp_sim_cache_mlb_" + new Date().toLocaleDateString("en-CA");
+  const [simData, setSimData] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(SIM_CACHE_KEY) || "{}"); } catch(e) { return {}; }
+  });
   const [runningId, setRunningId] = useState(null);
   const [running, setRunning] = useState(false);
   const [lastFetched, setLastFetched] = useState(() => {
@@ -1469,22 +1472,30 @@ function App() {
 
   const betLogger = useBetLogger(ghToken, oddsKey);
 
-  // Auto-sim all games sequentially once games are loaded
+  // Auto-sim all games sequentially once games are loaded; skip cached results
   useEffect(() => {
     if (!games.length || autoRanRef.current) return;
     autoRanRef.current = true;
+    const cached = (() => { try { return JSON.parse(localStorage.getItem(SIM_CACHE_KEY) || "{}"); } catch(e) { return {}; } })();
+    const needsSim = games.filter(g => {
+      const key = g.homeTeam + "|" + g.awayTeam;
+      return (!TEAM_PARAMS[g.homeTeam] || !TEAM_PARAMS[g.awayTeam]) ? false : !cached[key];
+    });
+    if (!needsSim.length) return;
     let idx = 0;
     function runNext() {
-      if (idx >= games.length) return;
-      const game = games[idx];
-      idx++;
-      if (!TEAM_PARAMS[game.homeTeam] || !TEAM_PARAMS[game.awayTeam]) { runNext(); return; }
+      if (idx >= needsSim.length) return;
+      const game = needsSim[idx++];
       const key = game.homeTeam + "|" + game.awayTeam;
       setRunningId(key);
       setTimeout(() => {
         const result = runMLBSim(game.homeTeam, game.awayTeam);
         if (result) {
-          setSimData(prev => ({ ...prev, [key]: result }));
+          setSimData(prev => {
+            const next = { ...prev, [key]: result };
+            localStorage.setItem(SIM_CACHE_KEY, JSON.stringify(next));
+            return next;
+          });
           setRunCounts(prev => ({ ...prev, [key]: 1 }));
         }
         setRunningId(null);

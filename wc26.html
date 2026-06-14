@@ -1593,7 +1593,10 @@ function WCKeyGate({ onToken }) {
 
 function App() {
   const [activeId, setActiveId] = useState(MATCHES[0].id);
-  const [simData, setSimData]   = useState({});
+  const SIM_CACHE_KEY = "sharp_sim_cache_wc_" + new Date().toLocaleDateString("en-CA");
+  const [simData, setSimData] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(SIM_CACHE_KEY) || "{}"); } catch(e) { return {}; }
+  });
   const [runningId, setRunningId] = useState(null);
   const [runCounts, setRunCounts] = useState({});
   const [ghToken, setGhToken] = useState(localStorage.getItem("sharp_gh_token") || null);
@@ -1618,18 +1621,23 @@ function App() {
   useEffect(() => {
     if (autoRanRef.current) return;
     autoRanRef.current = true;
+    const cached = (() => { try { return JSON.parse(localStorage.getItem(SIM_CACHE_KEY) || "{}"); } catch(e) { return {}; } })();
+    const needsSim = MATCHES.filter(m => !cached[m.id]);
+    if (!needsSim.length) return;
     let idx = 0;
     function runNext() {
-      if (idx >= MATCHES.length) return;
-      const matchId = MATCHES[idx].id;
-      idx++;
-      setRunningId(matchId);
+      if (idx >= needsSim.length) return;
+      const match = needsSim[idx++];
+      setRunningId(match.id);
       setTimeout(() => {
-        const match = MATCHES.find(m => m.id === matchId);
         const raw = runSimulation(match, 100000);
         const agg = aggregate(match, raw);
-        setSimData(prev => ({ ...prev, [matchId]: agg }));
-        setRunCounts(prev => ({ ...prev, [matchId]: 1 }));
+        setSimData(prev => {
+          const next = { ...prev, [match.id]: agg };
+          localStorage.setItem(SIM_CACHE_KEY, JSON.stringify(next));
+          return next;
+        });
+        setRunCounts(prev => ({ ...prev, [match.id]: 1 }));
         setRunningId(null);
         setTimeout(runNext, 30);
       }, 50);
