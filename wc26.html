@@ -1,0 +1,1235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WC 2026 Match Simulator</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body, #root { min-height: 100vh; background: #070b14; }
+  body { font-family: 'IBM Plex Mono', 'Courier New', monospace; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #0c1526; }
+  ::-webkit-scrollbar-thumb { background: #1a2a3e; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useCallback, useRef } = React;
+
+
+// ════════════════════════════════════════════════════════════════════════════════
+// LAYER 1 — DIXON-COLES TEAM STRENGTH PARAMETERS
+// Attack (α) and Defense (β) estimated from qualifying campaigns,
+// Nations League, friendlies, and xG data. League average = 1.0 baseline.
+// xG sources: FBref, xGscore.io, RealGM WC tracker, fbref.com national team pages
+// All values per-90-minute / per-match, neutral venue adjusted.
+// ════════════════════════════════════════════════════════════════════════════════
+const TEAMS = {
+  Germany: {
+    alpha: 2.18,   // attack strength — 16 goals/5 matches; xG ~2.1/game vs top opposition
+    beta:  0.68,   // defense strength (lower = better) — 5 GA/5, xGA ~0.7
+    // Key inputs: W5 run, 6-0 vs Slovakia, 2-1 USA, 4-0 Finland
+    // Injury discount: Gnabry out, Karl out, Musiala 95%, Neuer calf risk
+    injuryFactor: 0.94,
+    notes: ["Gnabry/Karl out", "Musiala 95%", "Neuer calf concern", "W5-D0-L0 run"],
+  },
+  Curacao: {
+    alpha: 0.58,   // CONCACAF quals vs Bermuda/Jamaica; 0W Gold Cup 2025
+    beta:  1.95,   // concedes heavily vs quality; 10 GA in 5 recent vs elite
+    injuryFactor: 1.0,
+    notes: ["WC debut", "Full squad", "0-3 at Gold Cup 2025", "Strong vs CONCACAF minnows only"],
+  },
+  Netherlands: {
+    alpha: 1.72,   // Gakpo 7G PL, Depay, Brobbey; xG ~1.65 in qualifiers
+    beta:  0.92,   // solid but not elite; lost to Algeria in warm-up
+    injuryFactor: 0.99,
+    notes: ["FIFA #8", "Lost to Algeria in warm-up", "Created many chances vs Uzbekistan", "Gakpo/Depay/Brobbey trio"],
+  },
+  Japan: {
+    alpha: 1.48,   // beat Germany & Spain at 2022 WC; Kubo, Tanaka
+    beta:  0.98,   // disciplined defensive structure
+    injuryFactor: 1.0,
+    notes: ["Giant-killers at 2022 WC", "Moriyasu 3rd WC", "High press style", "Suzuki (GK) in top form"],
+  },
+  "Ivory Coast": {
+    alpha: 1.52,   // beat France 2-1, 4-0 vs Korea, 1-0 Scotland; AFCON champs
+    beta:  1.18,   // some defensive fragility; Ndicka doubtful
+    injuryFactor: 0.97,
+    notes: ["AFCON champions", "W7-D1-L1 last 9", "Ndicka (CB) doubtful", "Age 25.8 — youngest squad"],
+  },
+  Ecuador: {
+    alpha: 1.28,   // low-scoring; 14 goals in 18 qualifiers; draw specialists
+    beta:  0.88,   // elite D: Caicedo, Pacho (UCL winner), Hincapie
+    injuryFactor: 1.0,
+    notes: ["19-game unbeaten run", "9/13 draws — ultra-cautious", "Caicedo/Pacho/Hincapie defensive spine", "Beat Argentina 1-0 in qualifying"],
+  },
+  Sweden: {
+    alpha: 1.78,   // Isak + Gyokeres — elite dual threat; 3-0 each play-off game
+    beta:  1.32,   // no clean sheet in 11 matches; leaky at back
+    injuryFactor: 0.96,
+    notes: ["Isak + Gyokeres = elite duo", "Kulusevski out (knee)", "0 clean sheets last 11", "New coach Graham Potter"],
+  },
+  Tunisia: {
+    alpha: 0.92,   // 5-0 loss to Belgium; never out of group stage in 6 WCs
+    beta:  1.38,   // 10 CS in African qualifying but that was vs weaker sides
+    injuryFactor: 0.97,
+    notes: ["Lost 5-0 to Belgium (warm-up)", "Mejbri carrying knock", "Never past group stage in WC", "Won all 10 African qualifiers w/ 10 CS"],
+  },
+};
+
+// ════════════════════════════════════════════════════════════════════════════════
+// LAYER 2 — DIXON-COLES MODEL
+// λ_home = α_home × β_away × γ_home_advantage × μ (league mean)
+// μ (mean goals international neutral) ≈ 1.22 per team per match
+// γ = home/neutral advantage: ~1.0 at neutral, slight crowd effect for seeded teams
+// ρ correction for low-scoring outcomes (0-0, 1-0, 0-1, 1-1) — Dixon-Coles 1997
+// ════════════════════════════════════════════════════════════════════════════════
+const MU = 1.22;  // grand mean goals per team per match, international neutral venue
+
+function dixonColesLambda(attackTeam, defendTeam, isHome = false) {
+  const t = TEAMS[attackTeam];
+  const opp = TEAMS[defendTeam];
+  const gamma = isHome ? 1.08 : 1.0; // slight "home" boost for seeded teams with big fanbases
+  return t.alpha * opp.beta * gamma * MU * t.injuryFactor;
+}
+
+// Dixon-Coles ρ correction for low-score dependence
+// τ(x,y,λ,μ,ρ) corrects the joint probability of (0,0), (1,0), (0,1), (1,1)
+function dcTau(x, y, lambda, mu, rho) {
+  if (x === 0 && y === 0) return 1 - lambda * mu * rho;
+  if (x === 1 && y === 0) return 1 + mu * rho;
+  if (x === 0 && y === 1) return 1 + lambda * rho;
+  if (x === 1 && y === 1) return 1 - rho;
+  return 1;
+}
+const RHO = -0.13; // Standard DC estimate for international football
+
+// ════════════════════════════════════════════════════════════════════════════════
+// LAYER 3 — xG SHOT SIMULATION
+// Per-match shot distribution calibrated from national team xG data
+// Each shot is assigned an individual xG drawn from Beta distribution
+// Goal = Bernoulli trial on each shot's xG value
+// Then DC correction applied at joint probability level
+// ════════════════════════════════════════════════════════════════════════════════
+function betaRandom(alpha, beta) {
+  // Johnk method for Beta distribution
+  let x, y;
+  do {
+    x = Math.pow(Math.random(), 1 / alpha);
+    y = Math.pow(Math.random(), 1 / beta);
+  } while (x + y > 1);
+  return x / (x + y);
+}
+
+function poissonRandom(lambda) {
+  const L = Math.exp(-Math.min(lambda, 30));
+  let k = 0, p = 1;
+  do { k++; p *= Math.random(); } while (p > L);
+  return k - 1;
+}
+
+function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }
+
+// Shot profile per team — shots/90 and shot quality (xG per shot)
+// Derived from: xG/match ÷ shots/match from national team xG data
+const SHOT_PROFILES = {
+  Germany:        { shotsPerGame: 17.2, xgPerShot: 0.127, onTargetRate: 0.44 },
+  Curacao:        { shotsPerGame: 6.1,  xgPerShot: 0.095, onTargetRate: 0.28 },
+  Netherlands:    { shotsPerGame: 14.8, xgPerShot: 0.116, onTargetRate: 0.40 },
+  Japan:          { shotsPerGame: 12.4, xgPerShot: 0.119, onTargetRate: 0.37 },
+  "Ivory Coast":  { shotsPerGame: 13.1, xgPerShot: 0.116, onTargetRate: 0.38 },
+  Ecuador:        { shotsPerGame: 11.2, xgPerShot: 0.114, onTargetRate: 0.34 },
+  Sweden:         { shotsPerGame: 14.4, xgPerShot: 0.124, onTargetRate: 0.39 },
+  Tunisia:        { shotsPerGame: 9.3,  xgPerShot: 0.099, onTargetRate: 0.31 },
+};
+
+// ════════════════════════════════════════════════════════════════════════════════
+// CORNER MODEL
+// Base corners/match from national team & WC 2026 data (avg 8.5/match at WC so far,
+// 9.45 in UEFA qualifying). Dominant team attacking into a low block = more corners.
+// ════════════════════════════════════════════════════════════════════════════════
+const CORNER_PROFILES = {
+  Germany:       { cFor: 6.2, cAgainst: 3.8 },
+  Curacao:       { cFor: 2.8, cAgainst: 6.4 },
+  Netherlands:   { cFor: 5.6, cAgainst: 4.1 },
+  Japan:         { cFor: 4.8, cAgainst: 4.9 },
+  "Ivory Coast": { cFor: 5.1, cAgainst: 4.6 },
+  Ecuador:       { cFor: 4.2, cAgainst: 4.5 },
+  Sweden:        { cFor: 5.4, cAgainst: 4.3 },
+  Tunisia:       { cFor: 3.8, cAgainst: 5.2 },
+};
+
+function simulateCorners(homeTeam, awayTeam, hGoals, aGoals) {
+  const hProf = CORNER_PROFILES[homeTeam];
+  const aProf = CORNER_PROFILES[awayTeam];
+  const baseH = (hProf.cFor + aProf.cAgainst) / 2;
+  const baseA = (aProf.cFor + hProf.cAgainst) / 2;
+  const marginEffect = Math.abs(hGoals - aGoals) * 0.25;
+  const hCorners = Math.max(0, Math.round(poissonRandom(baseH + (hGoals > aGoals ? marginEffect * 0.4 : 0))));
+  const aCorners = Math.max(0, Math.round(poissonRandom(baseA + (aGoals > hGoals ? marginEffect * 0.4 : 0))));
+  // 1H corners: ~40% of full-match corners occur in 1H internationally
+  const hC1H = Math.round(hCorners * (0.36 + Math.random() * 0.1));
+  const aC1H = Math.round(aCorners * (0.36 + Math.random() * 0.1));
+  return { hCorners, aCorners, hC1H, aC1H, total: hCorners + aCorners, total1H: hC1H + aC1H };
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// 1H GOAL SPLIT MODEL
+// 1H goals internationally: ~42% of match goals scored before HT
+// Modeled as independent Poisson draws with lambda scaled to half
+// First half is slightly more conservative (teams feel each other out)
+// ════════════════════════════════════════════════════════════════════════════════
+function simulateHalfGoals(fullGoals, lambda) {
+  // 1H lambda is not simply half of full-match lambda:
+  // empirically ~40% of intl goals fall in 1H (teams cautious early)
+  const h1Lambda = lambda * 0.40;
+  const h1Goals = Math.min(fullGoals, poissonRandom(h1Lambda));
+  const h2Goals = fullGoals - h1Goals;
+  return { h1Goals, h2Goals };
+}
+
+function simulateGoalsViaShots(teamName, lambda) {
+  // Simulate shot-by-shot: number of shots from Poisson(shotRate)
+  // Each shot: xG drawn from Beta, then Bernoulli trial
+  // Cap goals at a natural distribution ceiling
+  const profile = SHOT_PROFILES[teamName];
+  const nShots = Math.max(0, Math.round(poissonRandom(profile.shotsPerGame) + (Math.random() * 3 - 1.5)));
+  let goals = 0;
+  let shotsOnTarget = 0;
+  let totalXG = 0;
+
+  for (let i = 0; i < nShots; i++) {
+    // Shot quality: Beta(2, 14) gives realistic right-skewed xG distribution
+    // Shift mean toward team's average xgPerShot
+    const xgShot = clamp(betaRandom(2, 14) * (profile.xgPerShot / (2 / (2 + 14))), 0.01, 0.85);
+    totalXG += xgShot;
+    if (Math.random() < profile.onTargetRate) shotsOnTarget++;
+    if (Math.random() < xgShot) goals++;
+  }
+
+  // Soft-constrain toward DC lambda (blend shot sim with DC expectation)
+  // This is the key integration: shot sim anchored to DC team strength
+  const blendedGoals = Math.round(goals * 0.65 + poissonRandom(lambda) * 0.35);
+  return { goals: Math.max(0, blendedGoals), shots: nShots, shotsOnTarget, totalXG };
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// LAYER 4 — CARD MODEL
+// Negative binomial model for yellow cards (overdispersed relative to Poisson)
+// Red cards: conditional on yellow pressure + match state
+// ════════════════════════════════════════════════════════════════════════════════
+function negBinRandom(r, p) {
+  // NegBin via Poisson-Gamma mixture: more realistic than pure Poisson for cards
+  const gamma_rate = r * (1 - p) / p;
+  const lambda = -gamma_rate * Math.log(Math.random());
+  return poissonRandom(lambda);
+}
+
+function simulateCards(teamName, isUnderdog, goalDeficit) {
+  const baseYellow = {
+    Germany: 1.55, Curacao: 2.05, Netherlands: 1.72, Japan: 1.48,
+    "Ivory Coast": 1.88, Ecuador: 1.65, Sweden: 1.62, Tunisia: 1.71,
+  }[teamName] || 1.7;
+
+  // Pressure multiplier: losing teams collect more yellows
+  const pressureMult = 1 + Math.max(0, goalDeficit) * 0.09;
+  const underdogMult = isUnderdog ? 1.12 : 1.0;
+
+  // NegBin(r=3, p adjusted to hit target mean)
+  const targetMean = baseYellow * pressureMult * underdogMult;
+  const r = 3; const p = r / (r + targetMean);
+  const yellows = negBinRandom(r, p);
+
+  // Red card: base rate + escalation for repeated fouls + scoreline pressure
+  const baseRedRate = { Germany: 0.038, Curacao: 0.082, Netherlands: 0.045,
+    Japan: 0.031, "Ivory Coast": 0.062, Ecuador: 0.042, Sweden: 0.048, Tunisia: 0.055 }[teamName] || 0.05;
+  const redRate = clamp(baseRedRate + (goalDeficit > 2 ? 0.05 : 0) + (yellows > 3 ? 0.04 : 0), 0, 0.35);
+  const reds = Math.random() < redRate ? 1 : 0;
+
+  return { yellows, reds };
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// MATCH DATABASE — Full metadata for each fixture
+// ════════════════════════════════════════════════════════════════════════════════
+const MATCHES = [
+  {
+    id: "ger-crc", group: "E",
+    time: "1:00 PM ET · NRG Stadium, Houston",
+    homeTeam: "Germany", awayTeam: "Curacao",
+    homeIsSeeded: true,
+    venue: "NRG Stadium, Houston — Retractable roof, climate controlled (AC indoors)",
+    weather: "~94°F outside; AC indoors — no weather impact on play",
+    overUnderLine: 4.5, overOdds: "+116", underOdds: "-140",
+    homeOdds: "-2000", awayOdds: "+4000", drawOdds: "+1900",
+    homeImplied: 95.2, awayImplied: 2.4,
+    homeIntel: [
+      "W5-D0-L0 run — 16 GF, 5 GA across last 5 matches",
+      "Musiala at ~95% fitness (fractured fibula, Club WC 2025)",
+      "Out: Gnabry (thigh), Karl (muscle tear) → Ouedraogo in",
+      "Neuer (calf) missed both warm-ups — confirmed to start",
+      "Wirtz + Musiala: most dangerous young duo at tournament",
+      "Motivation: back-to-back group stage exits 2018 & 2022",
+    ],
+    awayIntel: [
+      "World Cup debut — smallest nation ever to qualify",
+      "0W-0D-3L at 2025 Gold Cup vs elite competition",
+      "Full squad available, zero injuries reported",
+      "Coach Dick Advocaat; likely 5-4-1 deep block",
+      "Key: Eloy Room (GK), Bacuna brothers (CM), Locadia (FW)",
+      "Locadia red card (Scotland friendly) — does NOT carry to WC",
+    ],
+  },
+  {
+    id: "ned-jpn", group: "F",
+    time: "4:00 PM ET · AT&T Stadium, Arlington TX",
+    homeTeam: "Netherlands", awayTeam: "Japan",
+    homeIsSeeded: true,
+    venue: "AT&T Stadium, Arlington TX — Retractable roof, climate controlled",
+    weather: "Afternoon heat outside (90°F+); AC indoors — no impact",
+    overUnderLine: 2.5, overOdds: "+115", underOdds: "-140",
+    homeOdds: "+100", awayOdds: "+270", drawOdds: "+250",
+    homeImplied: 46.5, awayImplied: 27.0,
+    homeIntel: [
+      "FIFA Rank #8 — lost to Algeria, scraped past Uzbekistan in warm-ups",
+      "Created many chances pre-WC but failed to convert; expect regression",
+      "Gakpo (7G/5A PL season) anchors left flank threat",
+      "Gravenberch (Liverpool) sets tempo; Van Dijk leads D",
+      "QF at 2022 WC; SF at Euro 2024 — big tournament DNA",
+      "Full squad fit; no significant injury concerns",
+    ],
+    awayIntel: [
+      "Giant-killers: beat Germany & Spain at 2022 WC group stage",
+      "Moriyasu's 3rd consecutive World Cup as head coach",
+      "High press + fast transitions; Kubo and Tanaka key creators",
+      "Suzuki (GK, Parma): 5 PL clean sheets, 166 saves in 20 apps",
+      "Next step: Japan have yet to win a WC Round of 16 match",
+      "No injuries reported — full squad available",
+    ],
+  },
+  {
+    id: "ivo-ecu", group: "E",
+    time: "7:00 PM ET · Lincoln Financial Field, Philadelphia",
+    homeTeam: "Ivory Coast", awayTeam: "Ecuador",
+    homeIsSeeded: false,
+    venue: "Lincoln Financial Field, Philadelphia — Open air stadium",
+    weather: "Warm, cloudy evening. No rain forecast. Manageable conditions.",
+    overUnderLine: 2.5, overOdds: "+105", underOdds: "-125",
+    homeOdds: "+257", awayOdds: "-115", drawOdds: "+220",
+    homeImplied: 28.0, awayImplied: 43.5,
+    homeIntel: [
+      "AFCON champions; W7-D1-L1 last 9 — beat France 2-1 in warm-up",
+      "Youngest squad at tournament (avg age 25.8)",
+      "Evan Ndicka (CB, Roma) — Doubtful with undisclosed knock",
+      "Kessié + Sangaré + Fofana: physical midfield trio",
+      "Adingra, Diallo, Guessand: pace in wide areas",
+      "Back at WC after 12-year absence (last appeared 2014)",
+    ],
+    awayIntel: [
+      "19-match unbeaten streak; 9/13 recent matches ended in draws",
+      "Only 14 goals in 18 CONMEBOL qualifiers — disciplined, low-risk",
+      "Beat Argentina 1-0 at home in qualifying (Enner Valencia)",
+      "Caicedo (CM) + Pacho (CB, UCL winner) + Hincapie: elite defensive spine",
+      "Pervis Estupiñán provides outlet from left-back",
+      "No injuries confirmed — full squad available",
+    ],
+  },
+  {
+    id: "swe-tun", group: "F",
+    time: "10:00 PM ET · Estadio BBVA, Monterrey MX",
+    homeTeam: "Sweden", awayTeam: "Tunisia",
+    homeIsSeeded: false,
+    venue: "Estadio BBVA, Monterrey MX — Open air, evening kickoff",
+    weather: "Evening in Monterrey; cooler than afternoon. Outdoor stadium.",
+    overUnderLine: 2.5, overOdds: "+100", underOdds: "-125",
+    homeOdds: "-200", awayOdds: "+350", drawOdds: "+270",
+    homeImplied: 45.0, awayImplied: 22.2,
+    homeIntel: [
+      "Missed 2022 WC; returned via play-offs beating Ukraine + Poland 3-0 each",
+      "Only 1 pt from 5 qualifiers before play-offs — inconsistent form",
+      "Isak + Gyokeres strike partnership: most feared duo at tournament",
+      "0 clean sheets in last 11 matches — vulnerable at back",
+      "New coach Graham Potter; Kulusevski absent (knee injury)",
+      "Elanga (knee) & Lindelof (foot) both confirmed fit to play",
+    ],
+    awayIntel: [
+      "Lost 5-0 to Belgium in final warm-up — alarming form drop",
+      "Won all 10 African qualifiers; kept 10 clean sheets vs weak opposition",
+      "AFCON R16 exit on penalties vs Mali (Mali had 10 men from 26')",
+      "Hannibal Mejbri (Burnley) — carrying knock, late fitness test",
+      "Talbi (Lorient) anchors back three; limited top-level experience",
+      "Never advanced past group stage in 6 World Cup appearances",
+    ],
+  },
+];
+
+// ════════════════════════════════════════════════════════════════════════════════
+// SIMULATION ENGINE — Full pipeline:
+// DC lambdas → Shot-level xG sim → DC ρ correction → Card NegBin model
+// ════════════════════════════════════════════════════════════════════════════════
+function runSimulation(match, n = 100000) {
+  const { homeTeam, awayTeam, homeIsSeeded } = match;
+  const homeLambda = dixonColesLambda(homeTeam, awayTeam, homeIsSeeded);
+  const awayLambda = dixonColesLambda(awayTeam, homeTeam, false);
+
+  const results = [];
+
+  for (let i = 0; i < n; i++) {
+    // LAYER 3: xG shot simulation blended with DC lambda
+    const homeSim = simulateGoalsViaShots(homeTeam, homeLambda);
+    const awaySim = simulateGoalsViaShots(awayTeam, awayLambda);
+
+    let hG = homeSim.goals;
+    let aG = awaySim.goals;
+
+    // LAYER 2: Dixon-Coles ρ low-score correction
+    // For low-scoring outcomes, apply DC tau correction as acceptance probability
+    if (hG <= 1 && aG <= 1) {
+      const tau = dcTau(hG, aG, homeLambda, awayLambda, RHO);
+      // Rejection sampling: if tau < 1, occasionally reject and re-draw
+      if (tau < 1 && Math.random() > tau) {
+        // Nudge: slight redistribution toward 0-0
+        hG = Math.random() < 0.5 ? 0 : hG;
+        aG = Math.random() < 0.5 ? 0 : aG;
+      }
+    }
+
+    const deficit_h = aG - hG;
+    const deficit_a = hG - aG;
+    const homeIsUnderdog = TEAMS[homeTeam].alpha < TEAMS[awayTeam].alpha;
+
+    // LAYER 4: Card model
+    const homeCards = simulateCards(homeTeam, homeIsUnderdog, deficit_h);
+    const awayCards = simulateCards(awayTeam, !homeIsUnderdog, deficit_a);
+
+    // 1H goal splits
+    const homeHalf = simulateHalfGoals(hG, homeLambda);
+    const awayHalf = simulateHalfGoals(aG, awayLambda);
+    const h1G = homeHalf.h1Goals;
+    const a1G = awayHalf.h1Goals;
+    const ht_winner = h1G > a1G ? "home" : a1G > h1G ? "away" : "draw";
+
+    // Corner model
+    const corners = simulateCorners(homeTeam, awayTeam, hG, aG);
+
+    const winner = hG > aG ? "home" : aG > hG ? "away" : "draw";
+
+    results.push({
+      hG, aG, winner,
+      h1G, a1G, ht_winner,
+      hY: homeCards.yellows, aY: awayCards.yellows,
+      hR: homeCards.reds,    aR: awayCards.reds,
+      hShots: homeSim.shots, aShots: awaySim.shots,
+      hSOT: homeSim.shotsOnTarget, aSOT: awaySim.shotsOnTarget,
+      hXG: +homeSim.totalXG.toFixed(2), aXG: +awaySim.totalXG.toFixed(2),
+      total: hG + aG,
+      total1H: h1G + a1G,
+      hCorners: corners.hCorners, aCorners: corners.aCorners,
+      totalCorners: corners.total,
+      hC1H: corners.hC1H, aC1H: corners.aC1H, totalC1H: corners.total1H,
+    });
+  }
+
+  return results;
+}
+
+function aggregate(match, results) {
+  const n = results.length;
+  const hW = results.filter(r => r.winner === "home").length;
+  const aW = results.filter(r => r.winner === "away").length;
+  const dW = results.filter(r => r.winner === "draw").length;
+  const avg = arr => (arr.reduce((a, b) => a + b, 0) / arr.length);
+  const fmt = (v, d=2) => v.toFixed(d);
+
+  const scorelines = results.map(r => `${r.hG}-${r.aG}`);
+  const freq = {};
+  scorelines.forEach(s => freq[s] = (freq[s] || 0) + 1);
+  const topScores = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 8)
+    .map(([score, count]) => ({ score, count, pct: ((count / n) * 100).toFixed(1) }));
+  const [mls, mlsCount] = Object.entries(freq).sort((a, b) => b[1] - a[1])[0];
+
+  const line = match.overUnderLine;
+  const over  = results.filter(r => r.total > line).length;
+  const under = results.filter(r => r.total < line).length;
+  const btts  = results.filter(r => r.hG > 0 && r.aG > 0).length;
+  const cs    = results.filter(r => r.aG === 0).length;
+  const anyRed = results.filter(r => r.hR > 0 || r.aR > 0).length;
+  const hReds  = results.filter(r => r.hR > 0).length;
+  const aReds  = results.filter(r => r.aR > 0).length;
+
+  // xG averages
+  const avgHXG = avg(results.map(r => r.hXG));
+  const avgAXG = avg(results.map(r => r.aXG));
+
+  // 1H outcomes
+  const ht_hW = results.filter(r => r.ht_winner === "home").length;
+  const ht_aW = results.filter(r => r.ht_winner === "away").length;
+  const ht_dW = results.filter(r => r.ht_winner === "draw").length;
+  const avg1HTotal = avg(results.map(r => r.total1H));
+  const h1Over05  = results.filter(r => r.total1H > 0.5).length;
+  const h1Over15  = results.filter(r => r.total1H > 1.5).length;
+  const h1Over25  = results.filter(r => r.total1H > 2.5).length;
+  const hSpread1H = results.filter(r => r.h1G > r.a1G).length; // home covers 1H spread
+
+  // Corner aggregates
+  const avgHC  = avg(results.map(r => r.hCorners));
+  const avgAC  = avg(results.map(r => r.aCorners));
+  const avgTC  = avg(results.map(r => r.totalCorners));
+  const avgHC1H = avg(results.map(r => r.hC1H));
+  const avgAC1H = avg(results.map(r => r.aC1H));
+  const avgTC1H = avg(results.map(r => r.totalC1H));
+  const cOver85  = results.filter(r => r.totalCorners > 8.5).length;
+  const cOver95  = results.filter(r => r.totalCorners > 9.5).length;
+  const cOver105 = results.filter(r => r.totalCorners > 10.5).length;
+  const cOver115 = results.filter(r => r.totalCorners > 11.5).length;
+  const c1HOver35 = results.filter(r => r.totalC1H > 3.5).length;
+  const c1HOver45 = results.filter(r => r.totalC1H > 4.5).length;
+  const hCornersWin = results.filter(r => r.hCorners > r.aCorners).length;
+
+  // DC lambdas for display
+  const homeLambda = dixonColesLambda(match.homeTeam, match.awayTeam, match.homeIsSeeded);
+  const awayLambda = dixonColesLambda(match.awayTeam, match.homeTeam, false);
+
+  return {
+    n, hW, aW, dW,
+    hWPct: fmt((hW/n)*100,1), aWPct: fmt((aW/n)*100,1), dWPct: fmt((dW/n)*100,1),
+    mls, mlsPct: fmt((mlsCount/n)*100,1),
+    avgHG: fmt(avg(results.map(r=>r.hG))), avgAG: fmt(avg(results.map(r=>r.aG))),
+    avgTotal: fmt(avg(results.map(r=>r.total))),
+    avgHY: fmt(avg(results.map(r=>r.hY))), avgAY: fmt(avg(results.map(r=>r.aY))),
+    avgHShots: fmt(avg(results.map(r=>r.hShots))), avgAShots: fmt(avg(results.map(r=>r.aShots))),
+    avgHSOT: fmt(avg(results.map(r=>r.hSOT))), avgASOT: fmt(avg(results.map(r=>r.aSOT))),
+    avgHXG: fmt(avgHXG), avgAXG: fmt(avgAXG),
+    overPct: fmt((over/n)*100,1), underPct: fmt((under/n)*100,1),
+    bttsPct: fmt((btts/n)*100,1), csPct: fmt((cs/n)*100,1),
+    anyRedPct: fmt((anyRed/n)*100,1),
+    hRedPct: fmt((hReds/n)*100,1), aRedPct: fmt((aReds/n)*100,1),
+    topScores,
+    homeLambda: fmt(homeLambda), awayLambda: fmt(awayLambda),
+    // 1H
+    ht_hWPct: fmt((ht_hW/n)*100,1), ht_aWPct: fmt((ht_aW/n)*100,1), ht_dWPct: fmt((ht_dW/n)*100,1),
+    avg1HTotal: fmt(avg1HTotal),
+    h1Over05Pct: fmt((h1Over05/n)*100,1),
+    h1Over15Pct: fmt((h1Over15/n)*100,1),
+    h1Over25Pct: fmt((h1Over25/n)*100,1),
+    hSpread1HPct: fmt((hSpread1H/n)*100,1),
+    // Corners
+    avgHC: fmt(avgHC,1), avgAC: fmt(avgAC,1), avgTC: fmt(avgTC,1),
+    avgHC1H: fmt(avgHC1H,1), avgAC1H: fmt(avgAC1H,1), avgTC1H: fmt(avgTC1H,1),
+    cOver85Pct:  fmt((cOver85/n)*100,1),
+    cOver95Pct:  fmt((cOver95/n)*100,1),
+    cOver105Pct: fmt((cOver105/n)*100,1),
+    cOver115Pct: fmt((cOver115/n)*100,1),
+    c1HOver35Pct: fmt((c1HOver35/n)*100,1),
+    c1HOver45Pct: fmt((c1HOver45/n)*100,1),
+    hCornersWinPct: fmt((hCornersWin/n)*100,1),
+  };
+}
+
+// PARLAY ENGINE
+// Extracts qualifying legs from every match's aggregate output:
+//   LEAN  — sim prob materially exceeds implied book prob (same as match tab)
+//   HIGH  — sim prob >= 70% regardless of book edge (very likely outcomes)
+//   LOCK  — sim prob >= 85% (near-certainties, anchor legs)
+// Enumerates all 2/3/4/5-leg cross-match combinations sorted by joint probability.
+// ════════════════════════════════════════════════════════════════════════════════
+
+function extractLegs(matchId, agg, homeTeam, awayTeam) {
+  if (!agg) return [];
+  const legs = [];
+  const matchLabel = homeTeam + " vs " + awayTeam;
+
+  const push = (market, prob, bookOdds, tier) => {
+    const p = parseFloat(prob) / 100;
+    if (p > 0) legs.push({ matchId, match: matchLabel, market, prob: p, probPct: prob, bookOdds, tier });
+  };
+
+  // ── Full-match ────────────────────────────────────────────────────────────
+  const hWin  = parseFloat(agg.hWPct);
+  const aWin  = parseFloat(agg.aWPct);
+  const overP = parseFloat(agg.overPct);
+  const underP= parseFloat(agg.underPct);
+  const csP   = parseFloat(agg.csPct);
+  const bttsP = parseFloat(agg.bttsPct);
+
+  // LOCK / HIGH: very high raw probability
+  if (hWin  >= 85) push(homeTeam + " Win",          agg.hWPct,  "ML",        "LOCK");
+  else if (hWin >= 70) push(homeTeam + " Win",       agg.hWPct,  "ML",        "HIGH");
+  else if (hWin >  52) push(homeTeam + " Win",       agg.hWPct,  "ML",        "LEAN");
+
+  if (aWin  >= 70) push(awayTeam + " Win",           agg.aWPct,  "ML",        "HIGH");
+  else if (aWin > 30) push(awayTeam + " Win",        agg.aWPct,  "ML",        "LEAN");
+
+  if (overP >= 85) push("Over Goals",                agg.overPct,"O/U Over",  "LOCK");
+  else if (overP >= 70) push("Over Goals",           agg.overPct,"O/U Over",  "HIGH");
+  else if (overP >  52) push("Over Goals",           agg.overPct,"O/U Over",  "LEAN");
+
+  if (underP >= 85) push("Under Goals",              agg.underPct,"O/U Under","LOCK");
+  else if (underP >= 70) push("Under Goals",         agg.underPct,"O/U Under","HIGH");
+  else if (underP >  55) push("Under Goals",         agg.underPct,"O/U Under","LEAN");
+
+  if (csP >= 70) push(homeTeam + " Clean Sheet",     agg.csPct,  "CS",        "HIGH");
+  else if (csP > 50) push(homeTeam + " Clean Sheet", agg.csPct,  "CS",        "LEAN");
+
+  if (bttsP >= 70) push("Both Teams Score",          agg.bttsPct,"BTTS",      "HIGH");
+
+  // ── 1H markets ───────────────────────────────────────────────────────────
+  const ht_hW = parseFloat(agg.ht_hWPct);
+  const ht_dW = parseFloat(agg.ht_dWPct);
+  const h1o05 = parseFloat(agg.h1Over05Pct);
+  const h1o15 = parseFloat(agg.h1Over15Pct);
+  const hSp   = parseFloat(agg.hSpread1HPct);
+
+  if (ht_hW >= 70) push(homeTeam + " HT Win",        agg.ht_hWPct,"HT 1X2",  "HIGH");
+  else if (ht_hW > 45) push(homeTeam + " HT Win",    agg.ht_hWPct,"HT 1X2",  "LEAN");
+
+  if (ht_dW >= 70) push("HT Draw",                   agg.ht_dWPct,"HT 1X2",  "HIGH");
+  else if (ht_dW > 45) push("HT Draw",               agg.ht_dWPct,"HT 1X2",  "LEAN");
+
+  if (h1o05 >= 85) push("1H Over 0.5 Goals",         agg.h1Over05Pct,"1H O/U","LOCK");
+  else if (h1o05 >= 70) push("1H Over 0.5 Goals",    agg.h1Over05Pct,"1H O/U","HIGH");
+  else if (h1o05 >  65) push("1H Over 0.5 Goals",    agg.h1Over05Pct,"1H O/U","LEAN");
+
+  if (h1o15 >= 70) push("1H Over 1.5 Goals",         agg.h1Over15Pct,"1H O/U","HIGH");
+
+  if (hSp >= 70) push(homeTeam + " 1H -0.5 Spread",  agg.hSpread1HPct,"1H Sprd","HIGH");
+  else if (hSp > 52) push(homeTeam + " 1H -0.5 Spread",agg.hSpread1HPct,"1H Sprd","LEAN");
+
+  // ── Corners ───────────────────────────────────────────────────────────────
+  const c85   = parseFloat(agg.cOver85Pct);
+  const c95   = parseFloat(agg.cOver95Pct);
+  const hCW   = parseFloat(agg.hCornersWinPct);
+  const c1h35 = parseFloat(agg.c1HOver35Pct);
+
+  if (c85 >= 85) push("Over 8.5 Corners",            agg.cOver85Pct, "Corners","LOCK");
+  else if (c85 >= 70) push("Over 8.5 Corners",       agg.cOver85Pct, "Corners","HIGH");
+  else if (c85 >  55) push("Over 8.5 Corners",       agg.cOver85Pct, "Corners","LEAN");
+
+  if (c95 >= 70) push("Over 9.5 Corners",            agg.cOver95Pct, "Corners","HIGH");
+  else if (c95 > 50) push("Over 9.5 Corners",        agg.cOver95Pct, "Corners","LEAN");
+
+  if (hCW >= 70) push(homeTeam + " Most Corners",    agg.hCornersWinPct,"Corners","HIGH");
+  else if (hCW > 55) push(homeTeam + " Most Corners",agg.hCornersWinPct,"Corners","LEAN");
+
+  if (c1h35 >= 70) push("1H Over 3.5 Corners",       agg.c1HOver35Pct,"1H Crn","HIGH");
+  else if (c1h35 > 55) push("1H Over 3.5 Corners",   agg.c1HOver35Pct,"1H Crn","LEAN");
+
+  return legs;
+}
+
+function buildCombinations(legs, size) {
+  const results = [];
+  function combine(start, current) {
+    if (current.length === size) {
+      results.push([...current]);
+      return;
+    }
+    for (let i = start; i < legs.length; i++) {
+      // Enforce: no two legs from the same match (correlated — bad parlay practice)
+      const matchIds = current.map(l => l.matchId);
+      if (!matchIds.includes(legs[i].matchId)) {
+        current.push(legs[i]);
+        combine(i + 1, current);
+        current.pop();
+      }
+    }
+  }
+  combine(0, []);
+  return results;
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// THEME & STYLES
+// ════════════════════════════════════════════════════════════════════════════════
+const T = {
+  bg:"#070b14", navy:"#0c1526", card:"#101d30", border:"#1a2a3e",
+  gold:"#e8c547", blue:"#3b82f6", muted:"#4b6280", text:"#dde5f0",
+  green:"#22c55e", red:"#ef4444", yellow:"#fbbf24", purple:"#a78bfa",
+};
+
+const S = {
+  wrap:{ background:T.bg, minHeight:"100vh", fontFamily:"'IBM Plex Mono','Courier New',monospace", color:T.text, paddingBottom:48 },
+  tabBar:{ background:T.navy, borderBottom:`1px solid ${T.border}`, padding:"0 12px", overflowX:"auto", display:"flex", gap:2, flexWrap:"nowrap" },
+  tab:(a)=>({ padding:"11px 13px", fontSize:"10px", letterSpacing:"0.8px", cursor:"pointer", whiteSpace:"nowrap",
+    color:a?T.gold:T.muted, background:"none", border:"none",
+    borderBottom: a?`2px solid ${T.gold}`:"2px solid transparent",
+    fontFamily:"'IBM Plex Mono','Courier New',monospace", transition:"color 0.15s" }),
+  header:{ background:`linear-gradient(160deg,${T.navy} 0%,#0a1520 100%)`, padding:"22px 20px 16px", textAlign:"center", position:"relative", overflow:"hidden" },
+  glow:{ position:"absolute",top:0,left:0,right:0,bottom:0, background:"radial-gradient(ellipse at 50% 0%,rgba(232,197,71,0.06) 0%,transparent 65%)", pointerEvents:"none" },
+  badge:{ display:"inline-block", background:T.gold+"1a", border:`1px solid ${T.gold}33`, color:T.gold, fontSize:"9px", letterSpacing:"2.5px", padding:"2px 10px", borderRadius:2, marginBottom:9 },
+  title:{ fontSize:"clamp(15px,3.2vw,24px)", fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center", gap:9, flexWrap:"wrap", marginBottom:5 },
+  vs:{ color:T.muted, fontSize:12, fontWeight:400 },
+  meta:{ fontSize:10, color:T.muted, letterSpacing:"0.4px", marginTop:3 },
+  modelTag:{ display:"inline-block", background:T.purple+"1a", border:`1px solid ${T.purple}33`, color:T.purple, fontSize:"8px", letterSpacing:"2px", padding:"2px 8px", borderRadius:2, marginTop:6 },
+  body:{ maxWidth:900, margin:"0 auto", padding:"0 14px" },
+  sec:{ marginTop:20 },
+  secLabel:{ fontSize:"9px", letterSpacing:"3px", color:T.muted, textTransform:"uppercase", marginBottom:9, paddingBottom:5, borderBottom:`1px solid ${T.border}` },
+  g3:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:9 },
+  g2:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:9 },
+  g4:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:9 },
+  card:{ background:T.card, border:`1px solid ${T.border}`, borderRadius:6, padding:13 },
+  sL:{ fontSize:"9px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase", marginBottom:3 },
+  sV:{ fontSize:22, fontWeight:700, lineHeight:1.1 },
+  sSub:{ fontSize:10, color:T.muted, marginTop:3 },
+  runBtn:(d)=>({ display:"block", width:"100%", padding:12, marginTop:16,
+    background:d?"#1a2a3e":`linear-gradient(135deg,${T.gold},#c9a227)`,
+    color:d?T.muted:"#070b14", border:"none", borderRadius:6,
+    fontSize:10, fontWeight:700, letterSpacing:"2px", textTransform:"uppercase",
+    cursor:d?"default":"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }),
+  barWrap:{ display:"flex", height:24, borderRadius:4, overflow:"hidden", gap:2, marginTop:9 },
+  betRow:{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"5px 0", borderBottom:`1px solid ${T.border}`, fontSize:11, gap:8 },
+  pill:(c)=>({ background:c+"1e", border:`1px solid ${c}44`, color:c, padding:"2px 7px", borderRadius:3, fontSize:"8px", fontWeight:700, letterSpacing:"1px", whiteSpace:"nowrap" }),
+  table:{ width:"100%", borderCollapse:"collapse", fontSize:11 },
+  th:{ background:T.navy, padding:"6px 9px", textAlign:"left", color:T.muted, fontSize:"8px", letterSpacing:"1.5px", textTransform:"uppercase", borderBottom:`1px solid ${T.border}` },
+  td:{ padding:"6px 9px", borderBottom:`1px solid ${T.border}`, fontVariantNumeric:"tabular-nums" },
+  disclaimer:{ background:"#080500", border:`1px solid ${T.gold}22`, borderRadius:6, padding:"9px 13px", fontSize:"9px", color:"#6b5820", marginTop:18, lineHeight:1.8 },
+  methodBox:{ background:"#0a0f1a", border:`1px solid ${T.purple}33`, borderRadius:6, padding:"11px 14px", fontSize:"10px", color:T.muted, marginTop:18, lineHeight:1.8 },
+};
+
+function StatCard({ label, value, sub, color }) {
+  return (
+    <div style={S.card}>
+      <div style={S.sL}>{label}</div>
+      <div style={{ ...S.sV, color:color||T.text }}>{value}</div>
+      {sub && <div style={S.sSub}>{sub}</div>}
+    </div>
+  );
+}
+
+function BetRow({ market, simPct, bookOdds, signal }) {
+  const sc = signal==="LEAN"?T.gold:signal==="PASS"?T.muted:signal==="CONSIDER"?"#f97316":T.red;
+  return (
+    <div style={S.betRow}>
+      <span style={{ color:T.muted, minWidth:140, fontSize:10 }}>{market}</span>
+      <span style={{ flex:1, textAlign:"center", fontSize:11 }}>{simPct}</span>
+      <span style={{ color:T.muted, flex:1, textAlign:"center", fontSize:10 }}>{bookOdds}</span>
+      <span style={S.pill(sc)}>{signal}</span>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// PARLAY TAB COMPONENT
+// ════════════════════════════════════════════════════════════════════════════════
+const LEG_COLORS = ["#e8c547","#3b82f6","#22c55e","#f97316","#a78bfa"];
+const SIZE_LABELS = { 2:"2-Leg", 3:"3-Leg", 4:"4-Leg", 5:"5-Leg" };
+
+function buildParlays(simData) {
+  const allLegs = [];
+  MATCHES.forEach(m => {
+    const agg = simData[m.id];
+    if (!agg) return;
+    const legs = extractLegs(m.id, agg, m.homeTeam, m.awayTeam);
+    allLegs.push(...legs);
+  });
+  if (allLegs.length === 0) return { legs: allLegs, parlays: [] };
+  const parlays = [];
+  for (const size of [2, 3, 4, 5]) {
+    const combos = buildCombinations(allLegs, size);
+    combos.forEach(combo => {
+      const jp = combo.reduce((acc, leg) => acc * leg.prob, 1);
+      parlays.push({ legs: combo, size, jointProb: jp, jointProbPct: (jp * 100).toFixed(2) });
+    });
+  }
+  parlays.sort((a, b) => b.jointProb - a.jointProb);
+  return { legs: allLegs, parlays: parlays.slice(0, 40) };
+}
+
+function ParlayTab({ simData }) {
+  const [filterSize, setFilterSize] = useState("all");
+  const allSimsReady = MATCHES.every(m => !!simData[m.id]);
+
+  if (!allSimsReady) {
+    return (
+      <div style={{ textAlign:"center", padding:"48px 24px", color:T.muted, fontSize:11, lineHeight:2 }}>
+        <div style={{ fontSize:22, marginBottom:12 }}>⏳</div>
+        Running simulations on first load — please wait a moment...
+        <div style={{ marginTop:16, display:"flex", gap:8, justifyContent:"center", flexWrap:"wrap" }}>
+          {MATCHES.map(m => {
+            const ready = !!simData[m.id];
+            return (
+              <div key={m.id} style={{ background:ready?T.green+"22":T.card, border:`1px solid ${ready?T.green:T.border}`, borderRadius:4, padding:"4px 10px", fontSize:10, color:ready?T.green:T.muted }}>
+                {ready ? "✓" : "○"} {m.homeTeam} vs {m.awayTeam}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  const { legs, parlays } = buildParlays(simData);
+  const filtered = filterSize === "all" ? parlays : parlays.filter(p => p.size === parseInt(filterSize));
+
+  return (
+    <div style={{ maxWidth:900, margin:"0 auto", padding:"0 14px 48px" }}>
+      <div style={S.sec}>
+        <div style={{ ...S.card, background:"#0a1020", border:`1px solid ${T.gold}33` }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
+            <div>
+              <div style={{ fontSize:11, color:T.gold, fontWeight:700, letterSpacing:"1px" }}>PARLAY BUILDER</div>
+              <div style={{ fontSize:10, color:T.muted, marginTop:3 }}>
+                {legs.length} qualifying legs across {MATCHES.length} matches · 2/3/4/5-leg combos · Sorted by joint probability
+              </div>
+            </div>
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+              <span style={{ background:T.red+"22", border:`1px solid ${T.red}44`, color:T.red, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>LOCK ≥85%</span>
+              <span style={{ background:T.green+"22", border:`1px solid ${T.green}44`, color:T.green, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>HIGH ≥70%</span>
+              <span style={{ background:T.gold+"22", border:`1px solid ${T.gold}44`, color:T.gold, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>LEAN &gt;52%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={S.sec}>
+        <div style={S.secLabel}>Signal Pool ({legs.length} qualifying legs)</div>
+        <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+          {legs.map((leg, i) => {
+            const tc = leg.tier==="LOCK"?T.red:leg.tier==="HIGH"?T.green:T.gold;
+            return (
+              <div key={i} style={{ background:T.card, border:`1px solid ${T.border}`, borderLeft:`3px solid ${tc}`, borderRadius:4, padding:"5px 10px", fontSize:10, display:"flex", alignItems:"center", gap:6 }}>
+                <span style={{ background:tc+"22", color:tc, fontSize:"8px", fontWeight:700, padding:"1px 5px", borderRadius:2 }}>{leg.tier}</span>
+                <span style={{ color:T.muted, fontSize:9 }}>{leg.match} ·</span>
+                <span style={{ color:T.text, fontWeight:700 }}>{leg.market}</span>
+                <span style={{ color:tc, marginLeft:2 }}>{leg.probPct}%</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{ ...S.sec, display:"flex", gap:6, flexWrap:"wrap" }}>
+        {["all","2","3","4","5"].map(v => (
+          <button key={v} onClick={() => setFilterSize(v)} style={{ padding:"6px 14px", fontSize:10, fontWeight:700, letterSpacing:"1px", background:filterSize===v?T.gold:T.card, color:filterSize===v?"#070b14":T.muted, border:`1px solid ${filterSize===v?T.gold:T.border}`, borderRadius:4, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
+            {v === "all" ? "ALL" : v+"-LEG"}
+          </button>
+        ))}
+        <div style={{ marginLeft:"auto", fontSize:10, color:T.muted, alignSelf:"center" }}>Showing {filtered.length} parlays</div>
+      </div>
+
+      {filtered.length === 0 && (
+        <div style={{ ...S.card, textAlign:"center", padding:32, color:T.muted, fontSize:11, marginTop:12 }}>
+          Not enough qualifying signals across unique matches for {filterSize}-leg parlays.
+        </div>
+      )}
+
+      {filtered.map((parlay, pi) => {
+        const jp = parlay.jointProb;
+        const fairOdds = jp > 0 ? (jp < 0.5 ? "+" + Math.round((1/jp-1)*100) : "-" + Math.round((jp/(1-jp))*100)) : "—";
+        const rankColor = pi===0?T.gold:pi===1?"#94a3b8":pi===2?"#cd7f32":T.border;
+        return (
+          <div key={pi} style={{ ...S.card, marginTop:10, borderLeft:`3px solid ${pi<3?rankColor:T.border}` }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10, flexWrap:"wrap", gap:6 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                <div style={{ background:pi<3?rankColor+"22":T.navy, border:`1px solid ${pi<3?rankColor:T.border}`, color:pi<3?rankColor:T.muted, fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:3 }}>#{pi+1}</div>
+                <div style={{ background:T.purple+"1a", border:`1px solid ${T.purple}33`, color:T.purple, fontSize:9, padding:"2px 8px", borderRadius:3, letterSpacing:"1px" }}>{SIZE_LABELS[parlay.size]}</div>
+              </div>
+              <div style={{ textAlign:"right" }}>
+                <div style={{ fontSize:22, fontWeight:700, color:jp>0.4?T.green:jp>0.2?T.gold:T.red }}>{parlay.jointProbPct}%</div>
+                <div style={{ fontSize:9, color:T.muted }}>joint probability</div>
+              </div>
+            </div>
+            <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+              {parlay.legs.map((leg, li) => {
+                const tc = leg.tier==="LOCK"?T.red:leg.tier==="HIGH"?T.green:T.gold;
+                return (
+                  <div key={li} style={{ display:"flex", alignItems:"center", gap:8, background:T.navy, borderRadius:4, padding:"7px 10px", borderLeft:`2px solid ${tc}` }}>
+                    <span style={{ background:tc+"22", color:tc, fontSize:"8px", fontWeight:700, padding:"1px 5px", borderRadius:2, minWidth:32, textAlign:"center" }}>{leg.tier}</span>
+                    <div style={{ fontSize:9, color:T.muted, minWidth:100 }}>{leg.match}</div>
+                    <div style={{ flex:1, fontSize:11, color:T.text, fontWeight:600 }}>{leg.market}</div>
+                    <div style={{ fontSize:11, color:tc, fontWeight:700, minWidth:44, textAlign:"right" }}>{leg.probPct}%</div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ display:"flex", gap:16, marginTop:10, flexWrap:"wrap" }}>
+              <div><div style={{ fontSize:9, color:T.muted }}>JOINT PROB</div><div style={{ fontSize:13, fontWeight:700 }}>{parlay.jointProbPct}%</div></div>
+              <div><div style={{ fontSize:9, color:T.muted }}>FAIR ODDS (no vig)</div><div style={{ fontSize:13, fontWeight:700, color:T.gold }}>{fairOdds}</div></div>
+              <div><div style={{ fontSize:9, color:T.muted }}>LEGS</div><div style={{ fontSize:13, fontWeight:700, color:T.purple }}>{parlay.size}</div></div>
+            </div>
+          </div>
+        );
+      })}
+      <div style={{ ...S.disclaimer, marginTop:20 }}>
+        Parlay legs assumed independent across matches. Correlated same-match legs excluded by design. Fair odds shown before bookmaker vig (~10-15%). Not professional betting advice. Gamble responsibly.
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// MATCH VIEW COMPONENT
+// ════════════════════════════════════════════════════════════════════════════════
+function MatchView({ match, agg, running, onRun, runCount }) {
+  const h = TEAMS[match.homeTeam];
+  const a = TEAMS[match.awayTeam];
+  return (
+    <div>
+      <div style={S.header}>
+        <div style={S.glow}/>
+        <div style={S.badge}>⚽ FIFA WORLD CUP 2026 · GROUP {match.group}</div>
+        <div style={S.title}>
+          <span>{match.homeTeam}</span>
+          <span style={S.vs}>vs</span>
+          <span>{match.awayTeam}</span>
+        </div>
+        <div style={S.meta}>{match.time}</div>
+        <div style={S.modelTag}>DIXON-COLES + xG SHOT SIM + NEGBIN CARD MODEL · 100,000 ITERATIONS</div>
+      </div>
+      <div style={S.body}>
+        <button style={S.runBtn(running)} onClick={onRun} disabled={running}>
+          {running ? "⟳ Running simulation (100,000 iterations)..." : ("↻ Re-Run Simulation" + (runCount > 0 ? " (Run #" + runCount + ")" : ""))}
+        </button>
+
+        {!agg && !running && (
+          <div style={{ textAlign:"center", padding:48, color:T.muted, fontSize:11 }}>⟳ Loading...</div>
+        )}
+
+        {agg && (
+          <div>
+            {/* DC PARAMS */}
+            <div style={S.sec}>
+              <div style={S.secLabel}>Dixon-Coles Parameters</div>
+              <div style={S.g4}>
+                <div style={S.card}><div style={S.sL}>{match.homeTeam} λ</div><div style={{ ...S.sV, color:T.gold, fontSize:20 }}>{agg.homeLambda}</div><div style={S.sSub}>expected goals</div></div>
+                <div style={S.card}><div style={S.sL}>{match.homeTeam} α/β</div><div style={{ ...S.sV, fontSize:16 }}>{h.alpha.toFixed(2)} / {h.beta.toFixed(2)}</div><div style={S.sSub}>attack / defense</div></div>
+                <div style={S.card}><div style={S.sL}>{match.awayTeam} λ</div><div style={{ ...S.sV, color:T.blue, fontSize:20 }}>{agg.awayLambda}</div><div style={S.sSub}>expected goals</div></div>
+                <div style={S.card}><div style={S.sL}>{match.awayTeam} α/β</div><div style={{ ...S.sV, fontSize:16 }}>{a.alpha.toFixed(2)} / {a.beta.toFixed(2)}</div><div style={S.sSub}>attack / defense</div></div>
+              </div>
+              <div style={{ ...S.card, marginTop:9 }}>
+                <div style={{ fontSize:10, color:T.muted, lineHeight:1.7 }}>
+                  <span style={{ color:T.purple }}>ρ:</span> {RHO} &nbsp;·&nbsp;
+                  <span style={{ color:T.purple }}>μ:</span> {MU} &nbsp;·&nbsp;
+                  <span style={{ color:T.purple }}>xG blend:</span> 65% shot-sim / 35% DC &nbsp;·&nbsp;
+                  <span style={{ color:T.purple }}>Cards:</span> NegBin (r=3) &nbsp;·&nbsp;
+                  <span style={{ color:T.purple }}>n:</span> 100,000
+                </div>
+              </div>
+            </div>
+
+            {/* OUTCOMES */}
+            <div style={S.sec}>
+              <div style={S.secLabel}>Outcome Probabilities (n=100,000)</div>
+              <div style={S.g3}>
+                <StatCard label={match.homeTeam + " Win"} value={agg.hWPct + "%"} sub={agg.hW.toLocaleString() + " / 100,000 sims"} color={T.gold}/>
+                <StatCard label="Draw" value={agg.dWPct + "%"} sub={agg.dW.toLocaleString() + " / 100,000 sims"} color={T.muted}/>
+                <StatCard label={match.awayTeam + " Win"} value={agg.aWPct + "%"} sub={agg.aW.toLocaleString() + " / 100,000 sims"} color={T.blue}/>
+              </div>
+              <div style={S.barWrap}>
+                <div style={{ width:agg.hWPct+"%", background:`linear-gradient(90deg,${T.gold},#c9a227)`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700, color:"#070b14", transition:"width 0.4s" }}>
+                  {parseFloat(agg.hWPct)>8 ? agg.hWPct+"%" : ""}
+                </div>
+                <div style={{ width:agg.dWPct+"%", background:"#1e3050", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, color:T.text }}>
+                  {parseFloat(agg.dWPct)>5 ? agg.dWPct+"%" : ""}
+                </div>
+                <div style={{ width:agg.aWPct+"%", background:`linear-gradient(90deg,#1d4ed8,#3b82f6)`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700, color:T.text, transition:"width 0.4s" }}>
+                  {parseFloat(agg.aWPct)>5 ? agg.aWPct+"%" : ""}
+                </div>
+              </div>
+            </div>
+
+            {/* GOALS + XG */}
+            <div style={S.sec}>
+              <div style={S.secLabel}>Goals and Expected Goals</div>
+              <div style={S.g2}>
+                <div style={S.card}>
+                  <div style={S.sL}>Most Likely Score</div>
+                  <div style={{ ...S.sV, fontSize:30, color:T.gold }}>{agg.mls}</div>
+                  <div style={S.sSub}>Occurred in {agg.mlsPct}% of sims</div>
+                </div>
+                <div style={S.card}>
+                  <div style={S.sL}>xG vs Avg Goals</div>
+                  <div style={{ display:"flex", gap:16, marginTop:6 }}>
+                    <div><div style={{ fontSize:9, color:T.muted }}>{match.homeTeam} xG</div><div style={{ fontSize:18, fontWeight:700, color:T.gold }}>{agg.avgHXG}</div><div style={{ fontSize:9, color:T.muted, marginTop:2 }}>Goals: {agg.avgHG}</div></div>
+                    <div><div style={{ fontSize:9, color:T.muted }}>{match.awayTeam} xG</div><div style={{ fontSize:18, fontWeight:700, color:T.blue }}>{agg.avgAXG}</div><div style={{ fontSize:9, color:T.muted, marginTop:2 }}>Goals: {agg.avgAG}</div></div>
+                    <div><div style={{ fontSize:9, color:T.muted }}>Total Avg</div><div style={{ fontSize:18, fontWeight:700 }}>{agg.avgTotal}</div></div>
+                  </div>
+                </div>
+              </div>
+              <div style={{ ...S.card, marginTop:9 }}>
+                <div style={S.sL}>Score Distribution (Top 8)</div>
+                {agg.topScores.map(({score, count, pct}) => (
+                  <div key={score} style={{ marginTop:7 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:2 }}>
+                      <span>{score}</span><span style={{ color:T.muted }}>{count.toLocaleString()}× ({pct}%)</span>
+                    </div>
+                    <div style={{ height:4, background:T.border, borderRadius:2 }}>
+                      <div style={{ height:"100%", width:Math.min(parseFloat(pct)*5,100)+"%", background:parseFloat(pct)>=8?T.gold:T.blue, borderRadius:2, transition:"width 0.5s" }}/>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* SHOTS */}
+            <div style={S.sec}>
+              <div style={S.secLabel}>Shot Simulation Output</div>
+              <div style={S.card}>
+                <table style={S.table}>
+                  <thead><tr>
+                    <th style={S.th}>Team</th><th style={S.th}>Avg Shots</th><th style={S.th}>Avg SOT</th><th style={S.th}>Avg xG</th><th style={S.th}>Avg Goals</th><th style={S.th}>Conversion</th>
+                  </tr></thead>
+                  <tbody>
+                    <tr>
+                      <td style={{ ...S.td, color:T.gold }}>{match.homeTeam}</td>
+                      <td style={S.td}>{agg.avgHShots}</td><td style={S.td}>{agg.avgHSOT}</td><td style={S.td}>{agg.avgHXG}</td><td style={S.td}>{agg.avgHG}</td>
+                      <td style={S.td}>{Math.round(parseFloat(agg.avgHG)/parseFloat(agg.avgHXG)*100)}%</td>
+                    </tr>
+                    <tr>
+                      <td style={{ ...S.td, color:T.blue }}>{match.awayTeam}</td>
+                      <td style={S.td}>{agg.avgAShots}</td><td style={S.td}>{agg.avgASOT}</td><td style={S.td}>{agg.avgAXG}</td><td style={S.td}>{agg.avgAG}</td>
+                      <td style={S.td}>{Math.round(parseFloat(agg.avgAG)/parseFloat(agg.avgAXG)*100)}%</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* CARDS */}
+            <div style={S.sec}>
+              <div style={S.secLabel}>Card Model (Negative Binomial)</div>
+              <div style={S.g2}>
+                <div style={S.card}>
+                  <div style={S.sL}>Avg Yellow Cards</div>
+                  <div style={{ display:"flex", gap:16, marginTop:6 }}>
+                    <div><div style={{ fontSize:9, color:T.muted }}>{match.homeTeam}</div><div style={{ fontSize:22, fontWeight:700, color:T.yellow }}>{agg.avgHY}</div></div>
+                    <div><div style={{ fontSize:9, color:T.muted }}>{match.awayTeam}</div><div style={{ fontSize:22, fontWeight:700, color:T.yellow }}>{agg.avgAY}</div></div>
+                    <div><div style={{ fontSize:9, color:T.muted }}>Total</div><div style={{ fontSize:22, fontWeight:700 }}>{(parseFloat(agg.avgHY)+parseFloat(agg.avgAY)).toFixed(2)}</div></div>
+                  </div>
+                </div>
+                <div style={S.card}>
+                  <div style={S.sL}>Red Card Probability</div>
+                  <div style={{ display:"flex", gap:16, marginTop:6 }}>
+                    <div><div style={{ fontSize:9, color:T.muted }}>{match.homeTeam}</div><div style={{ fontSize:22, fontWeight:700, color:T.red }}>{agg.hRedPct}%</div></div>
+                    <div><div style={{ fontSize:9, color:T.muted }}>{match.awayTeam}</div><div style={{ fontSize:22, fontWeight:700, color:T.red }}>{agg.aRedPct}%</div></div>
+                    <div><div style={{ fontSize:9, color:T.muted }}>Any Red</div><div style={{ fontSize:22, fontWeight:700, color:T.red }}>{agg.anyRedPct}%</div></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* BETTING SIGNALS */}
+            <div style={S.sec}>
+              <div style={S.secLabel}>Betting Signals vs Market</div>
+              <div style={S.card}>
+                <div style={{ ...S.sL, marginBottom:8 }}>Full Match</div>
+                <div style={{ ...S.betRow, fontSize:"8px", fontWeight:700 }}>
+                  <span style={{ color:T.muted, minWidth:140 }}>MARKET</span>
+                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>SIM PROB</span>
+                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>BOOK ODDS</span>
+                  <span style={{ minWidth:64, textAlign:"right", color:T.muted }}>SIGNAL</span>
+                </div>
+                <BetRow market={match.homeTeam + " Win"} simPct={agg.hWPct+"%"} bookOdds={match.homeOdds} signal={parseFloat(agg.hWPct)>match.homeImplied?"LEAN":"PASS"}/>
+                <BetRow market="Draw" simPct={agg.dWPct+"%"} bookOdds={match.drawOdds} signal="PASS"/>
+                <BetRow market={match.awayTeam + " Win"} simPct={agg.aWPct+"%"} bookOdds={match.awayOdds} signal={parseFloat(agg.aWPct)>match.awayImplied?"LEAN":"PASS"}/>
+                <BetRow market={"Over " + match.overUnderLine + " Goals"} simPct={agg.overPct+"%"} bookOdds={match.overOdds} signal={parseFloat(agg.overPct)>52?"LEAN":"PASS"}/>
+                <BetRow market={"Under " + match.overUnderLine + " Goals"} simPct={agg.underPct+"%"} bookOdds={match.underOdds} signal={parseFloat(agg.underPct)>55?"LEAN":"PASS"}/>
+                <BetRow market="Both Teams Score" simPct={agg.bttsPct+"%"} bookOdds="~Market" signal={parseFloat(agg.bttsPct)>48?"CONSIDER":"PASS"}/>
+                <BetRow market={match.homeTeam + " Clean Sheet"} simPct={agg.csPct+"%"} bookOdds="~Market" signal={parseFloat(agg.csPct)>50?"LEAN":"PASS"}/>
+                <BetRow market="Any Red Card" simPct={agg.anyRedPct+"%"} bookOdds="~+250" signal={parseFloat(agg.anyRedPct)>28?"CONSIDER":"PASS"}/>
+                <BetRow market="Most Likely Score" simPct={agg.mls + " (" + agg.mlsPct + "%)"} bookOdds="Correct Score" signal="CONSIDER"/>
+              </div>
+
+              <div style={{ ...S.card, marginTop:10 }}>
+                <div style={{ ...S.sL, marginBottom:8 }}>1st Half</div>
+                <div style={{ ...S.betRow, fontSize:"8px", fontWeight:700 }}>
+                  <span style={{ color:T.muted, minWidth:140 }}>MARKET</span>
+                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>SIM PROB</span>
+                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>BOOK ODDS</span>
+                  <span style={{ minWidth:64, textAlign:"right", color:T.muted }}>SIGNAL</span>
+                </div>
+                <BetRow market={match.homeTeam + " HT Win"} simPct={agg.ht_hWPct+"%"} bookOdds="~HT 1X2" signal={parseFloat(agg.ht_hWPct)>45?"LEAN":parseFloat(agg.ht_hWPct)>35?"CONSIDER":"PASS"}/>
+                <BetRow market="HT Draw" simPct={agg.ht_dWPct+"%"} bookOdds="~HT 1X2" signal={parseFloat(agg.ht_dWPct)>45?"LEAN":"PASS"}/>
+                <BetRow market={match.awayTeam + " HT Win"} simPct={agg.ht_aWPct+"%"} bookOdds="~HT 1X2" signal={parseFloat(agg.ht_aWPct)>30?"CONSIDER":"PASS"}/>
+                <BetRow market="1H Over 0.5 Goals" simPct={agg.h1Over05Pct+"%"} bookOdds="~-180" signal={parseFloat(agg.h1Over05Pct)>65?"LEAN":"PASS"}/>
+                <BetRow market="1H Over 1.5 Goals" simPct={agg.h1Over15Pct+"%"} bookOdds="~+120" signal={parseFloat(agg.h1Over15Pct)>35?"CONSIDER":"PASS"}/>
+                <BetRow market="1H Over 2.5 Goals" simPct={agg.h1Over25Pct+"%"} bookOdds="~+320" signal={parseFloat(agg.h1Over25Pct)>20?"CONSIDER":"PASS"}/>
+                <BetRow market={match.homeTeam + " 1H -0.5 Spread"} simPct={agg.hSpread1HPct+"%"} bookOdds="~-120" signal={parseFloat(agg.hSpread1HPct)>52?"LEAN":"PASS"}/>
+                <div style={{ padding:"8px 0 4px", fontSize:10, color:T.muted }}>
+                  Avg 1H Goals: <span style={{ color:T.text, fontWeight:700 }}>{agg.avg1HTotal}</span>
+                </div>
+              </div>
+
+              <div style={{ ...S.card, marginTop:10 }}>
+                <div style={{ ...S.sL, marginBottom:8 }}>Corners</div>
+                <div style={{ ...S.betRow, fontSize:"8px", fontWeight:700 }}>
+                  <span style={{ color:T.muted, minWidth:140 }}>MARKET</span>
+                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>SIM PROB</span>
+                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>BOOK ODDS</span>
+                  <span style={{ minWidth:64, textAlign:"right", color:T.muted }}>SIGNAL</span>
+                </div>
+                <BetRow market="Over 8.5 Corners" simPct={agg.cOver85Pct+"%"} bookOdds="~-115" signal={parseFloat(agg.cOver85Pct)>55?"LEAN":"PASS"}/>
+                <BetRow market="Over 9.5 Corners" simPct={agg.cOver95Pct+"%"} bookOdds="~+108" signal={parseFloat(agg.cOver95Pct)>50?"LEAN":"PASS"}/>
+                <BetRow market="Over 10.5 Corners" simPct={agg.cOver105Pct+"%"} bookOdds="~+140" signal={parseFloat(agg.cOver105Pct)>40?"CONSIDER":"PASS"}/>
+                <BetRow market="Over 11.5 Corners" simPct={agg.cOver115Pct+"%"} bookOdds="~+215" signal={parseFloat(agg.cOver115Pct)>28?"CONSIDER":"PASS"}/>
+                <BetRow market={match.homeTeam + " Most Corners"} simPct={agg.hCornersWinPct+"%"} bookOdds="~-125" signal={parseFloat(agg.hCornersWinPct)>55?"LEAN":"PASS"}/>
+                <BetRow market="1H Over 3.5 Corners" simPct={agg.c1HOver35Pct+"%"} bookOdds="~-115" signal={parseFloat(agg.c1HOver35Pct)>55?"LEAN":"PASS"}/>
+                <BetRow market="1H Over 4.5 Corners" simPct={agg.c1HOver45Pct+"%"} bookOdds="~+118" signal={parseFloat(agg.c1HOver45Pct)>42?"CONSIDER":"PASS"}/>
+                <div style={{ padding:"8px 0 4px", fontSize:10, color:T.muted }}>
+                  Avg corners — {match.homeTeam}: <span style={{ color:T.gold }}>{agg.avgHC}</span> &nbsp; {match.awayTeam}: <span style={{ color:T.blue }}>{agg.avgAC}</span> &nbsp; Total: <span style={{ color:T.text, fontWeight:700 }}>{agg.avgTC}</span> &nbsp; 1H avg: <span style={{ color:T.text }}>{agg.avgTC1H}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* INTEL */}
+            <div style={S.sec}>
+              <div style={S.secLabel}>Pre-Match Intelligence</div>
+              <div style={S.card}>
+                <div style={{ fontSize:10, lineHeight:"1.85" }}>
+                  <div style={{ color:T.gold, fontWeight:700, marginBottom:7, fontSize:9, letterSpacing:"1.5px" }}>{match.homeTeam.toUpperCase()} — α:{h.alpha} β:{h.beta} inj:{h.injuryFactor}</div>
+                  <div style={{ color:T.muted }}>
+                    {match.homeIntel.map((l,i) => <div key={i}>· <span style={{ color:T.text }}>{l}</span></div>)}
+                  </div>
+                  <div style={{ color:T.blue, fontWeight:700, margin:"12px 0 7px", fontSize:9, letterSpacing:"1.5px" }}>{match.awayTeam.toUpperCase()} — α:{a.alpha} β:{a.beta} inj:{a.injuryFactor}</div>
+                  <div style={{ color:T.muted }}>
+                    {match.awayIntel.map((l,i) => <div key={i}>· <span style={{ color:T.text }}>{l}</span></div>)}
+                  </div>
+                  <div style={{ color:T.green, fontWeight:700, margin:"12px 0 7px", fontSize:9, letterSpacing:"1.5px" }}>VENUE / CONDITIONS</div>
+                  <div style={{ color:T.muted }}>
+                    <div>· <span style={{ color:T.text }}>{match.venue}</span></div>
+                    <div>· <span style={{ color:T.text }}>{match.weather}</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div style={S.methodBox}>
+              <div style={{ color:T.purple, fontWeight:700, fontSize:"9px", letterSpacing:"2px", marginBottom:7 }}>MODEL METHODOLOGY</div>
+              <div><span style={{ color:T.text }}>Dixon-Coles (1997):</span> α/β team strength params, μ={MU} international neutral mean, ρ={RHO} low-score correction on (0-0,1-0,0-1,1-1) joint probabilities.</div>
+              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>xG Shot Sim:</span> Shots from Poisson(shotRate), per-shot xG from Beta(2,14), Bernoulli goal trial per shot. Blended 65/35 with DC Poisson.</div>
+              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>NegBin Card Model:</span> Yellow cards via NegBin(r=3), overdispersed vs Poisson. Red card rate conditioned on match state and yellow accumulation.</div>
+              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>1H Split:</span> Poisson(λ×0.40) per team. Corner model: team cFor/cAgainst profiles scaled by shot pressure and goal margin.</div>
+            </div>
+            <div style={S.disclaimer}>
+              For informational/analytical purposes only. Parameters from publicly available pre-match data as of June 14, 2026. Not professional betting advice. Gamble responsibly.
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// MAIN APP — auto-runs all 4 sims sequentially on first load
+// ════════════════════════════════════════════════════════════════════════════════
+function App() {
+  const [activeId, setActiveId] = useState(MATCHES[0].id);
+  const [simData, setSimData]   = useState({});
+  const [runningId, setRunningId] = useState(null);
+  const [runCounts, setRunCounts] = useState({});
+  const autoRanRef = useRef(false);
+
+  const runMatch = useCallback((matchId) => {
+    const match = MATCHES.find(m => m.id === matchId);
+    if (!match) return;
+    setRunningId(matchId);
+    // Use setTimeout to let the UI update (show spinner) before blocking computation
+    setTimeout(() => {
+      const raw = runSimulation(match, 100000);
+      const agg = aggregate(match, raw);
+      setSimData(prev => ({ ...prev, [matchId]: agg }));
+      setRunCounts(prev => ({ ...prev, [matchId]: (prev[matchId] || 0) + 1 }));
+      setRunningId(null);
+    }, 50);
+  }, []);
+
+  // Auto-run all matches sequentially on first load
+  useEffect(() => {
+    if (autoRanRef.current) return;
+    autoRanRef.current = true;
+    // Chain them sequentially: each fires after a small delay so UI stays responsive
+    // We use a recursive pattern via setTimeout since each sim blocks for ~1-2s
+    let idx = 0;
+    function runNext() {
+      if (idx >= MATCHES.length) return;
+      const matchId = MATCHES[idx].id;
+      idx++;
+      setRunningId(matchId);
+      setTimeout(() => {
+        const match = MATCHES.find(m => m.id === matchId);
+        const raw = runSimulation(match, 100000);
+        const agg = aggregate(match, raw);
+        setSimData(prev => ({ ...prev, [matchId]: agg }));
+        setRunCounts(prev => ({ ...prev, [matchId]: 1 }));
+        setRunningId(null);
+        setTimeout(runNext, 30);
+      }, 50);
+    }
+    setTimeout(runNext, 200);
+  }, []);
+
+  const isParlayTab = activeId === "parlays";
+  const allSimsReady = MATCHES.every(m => !!simData[m.id]);
+  const totalSimsLoaded = MATCHES.filter(m => !!simData[m.id]).length;
+
+  return (
+    <div style={S.wrap}>
+      {/* LOADING BAR */}
+      {!allSimsReady && (
+        <div style={{ background:T.navy, padding:"8px 16px", borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:12 }}>
+          <div style={{ flex:1, height:4, background:T.border, borderRadius:2, overflow:"hidden" }}>
+            <div style={{ height:"100%", width:(totalSimsLoaded/MATCHES.length*100)+"%", background:`linear-gradient(90deg,${T.gold},${T.green})`, borderRadius:2, transition:"width 0.5s" }}/>
+          </div>
+          <div style={{ fontSize:9, color:T.muted, whiteSpace:"nowrap" }}>
+            {runningId ? ("Simulating " + (MATCHES.find(m=>m.id===runningId)||{}).homeTeam + "...") : "Initializing..."} {totalSimsLoaded}/{MATCHES.length}
+          </div>
+        </div>
+      )}
+
+      {/* TABS */}
+      <div style={S.tabBar}>
+        {MATCHES.map(m => (
+          <button key={m.id} style={S.tab(m.id===activeId)} onClick={()=>setActiveId(m.id)}>
+            {m.homeTeam} vs {m.awayTeam}
+            {simData[m.id] ? "" : " ⟳"}
+          </button>
+        ))}
+        <button style={{ ...S.tab(activeId==="parlays"), color:activeId==="parlays"?T.purple:T.muted, borderBottom:activeId==="parlays"?`2px solid ${T.purple}`:"2px solid transparent", borderLeft:`1px solid ${T.border}`, marginLeft:4 }} onClick={()=>setActiveId("parlays")}>
+          🎰 PARLAYS {allSimsReady ? "" : "(" + totalSimsLoaded + "/" + MATCHES.length + ")"}
+        </button>
+      </div>
+
+      {/* PARLAY TAB */}
+      {isParlayTab && (
+        <div>
+          <div style={{ ...S.header, background:"linear-gradient(160deg,#0c0d1f 0%,#0a0f1a 100%)" }}>
+            <div style={S.glow}/>
+            <div style={{ ...S.badge, background:T.purple+"1a", border:`1px solid ${T.purple}33`, color:T.purple }}>
+              🎰 PARLAY BUILDER · LEAN / HIGH / LOCK SIGNALS
+            </div>
+            <div style={S.title}>Best Parlays — June 14, 2026</div>
+            <div style={S.meta}>All 4 matches · 2/3/4/5-leg combinations · Ranked by joint probability</div>
+            <div style={{ ...S.modelTag, background:T.green+"1a", border:`1px solid ${T.green}33`, color:T.green }}>
+              CROSS-MATCH ONLY · NO CORRELATED LEGS · HIGHEST CONFIDENCE FIRST
+            </div>
+          </div>
+          <ParlayTab simData={simData} />
+        </div>
+      )}
+
+      {/* MATCH TABS */}
+      {!isParlayTab && (
+        <MatchView
+          match={MATCHES.find(m => m.id === activeId)}
+          agg={simData[activeId]}
+          running={runningId === activeId}
+          runCount={runCounts[activeId] || 0}
+          onRun={() => runMatch(activeId)}
+        />
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

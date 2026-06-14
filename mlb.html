@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MLB Sim · Sharp Sim</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{min-height:100vh;background:#070b14}
+body{font-family:'IBM Plex Mono','Courier New',monospace}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:#0c1526}
+::-webkit-scrollbar-thumb{background:#1a2a3e;border-radius:3px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useCallback, useRef } = React;
+
+// ════════════════════════════════════════════════════════════════════════════════
+// THEME (identical to WC26 design system)
+// ════════════════════════════════════════════════════════════════════════════════
+const T = {
+  bg:"#070b14", navy:"#0c1526", card:"#101d30", border:"#1a2a3e",
+  gold:"#e8c547", blue:"#3b82f6", muted:"#4b6280", text:"#dde5f0",
+  green:"#22c55e", red:"#ef4444", yellow:"#fbbf24", purple:"#a78bfa",
+};
+const S = {
+  wrap:{ background:T.bg, minHeight:"100vh", fontFamily:"'IBM Plex Mono','Courier New',monospace", color:T.text, paddingBottom:48 },
+  tabBar:{ background:T.navy, borderBottom:"1px solid "+T.border, padding:"0 12px", overflowX:"auto", display:"flex", gap:2, flexWrap:"nowrap" },
+  tab:(a)=>({ padding:"11px 13px", fontSize:"10px", letterSpacing:"0.8px", cursor:"pointer", whiteSpace:"nowrap",
+    color:a?T.gold:T.muted, background:"none", border:"none",
+    borderBottom:a?"2px solid "+T.gold:"2px solid transparent",
+    fontFamily:"'IBM Plex Mono','Courier New',monospace", transition:"color 0.15s" }),
+  header:{ background:"linear-gradient(160deg,"+T.navy+" 0%,#0a1520 100%)", padding:"22px 20px 16px", textAlign:"center", position:"relative", overflow:"hidden" },
+  glow:{ position:"absolute", top:0, left:0, right:0, bottom:0, background:"radial-gradient(ellipse at 50% 0%,rgba(34,197,94,0.06) 0%,transparent 65%)", pointerEvents:"none" },
+  badge:(c)=>({ display:"inline-block", background:(c||T.green)+"1a", border:"1px solid "+(c||T.green)+"33", color:c||T.green, fontSize:"9px", letterSpacing:"2.5px", padding:"2px 10px", borderRadius:2, marginBottom:9 }),
+  title:{ fontSize:"clamp(15px,3.2vw,24px)", fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center", gap:9, flexWrap:"wrap", marginBottom:5 },
+  vs:{ color:T.muted, fontSize:12, fontWeight:400 },
+  meta:{ fontSize:10, color:T.muted, letterSpacing:"0.4px", marginTop:3 },
+  modelTag:(c)=>({ display:"inline-block", background:(c||T.purple)+"1a", border:"1px solid "+(c||T.purple)+"33", color:c||T.purple, fontSize:"8px", letterSpacing:"2px", padding:"2px 8px", borderRadius:2, marginTop:6 }),
+  body:{ maxWidth:920, margin:"0 auto", padding:"0 14px" },
+  sec:{ marginTop:20 },
+  secLabel:{ fontSize:"9px", letterSpacing:"3px", color:T.muted, textTransform:"uppercase", marginBottom:9, paddingBottom:5, borderBottom:"1px solid "+T.border },
+  g2:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:9 },
+  g3:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:9 },
+  g4:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:9 },
+  card:{ background:T.card, border:"1px solid "+T.border, borderRadius:6, padding:13 },
+  sL:{ fontSize:"9px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase", marginBottom:3 },
+  sV:{ fontSize:22, fontWeight:700, lineHeight:1.1 },
+  sSub:{ fontSize:10, color:T.muted, marginTop:3 },
+  btn:(d,c)=>({ display:"block", width:"100%", padding:12, marginTop:16,
+    background:d?"#1a2a3e":"linear-gradient(135deg,"+(c||T.green)+","+(c?c+"aa":"#16a34a")+")",
+    color:d?T.muted:"#070b14", border:"none", borderRadius:6,
+    fontSize:10, fontWeight:700, letterSpacing:"2px", textTransform:"uppercase",
+    cursor:d?"default":"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }),
+  barWrap:{ display:"flex", height:24, borderRadius:4, overflow:"hidden", gap:2, marginTop:9 },
+  betRow:{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"5px 0", borderBottom:"1px solid "+T.border, fontSize:11, gap:8 },
+  pill:(c)=>({ background:c+"1e", border:"1px solid "+c+"44", color:c, padding:"2px 7px", borderRadius:3, fontSize:"8px", fontWeight:700, letterSpacing:"1px", whiteSpace:"nowrap" }),
+  table:{ width:"100%", borderCollapse:"collapse", fontSize:11 },
+  th:{ background:T.navy, padding:"6px 9px", textAlign:"left", color:T.muted, fontSize:"8px", letterSpacing:"1.5px", textTransform:"uppercase", borderBottom:"1px solid "+T.border },
+  td:{ padding:"6px 9px", borderBottom:"1px solid "+T.border },
+  disclaimer:{ background:"#080500", border:"1px solid "+T.gold+"22", borderRadius:6, padding:"9px 13px", fontSize:"9px", color:"#6b5820", marginTop:18, lineHeight:1.8 },
+  input:{ background:T.navy, border:"1px solid "+T.border, borderRadius:4, padding:"10px 12px", color:T.text, fontSize:11, fontFamily:"'IBM Plex Mono','Courier New',monospace", width:"100%", outline:"none" },
+};
+
+// ════════════════════════════════════════════════════════════════════════════════
+// LAYER 1 — TEAM PARAMETERS
+// wRC+: Weighted Runs Created Plus (league avg=100, higher=better offense)
+// teamFIP: team rotation FIP (lower=better pitching) — 2025 season averages
+// bullpenERA: relievers ERA
+// parkFactor: run scoring multiplier vs league avg (1.0=neutral, >1=hitter friendly)
+// ════════════════════════════════════════════════════════════════════════════════
+const TEAM_PARAMS = {
+  "Arizona Diamondbacks":   { wrc:105, teamFIP:3.82, bullpenERA:3.90, pf:0.98, abbr:"ARI" },
+  "Atlanta Braves":         { wrc:112, teamFIP:3.65, bullpenERA:3.55, pf:1.00, abbr:"ATL" },
+  "Baltimore Orioles":      { wrc:103, teamFIP:3.88, bullpenERA:3.70, pf:0.99, abbr:"BAL" },
+  "Boston Red Sox":         { wrc:108, teamFIP:4.10, bullpenERA:4.05, pf:1.07, abbr:"BOS" },
+  "Chicago Cubs":           { wrc:101, teamFIP:4.05, bullpenERA:3.95, pf:1.02, abbr:"CHC" },
+  "Chicago White Sox":      { wrc:85,  teamFIP:4.85, bullpenERA:5.10, pf:1.00, abbr:"CWS" },
+  "Cincinnati Reds":        { wrc:98,  teamFIP:4.20, bullpenERA:4.30, pf:1.05, abbr:"CIN" },
+  "Cleveland Guardians":    { wrc:100, teamFIP:3.72, bullpenERA:3.60, pf:0.97, abbr:"CLE" },
+  "Colorado Rockies":       { wrc:92,  teamFIP:5.10, bullpenERA:5.40, pf:1.30, abbr:"COL" },
+  "Detroit Tigers":         { wrc:99,  teamFIP:3.78, bullpenERA:3.65, pf:0.97, abbr:"DET" },
+  "Houston Astros":         { wrc:107, teamFIP:3.55, bullpenERA:3.45, pf:1.00, abbr:"HOU" },
+  "Kansas City Royals":     { wrc:96,  teamFIP:4.15, bullpenERA:4.00, pf:1.01, abbr:"KC"  },
+  "Los Angeles Angels":     { wrc:94,  teamFIP:4.40, bullpenERA:4.50, pf:1.00, abbr:"LAA" },
+  "Los Angeles Dodgers":    { wrc:118, teamFIP:3.40, bullpenERA:3.30, pf:0.97, abbr:"LAD" },
+  "Miami Marlins":          { wrc:86,  teamFIP:4.55, bullpenERA:4.60, pf:0.95, abbr:"MIA" },
+  "Milwaukee Brewers":      { wrc:97,  teamFIP:3.80, bullpenERA:3.70, pf:0.98, abbr:"MIL" },
+  "Minnesota Twins":        { wrc:101, teamFIP:4.00, bullpenERA:3.85, pf:1.01, abbr:"MIN" },
+  "New York Mets":          { wrc:106, teamFIP:3.70, bullpenERA:3.60, pf:1.02, abbr:"NYM" },
+  "New York Yankees":       { wrc:110, teamFIP:3.60, bullpenERA:3.50, pf:1.03, abbr:"NYY" },
+  "Oakland Athletics":      { wrc:88,  teamFIP:4.70, bullpenERA:4.80, pf:0.96, abbr:"OAK" },
+  "Philadelphia Phillies":  { wrc:113, teamFIP:3.62, bullpenERA:3.55, pf:1.02, abbr:"PHI" },
+  "Pittsburgh Pirates":     { wrc:90,  teamFIP:4.45, bullpenERA:4.55, pf:0.98, abbr:"PIT" },
+  "San Diego Padres":       { wrc:104, teamFIP:3.75, bullpenERA:3.65, pf:0.94, abbr:"SD"  },
+  "San Francisco Giants":   { wrc:97,  teamFIP:4.00, bullpenERA:3.90, pf:0.90, abbr:"SF"  },
+  "Seattle Mariners":       { wrc:96,  teamFIP:3.50, bullpenERA:3.40, pf:0.79, abbr:"SEA" },
+  "St. Louis Cardinals":    { wrc:99,  teamFIP:4.10, bullpenERA:4.00, pf:0.99, abbr:"STL" },
+  "Tampa Bay Rays":         { wrc:100, teamFIP:3.68, bullpenERA:3.55, pf:0.96, abbr:"TB"  },
+  "Texas Rangers":          { wrc:103, teamFIP:3.90, bullpenERA:3.80, pf:1.04, abbr:"TEX" },
+  "Toronto Blue Jays":      { wrc:102, teamFIP:3.95, bullpenERA:3.85, pf:1.00, abbr:"TOR" },
+  "Washington Nationals":   { wrc:91,  teamFIP:4.50, bullpenERA:4.60, pf:1.01, abbr:"WSH" },
+};
+const TEAM_NAMES = Object.keys(TEAM_PARAMS).sort();
+
+// ════════════════════════════════════════════════════════════════════════════════
+// LAYER 2 — MARKOV CHAIN BASE-OUT STATE TABLE
+// 24 states: 8 base configs × 3 out counts
+// runExpectancy[baseState][outs] = avg runs expected to score rest of inning
+// Values from 2024 MLB run expectancy matrix
+// ════════════════════════════════════════════════════════════════════════════════
+const RE = {
+  // [bases: "000","100","010","001","110","101","011","111"][outs 0,1,2]
+  "000": [0.544, 0.297, 0.117],
+  "100": [0.953, 0.573, 0.251],
+  "010": [1.189, 0.725, 0.344],
+  "001": [1.482, 0.983, 0.387],
+  "110": [1.573, 0.971, 0.460],
+  "101": [1.904, 1.243, 0.538],
+  "011": [2.052, 1.467, 0.621],
+  "111": [2.417, 1.650, 0.820],
+};
+
+// ════════════════════════════════════════════════════════════════════════════════
+// LAYER 3 — PLATE APPEARANCE OUTCOME PROBABILITIES
+// Driven by pitcher FIP and batter wRC+
+// League average: BB%=8.5, K%=23, 1B%=15, 2B%=4.5, 3B%=0.5, HR%=3.5, Out%=45
+// wRC+ and FIP shift these proportionally
+// ════════════════════════════════════════════════════════════════════════════════
+const LG_AVG_RUNS_PER_GAME = 4.50; // 2025 MLB average
+
+function pitcherRunsPerNine(fip) {
+  // Convert FIP to expected R/9 with regression to mean
+  return fip * 0.92 + 0.3;
+}
+
+function teamRunsPerGame(wrc, oppFIP, parkFactor) {
+  // Base: wRC+ scales linearly around 100 = LG_AVG
+  const offFactor = wrc / 100;
+  const pitchFactor = 4.50 / pitcherRunsPerNine(oppFIP);
+  return LG_AVG_RUNS_PER_GAME * offFactor * pitchFactor * parkFactor * 0.5;
+  // * 0.5 because park factor is shared between teams
+}
+
+function paOutcomes(batter_wrc, pitcher_fip) {
+  // Base league average rates
+  const lg = { bb:0.085, k:0.230, h1b:0.150, h2b:0.045, h3b:0.005, hr:0.035 };
+  // wRC+ modifier (batter strength vs 100 average)
+  const offMod = batter_wrc / 100;
+  // FIP modifier: lower FIP = harder pitcher
+  // League avg FIP ~4.20; each 0.5 below = ~5% better outcomes for pitcher
+  const pitchMod = pitcher_fip / 4.20;
+
+  const bb  = Math.min(0.18, Math.max(0.03, lg.bb  * offMod * pitchMod));
+  const k   = Math.min(0.40, Math.max(0.10, lg.k   * (1/offMod) * (1/pitchMod)));
+  const hr  = Math.min(0.08, Math.max(0.005,lg.hr  * offMod * (2 - pitchMod)));
+  const h2b = Math.min(0.07, Math.max(0.01, lg.h2b * offMod * pitchMod));
+  const h3b = Math.min(0.015,Math.max(0.001,lg.h3b * offMod));
+  const h1b = Math.min(0.22, Math.max(0.05, lg.h1b * offMod * pitchMod));
+  const out = Math.max(0.15, 1 - bb - k - hr - h2b - h3b - h1b);
+
+  return { bb, k, hr, h2b, h3b, h1b, out };
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// LAYER 4 — MARKOV CHAIN HALF-INNING SIMULATOR
+// Simulates one half-inning through base-out states until 3 outs
+// Returns runs scored this half-inning
+// ════════════════════════════════════════════════════════════════════════════════
+function rand() { return Math.random(); }
+
+function simulateHalfInning(outcomes) {
+  let outs = 0;
+  let bases = [0, 0, 0]; // [1B, 2B, 3B]
+  let runs = 0;
+
+  while (outs < 3) {
+    const r = rand();
+    let cum = 0;
+
+    if (r < (cum += outcomes.bb)) {
+      // Walk: advance all forced, batter to 1B
+      if (bases[0] && bases[1] && bases[2]) { runs++; }
+      else if (bases[0] && bases[1]) { bases[2] = 1; }
+      else if (bases[0]) { bases[1] = 1; }
+      bases[0] = 1;
+    } else if (r < (cum += outcomes.k)) {
+      outs++;
+    } else if (r < (cum += outcomes.hr)) {
+      runs += 1 + bases[0] + bases[1] + bases[2];
+      bases = [0, 0, 0];
+    } else if (r < (cum += outcomes.h2b)) {
+      runs += bases[2] + bases[1];
+      bases[2] = bases[0];
+      bases[1] = 1;
+      bases[0] = 0;
+    } else if (r < (cum += outcomes.h3b)) {
+      runs += bases[2] + bases[1] + bases[0];
+      bases = [0, 0, 1];
+    } else if (r < (cum += outcomes.h1b)) {
+      runs += bases[2];
+      bases[2] = bases[1];
+      bases[1] = bases[0];
+      bases[0] = 1;
+    } else {
+      // Out — approx: 70% groundout (may advance), 30% flyout
+      if (rand() < 0.12 && outs < 2 && bases[2]) {
+        runs++;
+        bases[2] = 0;
+      } else if (rand() < 0.15 && bases[0]) {
+        bases[1] = Math.max(bases[1], bases[0]);
+        bases[0] = 0;
+      }
+      outs++;
+    }
+  }
+  return runs;
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// LAYER 5 — FULL GAME SIMULATOR
+// 9 innings (+ extras), starter exit after N innings, bullpen takes over
+// ════════════════════════════════════════════════════════════════════════════════
+function simulateGame(homeParams, awayParams, starterInnings = 5) {
+  // starterInnings: expected innings for starting pitcher (F5 context)
+  const homeOff = paOutcomes(homeParams.wrc, awayParams.teamFIP);
+  const awayOff = paOutcomes(awayParams.wrc, homeParams.teamFIP);
+  // Bullpen outcomes — worse than starter
+  const homeBullpen = paOutcomes(homeParams.wrc, awayParams.bullpenERA);
+  const awayBullpen = paOutcomes(awayParams.wrc, homeParams.bullpenERA);
+
+  let homeRuns = 0, awayRuns = 0;
+  let homeByInning = [], awayByInning = [];
+
+  const innings = 9;
+  for (let inn = 1; inn <= innings; inn++) {
+    const awayUsesBullpen = inn > starterInnings;
+    const homeUsesBullpen = inn > starterInnings;
+
+    const awayInningOff = awayUsesBullpen ? awayBullpen : awayOff;
+    const homeInningOff = homeUsesBullpen ? homeBullpen : homeOff;
+
+    const awayR = simulateHalfInning(awayInningOff);
+    let homeR = simulateHalfInning(homeInningOff);
+
+    // Walk-off: if bottom 9+ and home team walks it off
+    if (inn >= 9 && homeRuns + homeR > awayRuns + awayR) {
+      homeRuns += homeR;
+      awayRuns += awayR;
+      homeByInning.push(homeR);
+      awayByInning.push(awayR);
+      break;
+    }
+
+    homeRuns += homeR;
+    awayRuns += awayR;
+    homeByInning.push(homeR);
+    awayByInning.push(awayR);
+  }
+
+  // Extra innings if tied after 9
+  let extraInnings = 0;
+  while (homeRuns === awayRuns && extraInnings < 3) {
+    extraInnings++;
+    // Extra inning rule: ghost runner on 2B
+    const awayExtra = simulateHalfInningWithRunner(awayBullpen);
+    const homeExtra = simulateHalfInningWithRunner(homeBullpen);
+    awayRuns += awayExtra;
+    homeRuns += homeExtra;
+  }
+
+  const f5HomeRuns = homeByInning.slice(0, 5).reduce((a,b)=>a+b,0);
+  const f5AwayRuns = awayByInning.slice(0, 5).reduce((a,b)=>a+b,0);
+  const nrfi = homeByInning[0] === 0 && awayByInning[0] === 0;
+
+  return {
+    homeRuns, awayRuns,
+    winner: homeRuns > awayRuns ? "home" : "away",
+    total: homeRuns + awayRuns,
+    f5Home: f5HomeRuns, f5Away: f5AwayRuns,
+    f5Total: f5HomeRuns + f5AwayRuns,
+    f5Winner: f5HomeRuns > f5AwayRuns ? "home" : f5AwayRuns > f5HomeRuns ? "away" : "push",
+    nrfi,
+    homeByInning, awayByInning,
+  };
+}
+
+function simulateHalfInningWithRunner(outcomes) {
+  // Ghost runner starts on 2B
+  let outs = 0;
+  let bases = [0, 1, 0]; // runner on 2B
+  let runs = 0;
+  while (outs < 3) {
+    const r = rand();
+    let cum = 0;
+    if (r < (cum += outcomes.bb)) {
+      if (bases[0] && bases[1]) { bases[2] = 1; }
+      else if (bases[0]) { bases[1] = 1; }
+      bases[0] = 1;
+    } else if (r < (cum += outcomes.k)) {
+      outs++;
+    } else if (r < (cum += outcomes.hr)) {
+      runs += 1 + bases[0] + bases[1] + bases[2];
+      bases = [0,0,0];
+    } else if (r < (cum += outcomes.h2b)) {
+      runs += bases[2] + bases[1];
+      bases[2] = bases[0]; bases[1] = 1; bases[0] = 0;
+    } else if (r < (cum += outcomes.h3b)) {
+      runs += bases[2] + bases[1] + bases[0];
+      bases = [0,0,1];
+    } else if (r < (cum += outcomes.h1b)) {
+      runs += bases[2];
+      bases[2] = bases[1]; bases[1] = bases[0]; bases[0] = 1;
+    } else {
+      if (rand() < 0.12 && outs < 2 && bases[2]) { runs++; bases[2] = 0; }
+      outs++;
+    }
+  }
+  return runs;
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// MONTE CARLO — runs N simulations, returns aggregate stats
+// ════════════════════════════════════════════════════════════════════════════════
+function runMLBSim(homeTeam, awayTeam, n = 100000) {
+  const hp = TEAM_PARAMS[homeTeam];
+  const ap = TEAM_PARAMS[awayTeam];
+  if (!hp || !ap) return null;
+
+  // Park factor: use home team's park
+  const pf = hp.pf;
+  // Scale wRC+ by park factor for this game
+  const hAdj = { ...hp, wrc: hp.wrc * pf, pf: 1.0 };
+  const aAdj = { ...ap, wrc: ap.wrc * pf, pf: 1.0 };
+
+  const results = [];
+  for (let i = 0; i < n; i++) {
+    results.push(simulateGame(hAdj, aAdj));
+  }
+  return aggregateMLB(homeTeam, awayTeam, results, hp, ap, n);
+}
+
+function aggregateMLB(homeTeam, awayTeam, results, hp, ap, n) {
+  const fmt = (v, d=2) => typeof v === "number" ? v.toFixed(d) : v;
+  const avg = arr => arr.reduce((a,b)=>a+b,0)/arr.length;
+  const pct = (arr, fn) => (arr.filter(fn).length / arr.length * 100).toFixed(1);
+
+  const hWins = results.filter(r=>r.winner==="home").length;
+  const aWins = results.filter(r=>r.winner==="away").length;
+
+  const totals = results.map(r=>r.total);
+  const avgTotal = avg(totals);
+  const avgHome  = avg(results.map(r=>r.homeRuns));
+  const avgAway  = avg(results.map(r=>r.awayRuns));
+
+  // Run line (1.5)
+  const hRLCover = results.filter(r=>r.homeRuns - r.awayRuns >= 2).length;
+  const aRLCover = results.filter(r=>r.awayRuns - r.homeRuns >= 2).length;
+
+  // Totals
+  const over75 = results.filter(r=>r.total > 7.5).length;
+  const over85 = results.filter(r=>r.total > 8.5).length;
+  const over95 = results.filter(r=>r.total > 9.5).length;
+  const under75 = results.filter(r=>r.total < 7.5).length;
+  const under85 = results.filter(r=>r.total < 8.5).length;
+
+  // F5
+  const f5Wins = results.filter(r=>r.f5Winner==="home").length;
+  const f5Losses = results.filter(r=>r.f5Winner==="away").length;
+  const f5Push = results.filter(r=>r.f5Winner==="push").length;
+  const avgF5Total = avg(results.map(r=>r.f5Total));
+  const f5Over35 = results.filter(r=>r.f5Total > 3.5).length;
+  const f5Over45 = results.filter(r=>r.f5Total > 4.5).length;
+  const f5Over25 = results.filter(r=>r.f5Total > 2.5).length;
+
+  // NRFI / YRFI
+  const nrfi = results.filter(r=>r.nrfi).length;
+
+  // Score distribution
+  const scoreFreq = {};
+  results.forEach(r=>{
+    const k = r.awayRuns + "-" + r.homeRuns;
+    scoreFreq[k] = (scoreFreq[k]||0)+1;
+  });
+  const topScores = Object.entries(scoreFreq).sort((a,b)=>b[1]-a[1]).slice(0,8)
+    .map(([score,count])=>({ score, count, pct:((count/n)*100).toFixed(1) }));
+
+  const [mls] = Object.entries(scoreFreq).sort((a,b)=>b[1]-a[1])[0];
+
+  // Shutout / combined shutout
+  const homeShutout = results.filter(r=>r.awayRuns===0).length;
+  const awayShutout = results.filter(r=>r.homeRuns===0).length;
+
+  return {
+    n, homeTeam, awayTeam, hp, ap,
+    hWins, aWins,
+    hWPct: fmt((hWins/n)*100,1), aWPct: fmt((aWins/n)*100,1),
+    mls, mlsPct: fmt((scoreFreq[mls]/n)*100,1),
+    avgHome: fmt(avgHome), avgAway: fmt(avgAway), avgTotal: fmt(avgTotal),
+    hRLPct: fmt((hRLCover/n)*100,1), aRLPct: fmt((aRLCover/n)*100,1),
+    over75Pct: fmt((over75/n)*100,1), over85Pct: fmt((over85/n)*100,1),
+    over95Pct: fmt((over95/n)*100,1),
+    under75Pct: fmt((under75/n)*100,1), under85Pct: fmt((under85/n)*100,1),
+    f5HomePct: fmt((f5Wins/n)*100,1), f5AwayPct: fmt((f5Losses/n)*100,1),
+    f5PushPct: fmt((f5Push/n)*100,1),
+    avgF5Total: fmt(avgF5Total),
+    f5Over25Pct: fmt((f5Over25/n)*100,1),
+    f5Over35Pct: fmt((f5Over35/n)*100,1),
+    f5Over45Pct: fmt((f5Over45/n)*100,1),
+    nrfiPct: fmt((nrfi/n)*100,1), yrfiPct: fmt(((n-nrfi)/n)*100,1),
+    homeShutoutPct: fmt((homeShutout/n)*100,1),
+    awayShutoutPct: fmt((awayShutout/n)*100,1),
+    topScores,
+  };
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// ODDS API FETCH
+// ════════════════════════════════════════════════════════════════════════════════
+async function fetchMLBGames(apiKey) {
+  const url = "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/?apiKey="
+    + apiKey + "&regions=us&markets=h2h,spreads,totals&oddsFormat=american&bookmakers=fanduel,draftkings";
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("API error: " + res.status);
+  return res.json();
+}
+
+function parseOddsGame(game) {
+  // Find best available odds from FanDuel then DraftKings
+  const books = game.bookmakers || [];
+  const fd = books.find(b=>b.key==="fanduel") || books[0];
+  if (!fd) return null;
+
+  let h2h = {}, spread = {}, total = {};
+  (fd.markets||[]).forEach(m => {
+    if (m.key === "h2h") {
+      m.outcomes.forEach(o => {
+        if (o.name === game.home_team) h2h.home = o.price;
+        else h2h.away = o.price;
+      });
+    }
+    if (m.key === "spreads") {
+      m.outcomes.forEach(o => {
+        if (o.name === game.home_team) { spread.homePoint = o.point; spread.homePrice = o.price; }
+        else { spread.awayPoint = o.point; spread.awayPrice = o.price; }
+      });
+    }
+    if (m.key === "totals") {
+      m.outcomes.forEach(o => {
+        if (o.name === "Over") { total.line = o.point; total.overPrice = o.price; }
+        else total.underPrice = o.price;
+      });
+    }
+  });
+
+  return {
+    id: game.id,
+    homeTeam: game.home_team,
+    awayTeam: game.away_team,
+    commenceTime: game.commence_time,
+    h2h, spread, total,
+  };
+}
+
+function fmtOdds(n) {
+  if (!n) return "—";
+  return n > 0 ? "+"+n : ""+n;
+}
+
+function impliedProb(ml) {
+  if (!ml) return 0;
+  if (ml < 0) return (-ml)/(-ml+100)*100;
+  return 100/(ml+100)*100;
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// UI COMPONENTS
+// ════════════════════════════════════════════════════════════════════════════════
+function StatCard({ label, value, sub, color }) {
+  return (
+    <div style={S.card}>
+      <div style={S.sL}>{label}</div>
+      <div style={{ ...S.sV, color:color||T.text }}>{value}</div>
+      {sub && <div style={S.sSub}>{sub}</div>}
+    </div>
+  );
+}
+
+function BetRow({ market, simPct, bookOdds, signal }) {
+  const sc = signal==="LEAN"?T.gold:signal==="PASS"?T.muted:signal==="CONSIDER"?"#f97316":signal==="LOCK"?T.red:signal==="HIGH"?T.green:T.muted;
+  return (
+    <div style={S.betRow}>
+      <span style={{ color:T.muted, minWidth:160, fontSize:10 }}>{market}</span>
+      <span style={{ flex:1, textAlign:"center", fontSize:11 }}>{simPct}</span>
+      <span style={{ color:T.muted, flex:1, textAlign:"center", fontSize:10 }}>{bookOdds}</span>
+      <span style={S.pill(sc)}>{signal}</span>
+    </div>
+  );
+}
+
+function signal(simPct, impliedPct, lockThresh=70, highThresh=60, leanThresh=52) {
+  const s = parseFloat(simPct);
+  if (s >= lockThresh) return "LOCK";
+  if (s >= highThresh) return "HIGH";
+  if (s > leanThresh && (impliedPct===0 || s > impliedPct + 3)) return "LEAN";
+  return "PASS";
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// API KEY GATE
+// ════════════════════════════════════════════════════════════════════════════════
+function ApiKeyGate({ onKey }) {
+  const [val, setVal] = useState("");
+  const [err, setErr] = useState("");
+  const [testing, setTesting] = useState(false);
+
+  const stored = localStorage.getItem("sharp_odds_key");
+
+  useEffect(() => {
+    if (stored) onKey(stored);
+  }, []);
+
+  async function test() {
+    if (!val.trim()) { setErr("Enter your API key"); return; }
+    setTesting(true); setErr("");
+    try {
+      const res = await fetch("https://api.the-odds-api.com/v4/sports?apiKey=" + val.trim());
+      if (!res.ok) throw new Error("Invalid key or quota exceeded");
+      localStorage.setItem("sharp_odds_key", val.trim());
+      onKey(val.trim());
+    } catch(e) {
+      setErr(e.message);
+    }
+    setTesting(false);
+  }
+
+  return (
+    <div style={{ maxWidth:520, margin:"80px auto", padding:"0 20px" }}>
+      <div style={{ ...S.card, border:"1px solid "+T.green+"44" }}>
+        <div style={S.badge(T.green)}>⚾ MLB SIM · API KEY REQUIRED</div>
+        <div style={{ fontSize:13, fontWeight:700, marginBottom:8, marginTop:8 }}>Enter your Odds API key</div>
+        <div style={{ fontSize:10, color:T.muted, lineHeight:1.7, marginBottom:16 }}>
+          Your key is stored only in your browser's localStorage — never in source code or sent anywhere except The Odds API directly. Get a free key at <span style={{ color:T.green }}>the-odds-api.com</span>
+        </div>
+        <input
+          style={S.input}
+          type="password"
+          placeholder="Paste your API key..."
+          value={val}
+          onChange={e=>setVal(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&test()}
+        />
+        {err && <div style={{ fontSize:10, color:T.red, marginTop:8 }}>{err}</div>}
+        <button style={S.btn(testing, T.green)} onClick={test} disabled={testing}>
+          {testing ? "Verifying..." : "Connect & Load Today's Games"}
+        </button>
+        <div style={{ fontSize:9, color:T.muted, marginTop:10, lineHeight:1.6 }}>
+          Free tier: 500 req/month · MLB h2h, spreads, totals · Clear key: <span style={{ color:T.red, cursor:"pointer" }} onClick={()=>{ localStorage.removeItem("sharp_odds_key"); setVal(""); }}>reset</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// GAME SIM VIEW
+// ════════════════════════════════════════════════════════════════════════════════
+function GameSimView({ game, agg, running, onRun, runCount }) {
+  const hasOdds = game && game.h2h && game.h2h.home;
+
+  const hImplied = hasOdds ? impliedProb(game.h2h.home) : 0;
+  const aImplied = hasOdds ? impliedProb(game.h2h.away) : 0;
+  const totalLine = hasOdds && game.total.line ? game.total.line : 8.5;
+
+  const commenceStr = game ? new Date(game.commenceTime).toLocaleString("en-US",{weekday:"short",month:"short",day:"numeric",hour:"numeric",minute:"2-digit",timeZoneName:"short"}) : "";
+
+  return (
+    <div>
+      <div style={S.header}>
+        <div style={S.glow}/>
+        <div style={S.badge(T.green)}>⚾ MLB · MARKOV CHAIN SIM</div>
+        <div style={S.title}>
+          <span>{game ? game.awayTeam : "—"}</span>
+          <span style={S.vs}>@</span>
+          <span>{game ? game.homeTeam : "—"}</span>
+        </div>
+        <div style={S.meta}>{commenceStr || "Select a game"}</div>
+        <div style={S.modelTag(T.green)}>MARKOV CHAIN + FIP/xFIP + wRC+ + PARK FACTORS · 100,000 ITERATIONS</div>
+      </div>
+
+      <div style={S.body}>
+        {game && <button style={S.btn(running, T.green)} onClick={onRun} disabled={running}>
+          {running ? "⟳ Running Markov Chain (100,000 iterations)..." : ("↻ Re-Run Simulation" + (runCount > 0 ? " (Run #"+runCount+")" : ""))}
+        </button>}
+
+        {/* Live odds strip */}
+        {hasOdds && (
+          <div style={{ ...S.sec }}>
+            <div style={S.secLabel}>Live Odds (The Odds API · FanDuel)</div>
+            <div style={S.g3}>
+              <div style={S.card}>
+                <div style={S.sL}>{game.awayTeam} ML</div>
+                <div style={{ ...S.sV, color:T.blue, fontSize:20 }}>{fmtOdds(game.h2h.away)}</div>
+                <div style={S.sSub}>Implied: {aImplied.toFixed(1)}%</div>
+              </div>
+              <div style={S.card}>
+                <div style={S.sL}>{game.homeTeam} ML</div>
+                <div style={{ ...S.sV, color:T.green, fontSize:20 }}>{fmtOdds(game.h2h.home)}</div>
+                <div style={S.sSub}>Implied: {hImplied.toFixed(1)}%</div>
+              </div>
+              <div style={S.card}>
+                <div style={S.sL}>Total O/U</div>
+                <div style={{ ...S.sV, color:T.gold, fontSize:20 }}>{game.total.line || "—"}</div>
+                <div style={S.sSub}>
+                  O {fmtOdds(game.total.overPrice)} · U {fmtOdds(game.total.underPrice)}
+                </div>
+              </div>
+            </div>
+            {game.spread && game.spread.homePoint && (
+              <div style={{ ...S.card, marginTop:9, display:"flex", gap:20, flexWrap:"wrap" }}>
+                <div><div style={S.sL}>{game.awayTeam} Run Line</div><div style={{ fontSize:14, fontWeight:700, color:T.blue }}>{game.spread.awayPoint > 0 ? "+"+game.spread.awayPoint : game.spread.awayPoint} <span style={{ color:T.muted, fontSize:11 }}>{fmtOdds(game.spread.awayPrice)}</span></div></div>
+                <div><div style={S.sL}>{game.homeTeam} Run Line</div><div style={{ fontSize:14, fontWeight:700, color:T.green }}>{game.spread.homePoint > 0 ? "+"+game.spread.homePoint : game.spread.homePoint} <span style={{ color:T.muted, fontSize:11 }}>{fmtOdds(game.spread.homePrice)}</span></div></div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Team params */}
+        {game && (
+          <div style={S.sec}>
+            <div style={S.secLabel}>Model Inputs (2025 Season)</div>
+            <div style={S.card}>
+              <table style={S.table}>
+                <thead><tr>
+                  <th style={S.th}>Team</th>
+                  <th style={S.th}>Role</th>
+                  <th style={S.th}>wRC+</th>
+                  <th style={S.th}>Rotation FIP</th>
+                  <th style={S.th}>Bullpen ERA</th>
+                  <th style={S.th}>Park Factor</th>
+                </tr></thead>
+                <tbody>
+                  {[{t:game.awayTeam,role:"Away",c:T.blue},{t:game.homeTeam,role:"Home",c:T.green}].map(({t,role,c})=>{
+                    const p = TEAM_PARAMS[t] || {};
+                    return (
+                      <tr key={t}>
+                        <td style={{ ...S.td, color:c, fontWeight:700 }}>{t}</td>
+                        <td style={S.td}>{role}</td>
+                        <td style={S.td}>{p.wrc}</td>
+                        <td style={S.td}>{p.teamFIP}</td>
+                        <td style={S.td}>{p.bullpenERA}</td>
+                        <td style={S.td}>{p.pf}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {agg && (
+          <div>
+            {/* Win probabilities */}
+            <div style={S.sec}>
+              <div style={S.secLabel}>Win Probabilities (n=100,000)</div>
+              <div style={S.g2}>
+                <StatCard label={agg.awayTeam + " Win"} value={agg.aWPct+"%"} sub={agg.aWins.toLocaleString()+" / 100,000 sims"} color={T.blue}/>
+                <StatCard label={agg.homeTeam + " Win"} value={agg.hWPct+"%"} sub={agg.hWins.toLocaleString()+" / 100,000 sims"} color={T.green}/>
+              </div>
+              <div style={S.barWrap}>
+                <div style={{ width:agg.aWPct+"%", background:"linear-gradient(90deg,#1d4ed8,#3b82f6)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700, color:T.text, transition:"width 0.4s" }}>
+                  {parseFloat(agg.aWPct)>8 ? agg.awayTeam+" "+agg.aWPct+"%" : ""}
+                </div>
+                <div style={{ width:agg.hWPct+"%", background:"linear-gradient(90deg,#16a34a,#22c55e)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700, color:"#070b14", transition:"width 0.4s" }}>
+                  {parseFloat(agg.hWPct)>8 ? agg.homeTeam+" "+agg.hWPct+"%" : ""}
+                </div>
+              </div>
+            </div>
+
+            {/* Runs */}
+            <div style={S.sec}>
+              <div style={S.secLabel}>Run Production</div>
+              <div style={S.g3}>
+                <StatCard label={agg.awayTeam+" Avg Runs"} value={agg.avgAway} color={T.blue}/>
+                <StatCard label="Avg Total Runs" value={agg.avgTotal} color={T.gold}/>
+                <StatCard label={agg.homeTeam+" Avg Runs"} value={agg.avgHome} color={T.green}/>
+              </div>
+              <div style={{ ...S.card, marginTop:9 }}>
+                <div style={S.sL}>Score Distribution — Away @ Home (Top 8)</div>
+                {agg.topScores.map(({score,count,pct})=>(
+                  <div key={score} style={{ marginTop:7 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:2 }}>
+                      <span>{score}</span><span style={{ color:T.muted }}>{count.toLocaleString()}× ({pct}%)</span>
+                    </div>
+                    <div style={{ height:4, background:T.border, borderRadius:2 }}>
+                      <div style={{ height:"100%", width:Math.min(parseFloat(pct)*5,100)+"%", background:parseFloat(pct)>=8?T.green:T.blue, borderRadius:2, transition:"width 0.5s" }}/>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Betting signals */}
+            <div style={S.sec}>
+              <div style={S.secLabel}>Betting Signals vs Market</div>
+
+              <div style={S.card}>
+                <div style={{ ...S.sL, marginBottom:8 }}>Full Game</div>
+                <div style={{ ...S.betRow, fontSize:"8px", fontWeight:700 }}>
+                  <span style={{ color:T.muted, minWidth:160 }}>MARKET</span>
+                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>SIM PROB</span>
+                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>LIVE ODDS</span>
+                  <span style={{ minWidth:64, textAlign:"right", color:T.muted }}>SIGNAL</span>
+                </div>
+                <BetRow market={agg.awayTeam+" ML"} simPct={agg.aWPct+"%"} bookOdds={fmtOdds(hasOdds?game.h2h.away:null)} signal={signal(agg.aWPct, aImplied)}/>
+                <BetRow market={agg.homeTeam+" ML"} simPct={agg.hWPct+"%"} bookOdds={fmtOdds(hasOdds?game.h2h.home:null)} signal={signal(agg.hWPct, hImplied)}/>
+                <BetRow market={agg.awayTeam+" -1.5 RL"} simPct={agg.aRLPct+"%"} bookOdds={hasOdds&&game.spread?fmtOdds(game.spread.awayPrice):"~+150"} signal={signal(agg.aRLPct, 0, 55, 45, 38)}/>
+                <BetRow market={agg.homeTeam+" -1.5 RL"} simPct={agg.hRLPct+"%"} bookOdds={hasOdds&&game.spread?fmtOdds(game.spread.homePrice):"~+150"} signal={signal(agg.hRLPct, 0, 55, 45, 38)}/>
+                <BetRow market={"Over "+totalLine+" Total"} simPct={agg.over85Pct+"%"} bookOdds={fmtOdds(hasOdds?game.total.overPrice:null)} signal={signal(agg.over85Pct, 0)}/>
+                <BetRow market={"Under "+totalLine+" Total"} simPct={agg.under85Pct+"%"} bookOdds={fmtOdds(hasOdds?game.total.underPrice:null)} signal={signal(agg.under85Pct, 0)}/>
+                <BetRow market="Over 7.5 Total" simPct={agg.over75Pct+"%"} bookOdds="~Market" signal={signal(agg.over75Pct, 0)}/>
+                <BetRow market="Over 9.5 Total" simPct={agg.over95Pct+"%"} bookOdds="~Market" signal={signal(agg.over95Pct, 0, 55, 42, 35)}/>
+                <BetRow market={agg.homeTeam+" Shutout Win"} simPct={agg.homeShutoutPct+"%"} bookOdds="~Market" signal={signal(agg.homeShutoutPct, 0, 30, 20, 12)}/>
+                <BetRow market={agg.awayTeam+" Shutout Win"} simPct={agg.awayShutoutPct+"%"} bookOdds="~Market" signal={signal(agg.awayShutoutPct, 0, 30, 20, 12)}/>
+              </div>
+
+              <div style={{ ...S.card, marginTop:10 }}>
+                <div style={{ ...S.sL, marginBottom:8 }}>First 5 Innings (F5)</div>
+                <div style={{ ...S.betRow, fontSize:"8px", fontWeight:700 }}>
+                  <span style={{ color:T.muted, minWidth:160 }}>MARKET</span>
+                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>SIM PROB</span>
+                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>BOOK ODDS</span>
+                  <span style={{ minWidth:64, textAlign:"right", color:T.muted }}>SIGNAL</span>
+                </div>
+                <BetRow market={agg.awayTeam+" F5 Win"} simPct={agg.f5AwayPct+"%"} bookOdds="~F5 ML" signal={signal(agg.f5AwayPct, aImplied*0.9)}/>
+                <BetRow market={agg.homeTeam+" F5 Win"} simPct={agg.f5HomePct+"%"} bookOdds="~F5 ML" signal={signal(agg.f5HomePct, hImplied*0.9)}/>
+                <BetRow market="F5 Push / Tie" simPct={agg.f5PushPct+"%"} bookOdds="~Market" signal="PASS"/>
+                <BetRow market="F5 Over 2.5" simPct={agg.f5Over25Pct+"%"} bookOdds="~Market" signal={signal(agg.f5Over25Pct, 0)}/>
+                <BetRow market="F5 Over 3.5" simPct={agg.f5Over35Pct+"%"} bookOdds="~-110" signal={signal(agg.f5Over35Pct, 0)}/>
+                <BetRow market="F5 Over 4.5" simPct={agg.f5Over45Pct+"%"} bookOdds="~+130" signal={signal(agg.f5Over45Pct, 0, 55, 42, 35)}/>
+                <div style={{ padding:"8px 0 2px", fontSize:10, color:T.muted }}>Avg F5 Total: <span style={{ color:T.text, fontWeight:700 }}>{agg.avgF5Total}</span></div>
+              </div>
+
+              <div style={{ ...S.card, marginTop:10 }}>
+                <div style={{ ...S.sL, marginBottom:8 }}>1st Inning</div>
+                <div style={{ ...S.betRow, fontSize:"8px", fontWeight:700 }}>
+                  <span style={{ color:T.muted, minWidth:160 }}>MARKET</span>
+                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>SIM PROB</span>
+                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>BOOK ODDS</span>
+                  <span style={{ minWidth:64, textAlign:"right", color:T.muted }}>SIGNAL</span>
+                </div>
+                <BetRow market="NRFI (No Run 1st Inn)" simPct={agg.nrfiPct+"%"} bookOdds="~-115 to -130" signal={signal(agg.nrfiPct, 0)}/>
+                <BetRow market="YRFI (Yes Run 1st Inn)" simPct={agg.yrfiPct+"%"} bookOdds="~-110 to +100" signal={signal(agg.yrfiPct, 0)}/>
+              </div>
+            </div>
+
+            <div style={{ background:"#0a0f1a", border:"1px solid "+T.purple+"33", borderRadius:6, padding:"11px 14px", fontSize:"10px", color:T.muted, marginTop:18, lineHeight:1.8 }}>
+              <div style={{ color:T.purple, fontWeight:700, fontSize:"9px", letterSpacing:"2px", marginBottom:7 }}>MODEL METHODOLOGY</div>
+              <div><span style={{ color:T.text }}>Markov Chain:</span> 24 base-out states (8 base configs × 3 out counts). Each PA outcome drawn from calibrated probability distributions driven by team wRC+ and rotation FIP.</div>
+              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Pitching Model:</span> FIP-to-R/9 conversion with regression-to-mean. Starter exits after inning 5 (F5 boundary), bullpen ERA used for innings 6-9.</div>
+              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Park Factor:</span> Home team park factor applied to wRC+ for both teams. Factors calibrated from 3-year Baseball Savant data.</div>
+              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Run Expectancy:</span> 2024 MLB RE24 matrix used for base-out state transitions. Walk-off and extra inning (ghost runner) rules applied.</div>
+            </div>
+            <div style={S.disclaimer}>
+              Simulation parameters sourced from publicly available 2025 MLB statistics. Live odds from The Odds API. Not professional betting advice. Gamble responsibly.
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// MAIN APP
+// ════════════════════════════════════════════════════════════════════════════════
+function App() {
+  const [apiKey, setApiKey] = useState(null);
+  const [games, setGames]   = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]   = useState("");
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [simData, setSimData] = useState({});
+  const [running, setRunning] = useState(false);
+  const [runCounts, setRunCounts] = useState({});
+  // Manual team selectors for when a team isn't in the API games
+  const [manualMode, setManualMode] = useState(false);
+  const [manualHome, setManualHome] = useState(TEAM_NAMES[0]);
+  const [manualAway, setManualAway] = useState(TEAM_NAMES[1]);
+
+  async function loadGames(key) {
+    setLoading(true); setError("");
+    try {
+      const data = await fetchMLBGames(key);
+      const parsed = data.map(parseOddsGame).filter(Boolean);
+      setGames(parsed);
+      setActiveIdx(0);
+    } catch(e) {
+      setError(e.message);
+    }
+    setLoading(false);
+  }
+
+  function handleKey(key) {
+    setApiKey(key);
+    loadGames(key);
+  }
+
+  const activeGame = manualMode
+    ? { homeTeam: manualHome, awayTeam: manualAway, commenceTime: new Date().toISOString(), h2h:{}, spread:{}, total:{} }
+    : games[activeIdx];
+
+  const gameKey = activeGame ? activeGame.homeTeam + "|" + activeGame.awayTeam : null;
+
+  function runSim() {
+    if (!activeGame || running) return;
+    setRunning(true);
+    setTimeout(() => {
+      const result = runMLBSim(activeGame.homeTeam, activeGame.awayTeam);
+      if (result) {
+        setSimData(prev => ({ ...prev, [gameKey]: result }));
+        setRunCounts(prev => ({ ...prev, [gameKey]: (prev[gameKey]||0)+1 }));
+      }
+      setRunning(false);
+    }, 50);
+  }
+
+  // Auto-run when game changes and no data yet
+  useEffect(() => {
+    if (gameKey && !simData[gameKey] && !running && TEAM_PARAMS[activeGame.homeTeam] && TEAM_PARAMS[activeGame.awayTeam]) {
+      runSim();
+    }
+  }, [gameKey]);
+
+  if (!apiKey) return <div style={S.wrap}><ApiKeyGate onKey={handleKey}/></div>;
+
+  return (
+    <div style={S.wrap}>
+      {/* TOPBAR */}
+      <div style={{ background:T.navy, borderBottom:"1px solid "+T.border, padding:"8px 16px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+        <a href="index.html" style={{ fontSize:10, color:T.muted, letterSpacing:"1px", display:"flex", alignItems:"center", gap:6 }}>
+          ← Sharp Sim
+        </a>
+        <div style={{ flex:1 }}/>
+        <div style={{ fontSize:9, color:T.muted }}>
+          {games.length > 0 ? games.length + " games loaded" : loading ? "Loading..." : ""}
+        </div>
+        <button onClick={()=>loadGames(apiKey)} disabled={loading} style={{ ...S.btn(loading, T.green), width:"auto", padding:"6px 14px", marginTop:0, fontSize:9 }}>
+          {loading ? "Loading..." : "↻ Refresh Odds"}
+        </button>
+        <button onClick={()=>{ localStorage.removeItem("sharp_odds_key"); setApiKey(null); }} style={{ background:"none", border:"1px solid "+T.border, color:T.muted, padding:"6px 10px", borderRadius:4, fontSize:9, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
+          ✕ Key
+        </button>
+      </div>
+
+      {error && <div style={{ background:"#1a0a0a", border:"1px solid "+T.red+"44", padding:"10px 16px", fontSize:10, color:T.red }}>{error}</div>}
+
+      {/* GAME TABS */}
+      <div style={S.tabBar}>
+        {games.map((g, i) => (
+          <button key={g.id} style={S.tab(i===activeIdx && !manualMode)} onClick={()=>{ setActiveIdx(i); setManualMode(false); }}>
+            {TEAM_PARAMS[g.awayTeam]?.abbr||g.awayTeam.split(" ").pop()} @ {TEAM_PARAMS[g.homeTeam]?.abbr||g.homeTeam.split(" ").pop()}
+          </button>
+        ))}
+        <button style={{ ...S.tab(manualMode), color:manualMode?T.purple:T.muted, borderBottom:manualMode?"2px solid "+T.purple:"2px solid transparent", borderLeft:"1px solid "+T.border, marginLeft:4 }}
+          onClick={()=>setManualMode(true)}>
+          + Custom
+        </button>
+      </div>
+
+      {/* MANUAL TEAM SELECTOR */}
+      {manualMode && (
+        <div style={{ background:T.navy, borderBottom:"1px solid "+T.border, padding:"12px 16px", display:"flex", gap:12, alignItems:"center", flexWrap:"wrap" }}>
+          <div style={{ fontSize:10, color:T.muted, whiteSpace:"nowrap" }}>Away team:</div>
+          <select value={manualAway} onChange={e=>setManualAway(e.target.value)} style={{ ...S.input, width:"auto", flex:1, minWidth:180 }}>
+            {TEAM_NAMES.map(t=><option key={t} value={t}>{t}</option>)}
+          </select>
+          <div style={{ fontSize:10, color:T.muted }}>@</div>
+          <div style={{ fontSize:10, color:T.muted, whiteSpace:"nowrap" }}>Home team:</div>
+          <select value={manualHome} onChange={e=>setManualHome(e.target.value)} style={{ ...S.input, width:"auto", flex:1, minWidth:180 }}>
+            {TEAM_NAMES.map(t=><option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+      )}
+
+      {/* GAME VIEW */}
+      {activeGame && TEAM_PARAMS[activeGame.homeTeam] && TEAM_PARAMS[activeGame.awayTeam] ? (
+        <GameSimView
+          game={activeGame}
+          agg={simData[gameKey]}
+          running={running}
+          runCount={runCounts[gameKey]||0}
+          onRun={runSim}
+        />
+      ) : activeGame ? (
+        <div style={{ textAlign:"center", padding:48, color:T.muted, fontSize:11 }}>
+          Team not found in model params: {activeGame.homeTeam} vs {activeGame.awayTeam}
+        </div>
+      ) : (
+        <div style={{ textAlign:"center", padding:48, color:T.muted, fontSize:11 }}>
+          {loading ? "Loading today's games..." : "No games found. Try refreshing."}
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
