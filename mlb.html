@@ -688,11 +688,6 @@ function extractTopBets(agg, game, sport) {
       { market: awayTeam+" ML", pct: parseFloat(agg.aWPct), imp: aImp, odds: hasOdds?fmtOdds(game.h2h.away):"—" },
       { market: "Over 8.5 Total", pct: parseFloat(agg.over85Pct), imp: 0, odds: hasOdds?fmtOdds(game.total.overPrice):"—" },
       { market: "Under 8.5 Total", pct: parseFloat(agg.under85Pct), imp: 0, odds: hasOdds?fmtOdds(game.total.underPrice):"—" },
-      { market: "F5 Over 3.5", pct: parseFloat(agg.f5Over35Pct), imp: 0, odds:"~-110" },
-      { market: homeTeam+" F5 Win", pct: parseFloat(agg.f5HomePct), imp: hImp*0.9, odds:"~F5 ML" },
-      { market: awayTeam+" F5 Win", pct: parseFloat(agg.f5AwayPct), imp: aImp*0.9, odds:"~F5 ML" },
-      { market: "NRFI", pct: parseFloat(agg.nrfiPct), imp: 0, odds:"~-120" },
-      { market: "YRFI", pct: parseFloat(agg.yrfiPct), imp: 0, odds:"~-105" },
     ];
 
     checks.forEach(({ market, pct, imp, odds }) => {
@@ -1067,34 +1062,6 @@ function GameSimView({ game, agg, running, onRun, runCount }) {
                 <BetRow market={agg.awayTeam+" Shutout Win"} simPct={agg.awayShutoutPct+"%"} bookOdds="~Market" signal={signal(agg.awayShutoutPct, 0, 30, 20, 12)}/>
               </div>
 
-              <div style={{ ...S.card, marginTop:10 }}>
-                <div style={{ ...S.sL, marginBottom:8 }}>First 5 Innings (F5)</div>
-                <div style={{ ...S.betRow, fontSize:"8px", fontWeight:700 }}>
-                  <span style={{ color:T.muted, minWidth:160 }}>MARKET</span>
-                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>SIM PROB</span>
-                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>BOOK ODDS</span>
-                  <span style={{ minWidth:64, textAlign:"right", color:T.muted }}>SIGNAL</span>
-                </div>
-                <BetRow market={agg.awayTeam+" F5 Win"} simPct={agg.f5AwayPct+"%"} bookOdds="~F5 ML" signal={signal(agg.f5AwayPct, aImplied*0.9)}/>
-                <BetRow market={agg.homeTeam+" F5 Win"} simPct={agg.f5HomePct+"%"} bookOdds="~F5 ML" signal={signal(agg.f5HomePct, hImplied*0.9)}/>
-                <BetRow market="F5 Push / Tie" simPct={agg.f5PushPct+"%"} bookOdds="~Market" signal="PASS"/>
-                <BetRow market="F5 Over 2.5" simPct={agg.f5Over25Pct+"%"} bookOdds="~Market" signal={signal(agg.f5Over25Pct, 0)}/>
-                <BetRow market="F5 Over 3.5" simPct={agg.f5Over35Pct+"%"} bookOdds="~-110" signal={signal(agg.f5Over35Pct, 0)}/>
-                <BetRow market="F5 Over 4.5" simPct={agg.f5Over45Pct+"%"} bookOdds="~+130" signal={signal(agg.f5Over45Pct, 0, 55, 42, 35)}/>
-                <div style={{ padding:"8px 0 2px", fontSize:10, color:T.muted }}>Avg F5 Total: <span style={{ color:T.text, fontWeight:700 }}>{agg.avgF5Total}</span></div>
-              </div>
-
-              <div style={{ ...S.card, marginTop:10 }}>
-                <div style={{ ...S.sL, marginBottom:8 }}>1st Inning</div>
-                <div style={{ ...S.betRow, fontSize:"8px", fontWeight:700 }}>
-                  <span style={{ color:T.muted, minWidth:160 }}>MARKET</span>
-                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>SIM PROB</span>
-                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>BOOK ODDS</span>
-                  <span style={{ minWidth:64, textAlign:"right", color:T.muted }}>SIGNAL</span>
-                </div>
-                <BetRow market="NRFI (No Run 1st Inn)" simPct={agg.nrfiPct+"%"} bookOdds="~-115 to -130" signal={signal(agg.nrfiPct, 0)}/>
-                <BetRow market="YRFI (Yes Run 1st Inn)" simPct={agg.yrfiPct+"%"} bookOdds="~-110 to +100" signal={signal(agg.yrfiPct, 0)}/>
-              </div>
             </div>
 
             <div style={{ background:"#0a0f1a", border:"1px solid "+T.purple+"33", borderRadius:6, padding:"11px 14px", fontSize:"10px", color:T.muted, marginTop:18, lineHeight:1.8 }}>
