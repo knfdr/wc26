@@ -479,6 +479,334 @@ function impliedProb(ml) {
   if (!ml) return 0;
   if (ml < 0) return (-ml)/(-ml+100)*100;
   return 100/(ml+100)*100;
+// ════════════════════════════════════════════════════════════════════════════════
+// SHARED BET TRACKING ENGINE
+// Gist ID: 8a76d2b09c709882e4364528a0152ccc
+// Token + OddsKey stored in localStorage only, never in source
+// ════════════════════════════════════════════════════════════════════════════════
+const GIST_ID = "8a76d2b09c709882e4364528a0152ccc";
+const GIST_FILENAME = "sharpsim_bets.json";
+
+// Unit sizing: LOCK=2u, HIGH=1.5u, LEAN=1u
+function tierToUnits(tier) {
+  if (tier === "LOCK") return 2.0;
+  if (tier === "HIGH") return 1.5;
+  return 1.0;
+}
+
+function tierColor(tier, T) {
+  if (tier === "LOCK") return T.red;
+  if (tier === "HIGH") return T.green;
+  return T.gold;
+}
+
+// ── Gist read/write ──────────────────────────────────────────────────────────
+async function gistRead(ghToken) {
+  const res = await fetch("https://api.github.com/gists/" + GIST_ID, {
+    headers: { Authorization: "token " + ghToken, Accept: "application/vnd.github.v3+json" }
+  });
+  if (!res.ok) throw new Error("Gist read failed: " + res.status);
+  const data = await res.json();
+  const content = data.files[GIST_FILENAME] && data.files[GIST_FILENAME].content;
+  try { return JSON.parse(content || "[]"); } catch { return []; }
+}
+
+async function gistWrite(ghToken, bets) {
+  const res = await fetch("https://api.github.com/gists/" + GIST_ID, {
+    method: "PATCH",
+    headers: { Authorization: "token " + ghToken, Accept: "application/vnd.github.v3+json", "Content-Type": "application/json" },
+    body: JSON.stringify({ files: { [GIST_FILENAME]: { content: JSON.stringify(bets, null, 2) } } })
+  });
+  if (!res.ok) throw new Error("Gist write failed: " + res.status);
+  return true;
+}
+
+// ── Auto-resolve via Odds API scores ─────────────────────────────────────────
+async function autoResolveBets(bets, oddsKey) {
+  const pending = bets.filter(b => b.result === "pending");
+  if (!pending.length || !oddsKey) return bets;
+
+  // Fetch scores for both sports
+  const sports = [...new Set(pending.map(b => b.sport))];
+  const scoreMap = {};
+
+  for (const sport of sports) {
+    const sportKey = sport === "MLB" ? "baseball_mlb" : "soccer_fifa_world_cup";
+    try {
+      const res = await fetch(
+        "https://api.the-odds-api.com/v4/sports/" + sportKey + "/scores/?daysFrom=3&apiKey=" + oddsKey
+      );
+      if (!res.ok) continue;
+      const scores = await res.json();
+      scores.forEach(g => {
+        if (g.completed && g.scores) {
+          scoreMap[g.id] = g;
+          scoreMap[g.home_team + "|" + g.away_team] = g;
+          scoreMap[g.away_team + "|" + g.home_team] = g;
+        }
+      });
+    } catch(e) {}
+  }
+
+  return bets.map(bet => {
+    if (bet.result !== "pending") return bet;
+    const game = scoreMap[bet.gameId] || scoreMap[bet.homeTeam + "|" + bet.awayTeam];
+    if (!game || !game.completed) return bet;
+
+    const homeScore = parseInt((game.scores.find(s => s.name === game.home_team) || {}).score || "0");
+    const awayScore = parseInt((game.scores.find(s => s.name !== game.home_team) || {}).score || "0");
+
+    let result = "loss";
+    const market = bet.market.toLowerCase();
+
+    if (market.includes("ml") || market.includes("win")) {
+      const pickedHome = bet.market.includes(game.home_team);
+      if (pickedHome && homeScore > awayScore) result = "win";
+      else if (!pickedHome && awayScore > homeScore) result = "win";
+      else if (homeScore === awayScore) result = "push";
+    } else if (market.includes("over")) {
+      const line = parseFloat(bet.market.match(/[\d.]+/) || [0]);
+      if (homeScore + awayScore > line) result = "win";
+      else if (homeScore + awayScore === line) result = "push";
+    } else if (market.includes("under")) {
+      const line = parseFloat(bet.market.match(/[\d.]+/) || [0]);
+      if (homeScore + awayScore < line) result = "win";
+      else if (homeScore + awayScore === line) result = "push";
+    } else if (market.includes("nrfi")) {
+      if (homeScore === 0 && awayScore === 0) result = "win";
+    } else if (market.includes("yrfi")) {
+      if (homeScore > 0 || awayScore > 0) result = "win";
+    } else if (market.includes("-1.5") || market.includes("run line")) {
+      const pickedHome = bet.market.includes(game.home_team);
+      if (pickedHome && (homeScore - awayScore) >= 2) result = "win";
+      else if (!pickedHome && (awayScore - homeScore) >= 2) result = "win";
+    }
+
+    return { ...bet, result, resolvedAt: new Date().toISOString(), finalScore: homeScore + "-" + awayScore };
+  });
+}
+
+// ── Stats calculator ──────────────────────────────────────────────────────────
+function calcStats(bets) {
+  const resolved = bets.filter(b => b.result !== "pending");
+  const wins = resolved.filter(b => b.result === "win");
+  const losses = resolved.filter(b => b.result === "loss");
+  const pushes = resolved.filter(b => b.result === "push");
+  const totalUnits = resolved.reduce((a, b) => a + (b.result === "win" ? b.units : b.result === "loss" ? -b.units : 0), 0);
+
+  const bySport = {};
+  resolved.forEach(b => {
+    if (!bySport[b.sport]) bySport[b.sport] = { wins:0, losses:0, pushes:0, units:0 };
+    bySport[b.sport].units += b.result === "win" ? b.units : b.result === "loss" ? -b.units : 0;
+    if (b.result === "win") bySport[b.sport].wins++;
+    else if (b.result === "loss") bySport[b.sport].losses++;
+    else bySport[b.sport].pushes++;
+  });
+
+  return {
+    total: resolved.length, wins: wins.length, losses: losses.length, pushes: pushes.length,
+    winPct: resolved.length ? ((wins.length / (resolved.length - pushes.length)) * 100).toFixed(1) : "—",
+    totalUnits: totalUnits.toFixed(1),
+    pending: bets.filter(b => b.result === "pending").length,
+    bySport,
+  };
+}
+
+// ── Extract top bets from sim agg ─────────────────────────────────────────────
+function extractTopBets(agg, game, sport) {
+  const bets = [];
+  const gameId = game ? game.id : (agg.homeTeam + "|" + agg.awayTeam);
+  const homeTeam = agg.homeTeam || game.homeTeam;
+  const awayTeam = agg.awayTeam || game.awayTeam;
+
+  function push(market, simPct, bookOdds, tier) {
+    bets.push({
+      id: Date.now() + "_" + Math.random().toString(36).slice(2,7),
+      sport, gameId,
+      homeTeam, awayTeam,
+      market, simPct, bookOdds,
+      tier, units: tierToUnits(tier),
+      loggedAt: new Date().toISOString(),
+      result: "pending",
+      resolvedAt: null, finalScore: null,
+      gameDate: new Date().toISOString().slice(0,10),
+    });
+  }
+
+  if (sport === "MLB" && agg) {
+    const hasOdds = game && game.h2h && game.h2h.home;
+    const hImp = hasOdds ? impliedProb(game.h2h.home) : 0;
+    const aImp = hasOdds ? impliedProb(game.h2h.away) : 0;
+
+    const checks = [
+      { market: homeTeam+" ML", pct: parseFloat(agg.hWPct), imp: hImp, odds: hasOdds?fmtOdds(game.h2h.home):"—" },
+      { market: awayTeam+" ML", pct: parseFloat(agg.aWPct), imp: aImp, odds: hasOdds?fmtOdds(game.h2h.away):"—" },
+      { market: "Over 8.5 Total", pct: parseFloat(agg.over85Pct), imp: 0, odds: hasOdds?fmtOdds(game.total.overPrice):"—" },
+      { market: "Under 8.5 Total", pct: parseFloat(agg.under85Pct), imp: 0, odds: hasOdds?fmtOdds(game.total.underPrice):"—" },
+      { market: "F5 Over 3.5", pct: parseFloat(agg.f5Over35Pct), imp: 0, odds:"~-110" },
+      { market: homeTeam+" F5 Win", pct: parseFloat(agg.f5HomePct), imp: hImp*0.9, odds:"~F5 ML" },
+      { market: awayTeam+" F5 Win", pct: parseFloat(agg.f5AwayPct), imp: aImp*0.9, odds:"~F5 ML" },
+      { market: "NRFI", pct: parseFloat(agg.nrfiPct), imp: 0, odds:"~-120" },
+      { market: "YRFI", pct: parseFloat(agg.yrfiPct), imp: 0, odds:"~-105" },
+    ];
+
+    checks.forEach(({ market, pct, imp, odds }) => {
+      if (pct >= 70) push(market, pct.toFixed(1)+"%", odds, "LOCK");
+      else if (pct >= 60) push(market, pct.toFixed(1)+"%", odds, "HIGH");
+      else if (pct > 52 && pct > imp + 3) push(market, pct.toFixed(1)+"%", odds, "LEAN");
+    });
+  }
+
+  if (sport === "WC" && agg) {
+    const checks = [
+      { market: homeTeam+" Win", pct: parseFloat(agg.hWPct), odds: "ML" },
+      { market: awayTeam+" Win", pct: parseFloat(agg.aWPct), odds: "ML" },
+      { market: "Over "+agg.overUnderLine+" Goals", pct: parseFloat(agg.overPct), odds: agg.overOdds||"—" },
+      { market: "Under "+agg.overUnderLine+" Goals", pct: parseFloat(agg.underPct), odds: agg.underOdds||"—" },
+      { market: homeTeam+" Clean Sheet", pct: parseFloat(agg.csPct), odds:"~Market" },
+      { market: "1H Over 0.5 Goals", pct: parseFloat(agg.h1Over05Pct), odds:"~-180" },
+      { market: homeTeam+" HT Win", pct: parseFloat(agg.ht_hWPct), odds:"~HT 1X2" },
+      { market: "Over 8.5 Corners", pct: parseFloat(agg.cOver85Pct), odds:"~-115" },
+      { market: homeTeam+" 1H -0.5 Spread", pct: parseFloat(agg.hSpread1HPct), odds:"~-120" },
+    ];
+    checks.forEach(({ market, pct, odds }) => {
+      if (pct >= 85) push(market, pct.toFixed(1)+"%", odds, "LOCK");
+      else if (pct >= 70) push(market, pct.toFixed(1)+"%", odds, "HIGH");
+      else if (pct > 52) push(market, pct.toFixed(1)+"%", odds, "LEAN");
+    });
+  }
+
+  // Sort by simPct desc, then dedupe by market
+  return bets.sort((a,b) => parseFloat(b.simPct) - parseFloat(a.simPct));
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// SHARED BET TRACKING UI COMPONENTS
+// ════════════════════════════════════════════════════════════════════════════════
+
+// Top Bets Card — used on both game tabs and top-picks tab
+function TopBetCard({ bet, onLog, logged, T, S }) {
+  const tc = tierColor(bet.tier, T);
+  return (
+    <div style={{ ...S.card, borderLeft:"3px solid "+tc, marginBottom:8 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:6 }}>
+        <div>
+          <div style={{ fontSize:9, color:T.muted, marginBottom:3 }}>{bet.homeTeam} vs {bet.awayTeam}</div>
+          <div style={{ fontSize:13, fontWeight:700, color:T.text }}>{bet.market}</div>
+          <div style={{ display:"flex", gap:10, marginTop:5, flexWrap:"wrap" }}>
+            <span style={{ fontSize:10, color:tc, fontWeight:700 }}>{bet.simPct}</span>
+            <span style={{ fontSize:10, color:T.muted }}>{bet.bookOdds}</span>
+            <span style={{ background:tc+"22", border:"1px solid "+tc+"44", color:tc, fontSize:"8px", fontWeight:700, padding:"1px 6px", borderRadius:2 }}>{bet.tier}</span>
+            <span style={{ background:T.purple+"1a", border:"1px solid "+T.purple+"33", color:T.purple, fontSize:"8px", padding:"1px 6px", borderRadius:2 }}>{bet.units}u</span>
+          </div>
+        </div>
+        <button
+          onClick={() => onLog(bet)}
+          disabled={logged}
+          style={{ background: logged?"#1a2a3e":tc, color: logged?T.muted:"#070b14", border:"none", borderRadius:4, padding:"6px 12px", fontSize:9, fontWeight:700, cursor:logged?"default":"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace", letterSpacing:"1px", whiteSpace:"nowrap" }}
+        >
+          {logged ? "✓ LOGGED" : "+ LOG BET"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Bet History Row
+function BetHistoryRow({ bet, T, S }) {
+  const rc = bet.result === "win" ? T.green : bet.result === "loss" ? T.red : bet.result === "push" ? T.muted : T.yellow;
+  const tc = tierColor(bet.tier, T);
+  return (
+    <div style={{ ...S.betRow, flexWrap:"wrap" }}>
+      <div style={{ minWidth:120, fontSize:9, color:T.muted }}>{bet.gameDate} · {bet.sport}</div>
+      <div style={{ flex:2, fontSize:10, color:T.text }}>{bet.market}</div>
+      <div style={{ fontSize:9, color:T.muted, flex:1 }}>{bet.homeTeam} vs {bet.awayTeam}</div>
+      <div style={{ fontSize:9, color:tc }}>{bet.tier} · {bet.units}u</div>
+      <div style={{ fontSize:10, color:T.muted }}>{bet.simPct}</div>
+      <div style={{ minWidth:50, textAlign:"right" }}>
+        <span style={{ background:rc+"22", border:"1px solid "+rc+"44", color:rc, fontSize:"8px", fontWeight:700, padding:"2px 6px", borderRadius:2 }}>
+          {bet.result === "pending" ? "PENDING" : bet.result === "win" ? "WIN" : bet.result === "loss" ? "LOSS" : "PUSH"}
+        </span>
+      </div>
+      {bet.finalScore && <div style={{ fontSize:9, color:T.muted, width:"100%", marginTop:3 }}>Final: {bet.finalScore}</div>}
+    </div>
+  );
+}
+
+// Stats Banner — used on homepage and sport pages
+function StatsBanner({ stats, T, S }) {
+  if (!stats || stats.total === 0) return null;
+  const unitColor = parseFloat(stats.totalUnits) >= 0 ? T.green : T.red;
+  return (
+    <div style={{ background:T.navy, border:"1px solid "+T.border, borderRadius:6, padding:"12px 16px", display:"flex", gap:20, flexWrap:"wrap", alignItems:"center", marginBottom:16 }}>
+      <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Win %</div><div style={{ fontSize:20, fontWeight:700, color:T.green }}>{stats.winPct}%</div></div>
+      <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Record</div><div style={{ fontSize:14, fontWeight:700 }}><span style={{ color:T.green }}>{stats.wins}W</span>-<span style={{ color:T.red }}>{stats.losses}L</span>-<span style={{ color:T.muted }}>{stats.pushes}P</span></div></div>
+      <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Units</div><div style={{ fontSize:20, fontWeight:700, color:unitColor }}>{parseFloat(stats.totalUnits)>=0?"+":""}{stats.totalUnits}u</div></div>
+      <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Pending</div><div style={{ fontSize:14, fontWeight:700, color:T.yellow }}>{stats.pending}</div></div>
+      {Object.entries(stats.bySport||{}).map(([sport,s]) => (
+        <div key={sport} style={{ borderLeft:"1px solid "+T.border, paddingLeft:16 }}>
+          <div style={{ fontSize:"8px", color:T.muted, letterSpacing:"1px", textTransform:"uppercase" }}>{sport}</div>
+          <div style={{ fontSize:12, fontWeight:700 }}>
+            <span style={{ color:T.green }}>{s.wins}W</span>-<span style={{ color:T.red }}>{s.losses}L</span>
+            <span style={{ fontSize:10, color:parseFloat(s.units)>=0?T.green:T.red, marginLeft:6 }}>{parseFloat(s.units)>=0?"+":""}{s.units.toFixed(1)}u</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Bet Logger Hook — manages gist read/write and local state
+function useBetLogger(ghToken, oddsKey) {
+  const [bets, setBets] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!ghToken) return;
+    gistRead(ghToken).then(data => {
+      // Auto-resolve pending bets on load
+      if (oddsKey) {
+        autoResolveBets(data, oddsKey).then(resolved => {
+          setBets(resolved);
+          setLoaded(true);
+          // If any resolved, write back
+          if (resolved.some((b,i) => b.result !== data[i]?.result)) {
+            gistWrite(ghToken, resolved).catch(console.error);
+          }
+        });
+      } else {
+        setBets(data);
+        setLoaded(true);
+      }
+    }).catch(e => {
+      console.error("Gist read error:", e);
+      setLoaded(true);
+    });
+  }, [ghToken]);
+
+  async function logBet(bet) {
+    if (!ghToken) return;
+    setSaving(true);
+    const updated = [...bets, bet];
+    setBets(updated);
+    try { await gistWrite(ghToken, updated); } catch(e) { console.error(e); }
+    setSaving(false);
+  }
+
+  async function removeBet(id) {
+    if (!ghToken) return;
+    const updated = bets.filter(b => b.id !== id);
+    setBets(updated);
+    try { await gistWrite(ghToken, updated); } catch(e) { console.error(e); }
+  }
+
+  const stats = calcStats(bets);
+  const loggedIds = new Set(bets.map(b => b.id));
+  const isLogged = (gameId, market) => bets.some(b => b.gameId === gameId && b.market === market && b.result === "pending");
+
+  return { bets, stats, logBet, removeBet, saving, loaded, isLogged };
+}
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -781,21 +1109,361 @@ function GameSimView({ game, agg, running, onRun, runCount }) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
+// TOP PICKS TAB — aggregates best bets across all today's games
+// ════════════════════════════════════════════════════════════════════════════════
+function TopPicksTab({ simData, games, betLogger }) {
+  const { logBet, isLogged, stats } = betLogger;
+  const allBets = [];
+
+  games.forEach(game => {
+    const key = game.homeTeam + "|" + game.awayTeam;
+    const agg = simData[key];
+    if (!agg) return;
+    const bets = extractTopBets(agg, game, "MLB");
+    bets.forEach(b => allBets.push({ ...b, gameTime: game.commenceTime }));
+  });
+
+  allBets.sort((a,b) => parseFloat(b.simPct) - parseFloat(a.simPct));
+
+  const locks = allBets.filter(b => b.tier === "LOCK");
+  const highs = allBets.filter(b => b.tier === "HIGH");
+  const leans = allBets.filter(b => b.tier === "LEAN");
+
+  const simsReady = games.filter(g => simData[g.homeTeam+"|"+g.awayTeam]).length;
+
+  return (
+    <div style={{ maxWidth:920, margin:"0 auto", padding:"0 14px 48px" }}>
+      <div style={S.sec}>
+        <StatsBanner stats={stats} T={T} S={S} />
+        <div style={{ ...S.card, background:"#0a1020", border:"1px solid "+T.green+"33", marginBottom:14 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
+            <div>
+              <div style={{ fontSize:11, color:T.green, fontWeight:700, letterSpacing:"1px" }}>TOP PICKS — TODAY'S SLATE</div>
+              <div style={{ fontSize:10, color:T.muted, marginTop:3 }}>
+                {simsReady}/{games.length} games simulated · {allBets.length} qualifying signals · Click "+ LOG BET" to track
+              </div>
+            </div>
+            <div style={{ display:"flex", gap:6 }}>
+              <span style={{ background:T.red+"22", border:"1px solid "+T.red+"44", color:T.red, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>LOCK ≥70% · 2u</span>
+              <span style={{ background:T.green+"22", border:"1px solid "+T.green+"44", color:T.green, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>HIGH ≥60% · 1.5u</span>
+              <span style={{ background:T.gold+"22", border:"1px solid "+T.gold+"44", color:T.gold, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>LEAN &gt;52% · 1u</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {simsReady < games.length && (
+        <div style={{ ...S.card, marginBottom:12, fontSize:10, color:T.yellow }}>
+          ⚠ {games.length - simsReady} game(s) still simulating. Switch to each tab to run — top picks will update automatically.
+        </div>
+      )}
+
+      {[{ label:"LOCK Bets", tier:"LOCK", bets:locks, color:T.red },
+        { label:"HIGH Confidence", tier:"HIGH", bets:highs, color:T.green },
+        { label:"LEAN Signals", tier:"LEAN", bets:leans, color:T.gold }
+      ].map(({ label, bets, color }) => bets.length > 0 && (
+        <div key={label} style={S.sec}>
+          <div style={S.secLabel}>{label} ({bets.length})</div>
+          {bets.map((bet, i) => (
+            <TopBetCard key={i} bet={bet} T={T} S={S}
+              onLog={() => logBet(bet)}
+              logged={isLogged(bet.gameId, bet.market)}
+            />
+          ))}
+        </div>
+      ))}
+
+      {allBets.length === 0 && simsReady > 0 && (
+        <div style={{ ...S.card, textAlign:"center", padding:32, color:T.muted, marginTop:20 }}>No qualifying signals found across today's slate.</div>
+      )}
+
+      <div style={{ ...S.sec }}>
+        <div style={S.secLabel}>Bet Log ({betLogger.bets.length} total)</div>
+        {betLogger.bets.length === 0 ? (
+          <div style={{ ...S.card, color:T.muted, fontSize:10, textAlign:"center", padding:24 }}>No bets logged yet. Click "+ LOG BET" on any signal.</div>
+        ) : (
+          <div style={S.card}>
+            <div style={{ ...S.betRow, fontSize:"8px", fontWeight:700 }}>
+              <span style={{ minWidth:120, color:T.muted }}>DATE · SPORT</span>
+              <span style={{ flex:2, color:T.muted }}>MARKET</span>
+              <span style={{ flex:1, color:T.muted }}>MATCHUP</span>
+              <span style={{ color:T.muted }}>TIER</span>
+              <span style={{ color:T.muted }}>SIM %</span>
+              <span style={{ minWidth:50, textAlign:"right", color:T.muted }}>RESULT</span>
+            </div>
+            {betLogger.bets.filter(b=>b.sport==="MLB").slice().reverse().map(b => (
+              <BetHistoryRow key={b.id} bet={b} T={T} S={S} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// PARLAY TAB — MLB version
+// ════════════════════════════════════════════════════════════════════════════════
+const PARLAY_SIZE_LABELS = { 2:"2-Leg", 3:"3-Leg", 4:"4-Leg", 5:"5-Leg" };
+
+function buildMLBParlays(simData, games) {
+  const allLegs = [];
+  games.forEach(game => {
+    const key = game.homeTeam + "|" + game.awayTeam;
+    const agg = simData[key];
+    if (!agg) return;
+    const bets = extractTopBets(agg, game, "MLB");
+    bets.forEach(b => {
+      allLegs.push({ matchId: key, match: b.awayTeam+" @ "+b.homeTeam,
+        market: b.market, prob: parseFloat(b.simPct)/100, probPct: b.simPct, tier: b.tier, units: b.units });
+    });
+  });
+
+  if (allLegs.length === 0) return { legs: allLegs, parlays: [] };
+
+  // Build cross-game combos only
+  function buildCombos(legs, size) {
+    const results = [];
+    function combine(start, current) {
+      if (current.length === size) { results.push([...current]); return; }
+      for (let i = start; i < legs.length; i++) {
+        const matchIds = current.map(l => l.matchId);
+        if (!matchIds.includes(legs[i].matchId)) {
+          current.push(legs[i]); combine(i+1, current); current.pop();
+        }
+      }
+    }
+    combine(0, []);
+    return results;
+  }
+
+  const parlays = [];
+  for (const size of [2,3,4,5]) {
+    buildCombos(allLegs, size).forEach(combo => {
+      const jp = combo.reduce((acc,leg) => acc * leg.prob, 1);
+      parlays.push({ legs:combo, size, jointProb:jp, jointProbPct:(jp*100).toFixed(2) });
+    });
+  }
+  parlays.sort((a,b) => b.jointProb - a.jointProb);
+  return { legs: allLegs, parlays: parlays.slice(0,40) };
+}
+
+function MLBParlayTab({ simData, games, betLogger }) {
+  const [filterSize, setFilterSize] = useState("all");
+  const { logBet, isLogged } = betLogger;
+  const simsReady = games.filter(g => simData[g.homeTeam+"|"+g.awayTeam]).length;
+
+  if (simsReady < 2) {
+    return (
+      <div style={{ textAlign:"center", padding:"48px 24px", color:T.muted, fontSize:11, lineHeight:2 }}>
+        <div style={{ fontSize:22, marginBottom:12 }}>⏳</div>
+        Parlay builder needs at least 2 games simulated for cross-game parlays.
+        <div style={{ marginTop:16, display:"flex", gap:8, justifyContent:"center", flexWrap:"wrap" }}>
+          {games.map(g => {
+            const ready = !!simData[g.homeTeam+"|"+g.awayTeam];
+            return (
+              <div key={g.id} style={{ background:ready?T.green+"22":T.card, border:"1px solid "+(ready?T.green:T.border), borderRadius:4, padding:"4px 10px", fontSize:10, color:ready?T.green:T.muted }}>
+                {ready?"✓":"○"} {TEAM_PARAMS[g.awayTeam]?.abbr||"?"} @ {TEAM_PARAMS[g.homeTeam]?.abbr||"?"}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  const { legs, parlays } = buildMLBParlays(simData, games);
+  const filtered = filterSize==="all" ? parlays : parlays.filter(p=>p.size===parseInt(filterSize));
+
+  return (
+    <div style={{ maxWidth:920, margin:"0 auto", padding:"0 14px 48px" }}>
+      <div style={S.sec}>
+        <div style={{ ...S.card, background:"#0a1020", border:"1px solid "+T.green+"33" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
+            <div>
+              <div style={{ fontSize:11, color:T.green, fontWeight:700, letterSpacing:"1px" }}>MLB PARLAY BUILDER</div>
+              <div style={{ fontSize:10, color:T.muted, marginTop:3 }}>
+                {legs.length} qualifying legs · {simsReady} games simulated · 2/3/4/5-leg cross-game combos · Sorted by joint probability
+              </div>
+            </div>
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+              <span style={{ background:T.red+"22", border:"1px solid "+T.red+"44", color:T.red, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>LOCK ≥70%</span>
+              <span style={{ background:T.green+"22", border:"1px solid "+T.green+"44", color:T.green, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>HIGH ≥60%</span>
+              <span style={{ background:T.gold+"22", border:"1px solid "+T.gold+"44", color:T.gold, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>LEAN &gt;52%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={S.sec}>
+        <div style={S.secLabel}>Signal Pool ({legs.length} legs)</div>
+        <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+          {legs.map((leg,i) => {
+            const tc = tierColor(leg.tier, T);
+            return (
+              <div key={i} style={{ background:T.card, border:"1px solid "+T.border, borderLeft:"3px solid "+tc, borderRadius:4, padding:"5px 10px", fontSize:10, display:"flex", alignItems:"center", gap:6 }}>
+                <span style={{ background:tc+"22", color:tc, fontSize:"8px", fontWeight:700, padding:"1px 5px", borderRadius:2 }}>{leg.tier}</span>
+                <span style={{ color:T.muted, fontSize:9 }}>{leg.match} ·</span>
+                <span style={{ color:T.text, fontWeight:700 }}>{leg.market}</span>
+                <span style={{ color:tc, marginLeft:2 }}>{leg.probPct}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{ ...S.sec, display:"flex", gap:6, flexWrap:"wrap" }}>
+        {["all","2","3","4","5"].map(v=>(
+          <button key={v} onClick={()=>setFilterSize(v)} style={{ padding:"6px 14px", fontSize:10, fontWeight:700, letterSpacing:"1px", background:filterSize===v?T.green:T.card, color:filterSize===v?"#070b14":T.muted, border:"1px solid "+(filterSize===v?T.green:T.border), borderRadius:4, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
+            {v==="all"?"ALL":v+"-LEG"}
+          </button>
+        ))}
+        <div style={{ marginLeft:"auto", fontSize:10, color:T.muted, alignSelf:"center" }}>Showing {filtered.length} parlays</div>
+      </div>
+
+      {filtered.length===0 && <div style={{ ...S.card, textAlign:"center", padding:32, color:T.muted, fontSize:11, marginTop:12 }}>Not enough cross-game signals for {filterSize}-leg parlays.</div>}
+
+      {filtered.map((parlay,pi) => {
+        const jp = parlay.jointProb;
+        const fairOdds = jp > 0 ? (jp < 0.5 ? "+" + Math.round((1/jp-1)*100) : "-" + Math.round((jp/(1-jp))*100)) : "—";
+        const rankColor = pi===0?T.gold:pi===1?"#94a3b8":pi===2?"#cd7f32":T.border;
+        const totalUnits = parlay.legs.reduce((a,l)=>a+l.units,0).toFixed(1);
+
+        // Build parlay bet for logging
+        const parlayBet = {
+          id: Date.now()+"_p"+pi,
+          sport:"MLB", gameId:"parlay_"+pi,
+          homeTeam:"(parlay)", awayTeam:"("+parlay.size+"-leg)",
+          market: parlay.legs.map(l=>l.market).join(" + "),
+          simPct: parlay.jointProbPct+"%", bookOdds: fairOdds,
+          tier: parlay.legs[0].tier, units: Math.min(parseFloat(totalUnits), 2),
+          loggedAt: new Date().toISOString(), result:"pending",
+          resolvedAt:null, finalScore:null,
+          gameDate: new Date().toISOString().slice(0,10),
+        };
+
+        return (
+          <div key={pi} style={{ ...S.card, marginTop:10, borderLeft:"3px solid "+(pi<3?rankColor:T.border) }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10, flexWrap:"wrap", gap:6 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                <div style={{ background:pi<3?rankColor+"22":T.navy, border:"1px solid "+(pi<3?rankColor:T.border), color:pi<3?rankColor:T.muted, fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:3 }}>#{pi+1}</div>
+                <div style={{ background:T.purple+"1a", border:"1px solid "+T.purple+"33", color:T.purple, fontSize:9, padding:"2px 8px", borderRadius:3, letterSpacing:"1px" }}>{PARLAY_SIZE_LABELS[parlay.size]}</div>
+              </div>
+              <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                <div style={{ textAlign:"right" }}>
+                  <div style={{ fontSize:22, fontWeight:700, color:jp>0.4?T.green:jp>0.2?T.gold:T.red }}>{parlay.jointProbPct}%</div>
+                  <div style={{ fontSize:9, color:T.muted }}>joint probability</div>
+                </div>
+                <button onClick={()=>logBet(parlayBet)} style={{ background:T.green, color:"#070b14", border:"none", borderRadius:4, padding:"6px 12px", fontSize:9, fontWeight:700, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
+                  + LOG
+                </button>
+              </div>
+            </div>
+            <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+              {parlay.legs.map((leg,li) => {
+                const tc = tierColor(leg.tier, T);
+                return (
+                  <div key={li} style={{ display:"flex", alignItems:"center", gap:8, background:T.navy, borderRadius:4, padding:"7px 10px", borderLeft:"2px solid "+tc }}>
+                    <span style={{ background:tc+"22", color:tc, fontSize:"8px", fontWeight:700, padding:"1px 5px", borderRadius:2, minWidth:32, textAlign:"center" }}>{leg.tier}</span>
+                    <div style={{ fontSize:9, color:T.muted, minWidth:110 }}>{leg.match}</div>
+                    <div style={{ flex:1, fontSize:11, color:T.text, fontWeight:600 }}>{leg.market}</div>
+                    <div style={{ fontSize:9, color:T.purple }}>{leg.units}u</div>
+                    <div style={{ fontSize:11, color:tc, fontWeight:700, minWidth:44, textAlign:"right" }}>{leg.probPct}</div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ display:"flex", gap:16, marginTop:10, flexWrap:"wrap" }}>
+              <div><div style={{ fontSize:9, color:T.muted }}>JOINT PROB</div><div style={{ fontSize:13, fontWeight:700 }}>{parlay.jointProbPct}%</div></div>
+              <div><div style={{ fontSize:9, color:T.muted }}>FAIR ODDS (no vig)</div><div style={{ fontSize:13, fontWeight:700, color:T.gold }}>{fairOdds}</div></div>
+              <div><div style={{ fontSize:9, color:T.muted }}>LEGS</div><div style={{ fontSize:13, fontWeight:700, color:T.purple }}>{parlay.size}</div></div>
+              <div><div style={{ fontSize:9, color:T.muted }}>TOTAL UNITS</div><div style={{ fontSize:13, fontWeight:700, color:T.green }}>{totalUnits}u</div></div>
+            </div>
+          </div>
+        );
+      })}
+      <div style={S.disclaimer}>Parlay legs assumed independent across games. Fair odds before vig. Not professional betting advice. Gamble responsibly.</div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// API KEY GATE (updated: collects Odds key + GH token)
+// ════════════════════════════════════════════════════════════════════════════════
+function ApiKeyGate({ onKeys }) {
+  const [oddsKey, setOddsKey] = useState("");
+  const [ghToken, setGhToken] = useState("");
+  const [err, setErr] = useState("");
+  const [testing, setTesting] = useState(false);
+
+  useEffect(() => {
+    const ok = localStorage.getItem("sharp_odds_key");
+    const gt = localStorage.getItem("sharp_gh_token");
+    if (ok && gt) onKeys(ok, gt);
+    else {
+      if (ok) setOddsKey(ok);
+      if (gt) setGhToken(gt);
+    }
+  }, []);
+
+  async function connect() {
+    if (!oddsKey.trim() || !ghToken.trim()) { setErr("Both keys required"); return; }
+    setTesting(true); setErr("");
+    try {
+      const r1 = await fetch("https://api.the-odds-api.com/v4/sports?apiKey="+oddsKey.trim());
+      if (!r1.ok) throw new Error("Odds API key invalid or quota exceeded");
+      const r2 = await fetch("https://api.github.com/gists/"+GIST_ID, { headers:{Authorization:"token "+ghToken.trim()} });
+      if (!r2.ok) throw new Error("GitHub token invalid or Gist not accessible");
+      localStorage.setItem("sharp_odds_key", oddsKey.trim());
+      localStorage.setItem("sharp_gh_token", ghToken.trim());
+      onKeys(oddsKey.trim(), ghToken.trim());
+    } catch(e) { setErr(e.message); }
+    setTesting(false);
+  }
+
+  return (
+    <div style={{ maxWidth:540, margin:"80px auto", padding:"0 20px" }}>
+      <div style={{ ...S.card, border:"1px solid "+T.green+"44" }}>
+        <div style={S.badge(T.green)}>⚾ MLB SIM · CONNECT KEYS</div>
+        <div style={{ fontSize:13, fontWeight:700, marginBottom:8, marginTop:8 }}>Connect your API keys</div>
+        <div style={{ fontSize:10, color:T.muted, lineHeight:1.7, marginBottom:16 }}>
+          Keys stored in browser localStorage only — never in source code. Required once per browser.
+        </div>
+        <div style={{ fontSize:9, color:T.muted, marginBottom:6, letterSpacing:"1px" }}>THE ODDS API KEY</div>
+        <input style={S.input} type="password" placeholder="Odds API key..." value={oddsKey} onChange={e=>setOddsKey(e.target.value)} />
+        <div style={{ fontSize:9, color:T.muted, margin:"12px 0 6px", letterSpacing:"1px" }}>GITHUB TOKEN (gist scope)</div>
+        <input style={S.input} type="password" placeholder="ghp_..." value={ghToken} onChange={e=>setGhToken(e.target.value)} onKeyDown={e=>e.key==="Enter"&&connect()} />
+        {err && <div style={{ fontSize:10, color:T.red, marginTop:8 }}>{err}</div>}
+        <button style={S.btn(testing, T.green)} onClick={connect} disabled={testing}>
+          {testing ? "Verifying..." : "Connect & Load Today's Games"}
+        </button>
+        <div style={{ fontSize:9, color:T.muted, marginTop:10, lineHeight:1.6 }}>
+          <span style={{ color:T.red, cursor:"pointer" }} onClick={()=>{ localStorage.removeItem("sharp_odds_key"); localStorage.removeItem("sharp_gh_token"); setOddsKey(""); setGhToken(""); }}>Reset all keys</span>
+          {" "}· Bets logged to GitHub Gist (8a76d2b...)
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
 // MAIN APP
 // ════════════════════════════════════════════════════════════════════════════════
 function App() {
-  const [apiKey, setApiKey] = useState(null);
+  const [oddsKey, setOddsKey] = useState(null);
+  const [ghToken, setGhToken] = useState(null);
   const [games, setGames]   = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError]   = useState("");
-  const [activeIdx, setActiveIdx] = useState(0);
+  const [activeTab, setActiveTab] = useState("game_0");
   const [simData, setSimData] = useState({});
   const [running, setRunning] = useState(false);
   const [runCounts, setRunCounts] = useState({});
-  // Manual team selectors for when a team isn't in the API games
   const [manualMode, setManualMode] = useState(false);
   const [manualHome, setManualHome] = useState(TEAM_NAMES[0]);
   const [manualAway, setManualAway] = useState(TEAM_NAMES[1]);
+
+  const betLogger = useBetLogger(ghToken, oddsKey);
 
   async function loadGames(key) {
     setLoading(true); setError("");
@@ -803,112 +1471,128 @@ function App() {
       const data = await fetchMLBGames(key);
       const parsed = data.map(parseOddsGame).filter(Boolean);
       setGames(parsed);
-      setActiveIdx(0);
-    } catch(e) {
-      setError(e.message);
-    }
+      setActiveTab("game_0");
+    } catch(e) { setError(e.message); }
     setLoading(false);
   }
 
-  function handleKey(key) {
-    setApiKey(key);
-    loadGames(key);
+  function handleKeys(ok, gt) {
+    setOddsKey(ok); setGhToken(gt);
+    loadGames(ok);
   }
 
-  const activeGame = manualMode
-    ? { homeTeam: manualHome, awayTeam: manualAway, commenceTime: new Date().toISOString(), h2h:{}, spread:{}, total:{} }
-    : games[activeIdx];
+  const isSpecialTab = activeTab === "top_picks" || activeTab === "parlays" || activeTab === "custom";
+  const activeGameIdx = activeTab.startsWith("game_") ? parseInt(activeTab.split("_")[1]) : 0;
+  const activeGame = isSpecialTab ? null : manualMode
+    ? { homeTeam:manualHome, awayTeam:manualAway, commenceTime:new Date().toISOString(), h2h:{}, spread:{}, total:{}, id:"custom" }
+    : games[activeGameIdx];
 
-  const gameKey = activeGame ? activeGame.homeTeam + "|" + activeGame.awayTeam : null;
+  const gameKey = activeGame ? activeGame.homeTeam+"|"+activeGame.awayTeam : null;
 
-  function runSim() {
-    if (!activeGame || running) return;
+  function runSim(game) {
+    const g = game || activeGame;
+    if (!g || running) return;
+    const key = g.homeTeam+"|"+g.awayTeam;
     setRunning(true);
     setTimeout(() => {
-      const result = runMLBSim(activeGame.homeTeam, activeGame.awayTeam);
+      const result = runMLBSim(g.homeTeam, g.awayTeam);
       if (result) {
-        setSimData(prev => ({ ...prev, [gameKey]: result }));
-        setRunCounts(prev => ({ ...prev, [gameKey]: (prev[gameKey]||0)+1 }));
+        setSimData(prev => ({ ...prev, [key]: result }));
+        setRunCounts(prev => ({ ...prev, [key]: (prev[key]||0)+1 }));
       }
       setRunning(false);
     }, 50);
   }
 
-  // Auto-run when game changes and no data yet
   useEffect(() => {
-    if (gameKey && !simData[gameKey] && !running && TEAM_PARAMS[activeGame.homeTeam] && TEAM_PARAMS[activeGame.awayTeam]) {
-      runSim();
+    if (gameKey && !simData[gameKey] && !running && activeGame && TEAM_PARAMS[activeGame.homeTeam] && TEAM_PARAMS[activeGame.awayTeam]) {
+      runSim(activeGame);
     }
-  }, [gameKey]);
+  }, [gameKey, activeTab]);
 
-  if (!apiKey) return <div style={S.wrap}><ApiKeyGate onKey={handleKey}/></div>;
+  if (!oddsKey || !ghToken) return <div style={S.wrap}><ApiKeyGate onKeys={handleKeys}/></div>;
+
+  const topBetCount = games.reduce((acc,g) => {
+    const agg = simData[g.homeTeam+"|"+g.awayTeam];
+    if (!agg) return acc;
+    return acc + extractTopBets(agg, g, "MLB").length;
+  },0);
 
   return (
     <div style={S.wrap}>
       {/* TOPBAR */}
       <div style={{ background:T.navy, borderBottom:"1px solid "+T.border, padding:"8px 16px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-        <a href="index.html" style={{ fontSize:10, color:T.muted, letterSpacing:"1px", display:"flex", alignItems:"center", gap:6 }}>
-          ← Sharp Sim
-        </a>
+        <a href="index.html" style={{ fontSize:10, color:T.muted, letterSpacing:"1px" }}>← Sharp Sim</a>
         <div style={{ flex:1 }}/>
-        <div style={{ fontSize:9, color:T.muted }}>
-          {games.length > 0 ? games.length + " games loaded" : loading ? "Loading..." : ""}
-        </div>
-        <button onClick={()=>loadGames(apiKey)} disabled={loading} style={{ ...S.btn(loading, T.green), width:"auto", padding:"6px 14px", marginTop:0, fontSize:9 }}>
-          {loading ? "Loading..." : "↻ Refresh Odds"}
+        {betLogger.stats.total > 0 && (
+          <div style={{ fontSize:10, color:T.muted }}>
+            Record: <span style={{ color:T.green }}>{betLogger.stats.wins}W</span>-<span style={{ color:T.red }}>{betLogger.stats.losses}L</span>
+            <span style={{ color:parseFloat(betLogger.stats.totalUnits)>=0?T.green:T.red, marginLeft:6 }}>{parseFloat(betLogger.stats.totalUnits)>=0?"+":""}{betLogger.stats.totalUnits}u</span>
+          </div>
+        )}
+        <div style={{ fontSize:9, color:T.muted }}>{games.length > 0 ? games.length+" games" : loading?"Loading...":""}</div>
+        <button onClick={()=>loadGames(oddsKey)} disabled={loading} style={{ ...S.btn(loading,T.green), width:"auto", padding:"6px 14px", marginTop:0, fontSize:9 }}>
+          {loading?"Loading...":"↻ Refresh"}
         </button>
-        <button onClick={()=>{ localStorage.removeItem("sharp_odds_key"); setApiKey(null); }} style={{ background:"none", border:"1px solid "+T.border, color:T.muted, padding:"6px 10px", borderRadius:4, fontSize:9, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
-          ✕ Key
+        <button onClick={()=>{ localStorage.removeItem("sharp_odds_key"); localStorage.removeItem("sharp_gh_token"); setOddsKey(null); setGhToken(null); }}
+          style={{ background:"none", border:"1px solid "+T.border, color:T.muted, padding:"6px 10px", borderRadius:4, fontSize:9, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
+          ✕ Keys
         </button>
       </div>
 
       {error && <div style={{ background:"#1a0a0a", border:"1px solid "+T.red+"44", padding:"10px 16px", fontSize:10, color:T.red }}>{error}</div>}
 
-      {/* GAME TABS */}
+      {/* TABS */}
       <div style={S.tabBar}>
-        {games.map((g, i) => (
-          <button key={g.id} style={S.tab(i===activeIdx && !manualMode)} onClick={()=>{ setActiveIdx(i); setManualMode(false); }}>
+        {games.map((g,i) => (
+          <button key={g.id} style={S.tab(activeTab==="game_"+i&&!manualMode)} onClick={()=>{ setActiveTab("game_"+i); setManualMode(false); }}>
             {TEAM_PARAMS[g.awayTeam]?.abbr||g.awayTeam.split(" ").pop()} @ {TEAM_PARAMS[g.homeTeam]?.abbr||g.homeTeam.split(" ").pop()}
+            {simData[g.homeTeam+"|"+g.awayTeam]?"":""  }
           </button>
         ))}
-        <button style={{ ...S.tab(manualMode), color:manualMode?T.purple:T.muted, borderBottom:manualMode?"2px solid "+T.purple:"2px solid transparent", borderLeft:"1px solid "+T.border, marginLeft:4 }}
-          onClick={()=>setManualMode(true)}>
+        <button style={{ ...S.tab(manualMode), color:manualMode?T.purple:T.muted, borderBottom:manualMode?"2px solid "+T.purple:"2px solid transparent" }} onClick={()=>{ setManualMode(true); setActiveTab("custom"); }}>
           + Custom
+        </button>
+        <div style={{ flex:1 }}/>
+        <button style={{ ...S.tab(activeTab==="top_picks"), color:activeTab==="top_picks"?T.green:T.muted, borderBottom:activeTab==="top_picks"?"2px solid "+T.green:"2px solid transparent", borderLeft:"1px solid "+T.border }}
+          onClick={()=>{ setManualMode(false); setActiveTab("top_picks"); }}>
+          ⭐ TOP PICKS {topBetCount>0?"("+topBetCount+")":""}
+        </button>
+        <button style={{ ...S.tab(activeTab==="parlays"), color:activeTab==="parlays"?T.purple:T.muted, borderBottom:activeTab==="parlays"?"2px solid "+T.purple:"2px solid transparent" }}
+          onClick={()=>{ setManualMode(false); setActiveTab("parlays"); }}>
+          🎰 PARLAYS
         </button>
       </div>
 
-      {/* MANUAL TEAM SELECTOR */}
+      {/* MANUAL SELECTOR */}
       {manualMode && (
         <div style={{ background:T.navy, borderBottom:"1px solid "+T.border, padding:"12px 16px", display:"flex", gap:12, alignItems:"center", flexWrap:"wrap" }}>
-          <div style={{ fontSize:10, color:T.muted, whiteSpace:"nowrap" }}>Away team:</div>
+          <span style={{ fontSize:10, color:T.muted }}>Away:</span>
           <select value={manualAway} onChange={e=>setManualAway(e.target.value)} style={{ ...S.input, width:"auto", flex:1, minWidth:180 }}>
             {TEAM_NAMES.map(t=><option key={t} value={t}>{t}</option>)}
           </select>
-          <div style={{ fontSize:10, color:T.muted }}>@</div>
-          <div style={{ fontSize:10, color:T.muted, whiteSpace:"nowrap" }}>Home team:</div>
+          <span style={{ fontSize:10, color:T.muted }}>@</span>
+          <span style={{ fontSize:10, color:T.muted }}>Home:</span>
           <select value={manualHome} onChange={e=>setManualHome(e.target.value)} style={{ ...S.input, width:"auto", flex:1, minWidth:180 }}>
             {TEAM_NAMES.map(t=><option key={t} value={t}>{t}</option>)}
           </select>
         </div>
       )}
 
-      {/* GAME VIEW */}
-      {activeGame && TEAM_PARAMS[activeGame.homeTeam] && TEAM_PARAMS[activeGame.awayTeam] ? (
-        <GameSimView
-          game={activeGame}
-          agg={simData[gameKey]}
-          running={running}
-          runCount={runCounts[gameKey]||0}
-          onRun={runSim}
+      {/* CONTENT */}
+      {activeTab==="top_picks" && <TopPicksTab simData={simData} games={games} betLogger={betLogger}/>}
+      {activeTab==="parlays" && <MLBParlayTab simData={simData} games={games} betLogger={betLogger}/>}
+      {!["top_picks","parlays"].includes(activeTab) && activeGame && TEAM_PARAMS[activeGame.homeTeam] && TEAM_PARAMS[activeGame.awayTeam] && (
+        <GameSimView game={activeGame} agg={simData[gameKey]} running={running && gameKey && running}
+          runCount={runCounts[gameKey]||0} onRun={()=>runSim(activeGame)}
+          betLogger={betLogger}
         />
-      ) : activeGame ? (
-        <div style={{ textAlign:"center", padding:48, color:T.muted, fontSize:11 }}>
-          Team not found in model params: {activeGame.homeTeam} vs {activeGame.awayTeam}
-        </div>
-      ) : (
-        <div style={{ textAlign:"center", padding:48, color:T.muted, fontSize:11 }}>
-          {loading ? "Loading today's games..." : "No games found. Try refreshing."}
-        </div>
+      )}
+      {!["top_picks","parlays"].includes(activeTab) && activeGame && (!TEAM_PARAMS[activeGame.homeTeam]||!TEAM_PARAMS[activeGame.awayTeam]) && (
+        <div style={{ textAlign:"center", padding:48, color:T.muted, fontSize:11 }}>Team not in model: {activeGame.homeTeam} vs {activeGame.awayTeam}</div>
+      )}
+      {!["top_picks","parlays"].includes(activeTab) && !activeGame && (
+        <div style={{ textAlign:"center", padding:48, color:T.muted, fontSize:11 }}>{loading?"Loading today's games...":"No games found."}</div>
       )}
     </div>
   );

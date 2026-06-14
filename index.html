@@ -151,6 +151,9 @@ a{text-decoration:none;color:inherit}
 
 <div class="body">
 
+  <div class="section-label" id="stats-label" style="display:none">Model Performance</div>
+  <div id="stats-banner" style="display:none;background:#101d30;border:1px solid #1a2a3e;border-radius:6px;padding:16px;margin-bottom:32px;"></div>
+
   <div class="section-label">Select Sport</div>
   <div class="cards">
 
@@ -235,5 +238,55 @@ a{text-decoration:none;color:inherit}
 
 <div class="footer">SHARP SIM · MONTE CARLO SPORTS MODELING · NOT PROFESSIONAL BETTING ADVICE</div>
 
+<script>
+const GIST_ID = "8a76d2b09c709882e4364528a0152ccc";
+const GIST_FILE = "sharpsim_bets.json";
+
+async function loadStats() {
+  const token = localStorage.getItem("sharp_gh_token");
+  if (!token) return;
+  try {
+    const res = await fetch("https://api.github.com/gists/"+GIST_ID, { headers:{Authorization:"token "+token} });
+    if (!res.ok) return;
+    const data = await res.json();
+    const content = data.files[GIST_FILE] && data.files[GIST_FILE].content;
+    const bets = JSON.parse(content||"[]");
+    const resolved = bets.filter(b=>b.result!=="pending");
+    if (resolved.length===0) return;
+    const wins = resolved.filter(b=>b.result==="win").length;
+    const losses = resolved.filter(b=>b.result==="loss").length;
+    const pushes = resolved.filter(b=>b.result==="push").length;
+    const winPct = resolved.length ? ((wins/(resolved.length-pushes))*100).toFixed(1) : "—";
+    const units = resolved.reduce((a,b)=>a+(b.result==="win"?b.units:b.result==="loss"?-b.units:0),0).toFixed(1);
+    const pending = bets.filter(b=>b.result==="pending").length;
+    const bySport = {};
+    resolved.forEach(b=>{
+      if(!bySport[b.sport]) bySport[b.sport]={wins:0,losses:0,units:0};
+      bySport[b.sport].units+=b.result==="win"?b.units:b.result==="loss"?-b.units:0;
+      if(b.result==="win") bySport[b.sport].wins++;
+      else if(b.result==="loss") bySport[b.sport].losses++;
+    });
+    const unitColor = parseFloat(units)>=0?"#22c55e":"#ef4444";
+    let html = '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center">';
+    html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Overall Win %</div><div style="font-size:26px;font-weight:700;color:#22c55e">'+winPct+'%</div></div>';
+    html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Record</div><div style="font-size:18px;font-weight:700"><span style="color:#22c55e">'+wins+'W</span>-<span style="color:#ef4444">'+losses+'L</span>-<span style="color:#4b6280">'+pushes+'P</span></div></div>';
+    html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Total Units</div><div style="font-size:26px;font-weight:700;color:'+unitColor+'">'+(parseFloat(units)>=0?"+":"")+units+'u</div></div>';
+    html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Pending</div><div style="font-size:18px;font-weight:700;color:#fbbf24">'+pending+'</div></div>';
+    Object.entries(bySport).forEach(([sport,s])=>{
+      const su = s.units.toFixed(1);
+      const sc = parseFloat(su)>=0?"#22c55e":"#ef4444";
+      const wp = (s.wins+s.losses)>0?((s.wins/(s.wins+s.losses))*100).toFixed(0):0;
+      html += '<div style="border-left:1px solid #1a2a3e;padding-left:20px"><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">'+sport+'</div>';
+      html += '<div style="font-size:14px;font-weight:700"><span style="color:#22c55e">'+s.wins+'W</span>-<span style="color:#ef4444">'+s.losses+'L</span></div>';
+      html += '<div style="font-size:10px;color:'+sc+'">'+(parseFloat(su)>=0?"+":"")+su+'u · '+wp+'% W</div></div>';
+    });
+    html += '</div>';
+    document.getElementById("stats-banner").innerHTML = html;
+    document.getElementById("stats-banner").style.display = "block";
+    document.getElementById("stats-label").style.display = "block";
+  } catch(e) { console.error("Stats load error:", e); }
+}
+loadStats();
+</script>
 </body>
 </html>
