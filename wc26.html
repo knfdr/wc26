@@ -781,8 +781,9 @@ async function autoResolveBets(bets, oddsKey) {
       );
       if (!res.ok) continue;
       const scores = await res.json();
+      const today = new Date().toLocaleDateString("en-CA");
       scores.forEach(g => {
-        if (g.completed && g.scores) {
+        if (g.completed && g.scores && new Date(g.commence_time).toLocaleDateString("en-CA") === today) {
           scoreMap[g.id] = g;
           scoreMap[g.home_team + "|" + g.away_team] = g;
           scoreMap[g.away_team + "|" + g.home_team] = g;

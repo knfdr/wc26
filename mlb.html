@@ -566,6 +566,7 @@ async function autoResolveBets(bets, oddsKey) {
       );
       if (!res.ok) continue;
       const scores = await res.json();
+      const today = new Date().toLocaleDateString("en-CA");
       scores.forEach(g => {
         // STRICT: only resolve if completed is explicitly true AND scores exist
         // Also guard: game must have started at least 3 hours ago (MLB games ~3hrs)
@@ -574,6 +575,8 @@ async function autoResolveBets(bets, oddsKey) {
         const commenceTime = new Date(g.commence_time).getTime();
         const threeHoursMs = 3 * 60 * 60 * 1000;
         if (Date.now() - commenceTime < threeHoursMs) return;
+        // Only match games from today to avoid same-series games from prior days
+        if (new Date(g.commence_time).toLocaleDateString("en-CA") !== today) return;
         scoreMap[g.id] = g;
         scoreMap[g.home_team + "|" + g.away_team] = g;
         scoreMap[g.away_team + "|" + g.home_team] = g;
