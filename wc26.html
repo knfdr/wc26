@@ -1655,6 +1655,23 @@ function App() {
   const isTopPicksTab = activeId === "top_picks";
   const allSimsReady = MATCHES.every(m => !!simData[m.id]);
   const totalSimsLoaded = MATCHES.filter(m => !!simData[m.id]).length;
+
+  // Auto-log at App level so it fires regardless of which tab is active
+  const appAutoLoggedRef = useRef(false);
+  useEffect(() => {
+    if (!allSimsReady || !betLogger.loaded || appAutoLoggedRef.current) return;
+    const allBets = [];
+    MATCHES.forEach(m => {
+      const agg = simData[m.id];
+      if (!agg) return;
+      const gameObj = { id:m.id, homeTeam:m.homeTeam, awayTeam:m.awayTeam, overUnderLine:m.overUnderLine, overOdds:m.overOdds, underOdds:m.underOdds };
+      extractTopBets({...agg, overUnderLine:m.overUnderLine, overOdds:m.overOdds, underOdds:m.underOdds}, gameObj, "WC")
+        .forEach(b => allBets.push(b));
+    });
+    if (!allBets.length) return;
+    appAutoLoggedRef.current = true;
+    betLogger.logAllBets(allBets);
+  }, [allSimsReady, betLogger.loaded]);
   const topBetCount = MATCHES.reduce((acc,m) => {
     const agg = simData[m.id];
     if (!agg) return acc;

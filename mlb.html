@@ -1561,6 +1561,21 @@ function App() {
   const simsLoaded = games.filter(g => simData[g.homeTeam+"|"+g.awayTeam]).length;
   const allSimsReady = games.length > 0 && simsLoaded === games.length;
 
+  // Auto-log at App level so it fires regardless of which tab is active
+  const appAutoLoggedRef = useRef(false);
+  useEffect(() => {
+    if (!allSimsReady || !betLogger.loaded || appAutoLoggedRef.current) return;
+    const allBets = [];
+    games.forEach(game => {
+      const agg = simData[game.homeTeam+"|"+game.awayTeam];
+      if (!agg) return;
+      extractTopBets(agg, game, "MLB").forEach(b => allBets.push({ ...b, gameTime: game.commenceTime }));
+    });
+    if (!allBets.length) return;
+    appAutoLoggedRef.current = true;
+    betLogger.logAllBets(allBets);
+  }, [allSimsReady, betLogger.loaded]);
+
   const topBetCount = games.reduce((acc,g) => {
     const agg = simData[g.homeTeam+"|"+g.awayTeam];
     if (!agg) return acc;
