@@ -1050,7 +1050,7 @@ function useBetLogger(ghToken, oddsKey) {
     const today = new Date().toISOString().slice(0,10);
     const existingKeys = new Set(
       bets
-        .filter(b => b.gameDate === today && b.result === "pending")
+        .filter(b => b.gameDate === today)
         .map(b => b.gameId + "|" + b.market)
     );
     const toAdd = newBets.filter(b => !existingKeys.has(b.gameId + "|" + b.market));
