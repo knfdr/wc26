@@ -1017,12 +1017,10 @@ function useBetLogger(ghToken, oddsKey) {
   useEffect(() => {
     if (!ghToken) return;
     gistRead(ghToken).then(data => {
-      // Auto-resolve pending bets on load
       if (oddsKey) {
         autoResolveBets(data, oddsKey).then(resolved => {
           setBets(resolved);
           setLoaded(true);
-          // If any resolved, write back
           if (resolved.some((b,i) => b.result !== data[i]?.result)) {
             gistWrite(ghToken, resolved).catch(console.error);
           }
@@ -1046,6 +1044,23 @@ function useBetLogger(ghToken, oddsKey) {
     setSaving(false);
   }
 
+  async function logAllBets(newBets) {
+    if (!ghToken || !newBets.length) return;
+    setSaving(true);
+    const today = new Date().toISOString().slice(0,10);
+    const existingKeys = new Set(
+      bets
+        .filter(b => b.gameDate === today && b.result === "pending")
+        .map(b => b.gameId + "|" + b.market)
+    );
+    const toAdd = newBets.filter(b => !existingKeys.has(b.gameId + "|" + b.market));
+    if (!toAdd.length) { setSaving(false); return; }
+    const updated = [...bets, ...toAdd];
+    setBets(updated);
+    try { await gistWrite(ghToken, updated); } catch(e) { console.error(e); }
+    setSaving(false);
+  }
+
   async function removeBet(id) {
     if (!ghToken) return;
     const updated = bets.filter(b => b.id !== id);
@@ -1054,10 +1069,11 @@ function useBetLogger(ghToken, oddsKey) {
   }
 
   const stats = calcStats(bets);
-  const loggedIds = new Set(bets.map(b => b.id));
-  const isLogged = (gameId, market) => bets.some(b => b.gameId === gameId && b.market === market && b.result === "pending");
+  const today = new Date().toISOString().slice(0,10);
+  const isLogged = (gameId, market) =>
+    bets.some(b => b.gameId === gameId && b.market === market && b.gameDate === today && b.result === "pending");
 
-  return { bets, stats, logBet, removeBet, saving, loaded, isLogged };
+  return { bets, stats, logBet, logAllBets, removeBet, saving, loaded, isLogged };
 }
 
 function buildParlays(simData) {
@@ -1462,21 +1478,34 @@ function MatchView({ match, agg, running, onRun, runCount }) {
 // ════════════════════════════════════════════════════════════════════════════════
 // ── WC Top Picks Tab ─────────────────────────────────────────────────────────
 function WCTopPicksTab({ simData, betLogger }) {
-  const { logBet, isLogged, stats } = betLogger;
+  const { logAllBets, isLogged, stats, saving } = betLogger;
+  const autoLoggedRef = useRef(false);
+
   const allBets = [];
   MATCHES.forEach(m => {
     const agg = simData[m.id];
     if (!agg) return;
     const gameObj = { id: m.id, homeTeam: m.homeTeam, awayTeam: m.awayTeam,
       overUnderLine: m.overUnderLine, overOdds: m.overOdds, underOdds: m.underOdds };
-    const bets = extractTopBets({ ...agg, overUnderLine: m.overUnderLine, overOdds: m.overOdds, underOdds: m.underOdds }, gameObj, "WC");
-    bets.forEach(b => allBets.push(b));
+    extractTopBets({ ...agg, overUnderLine: m.overUnderLine, overOdds: m.overOdds, underOdds: m.underOdds }, gameObj, "WC")
+      .forEach(b => allBets.push(b));
   });
   allBets.sort((a,b) => parseFloat(b.simPct)-parseFloat(a.simPct));
+
   const simsReady = MATCHES.filter(m => simData[m.id]).length;
+  const allSimsReady = simsReady === MATCHES.length;
+
+  // Auto-log all bets once all sims complete and logger is loaded
+  useEffect(() => {
+    if (!allSimsReady || !betLogger.loaded || autoLoggedRef.current || !allBets.length) return;
+    autoLoggedRef.current = true;
+    logAllBets(allBets);
+  }, [allSimsReady, betLogger.loaded]);
+
   const locks = allBets.filter(b=>b.tier==="LOCK");
   const highs = allBets.filter(b=>b.tier==="HIGH");
   const leans = allBets.filter(b=>b.tier==="LEAN");
+  const loggedCount = allBets.filter(b => isLogged(b.gameId, b.market)).length;
 
   return (
     <div style={{ maxWidth:900, margin:"0 auto", padding:"0 14px 48px" }}>
@@ -1484,16 +1513,18 @@ function WCTopPicksTab({ simData, betLogger }) {
         <StatsBanner stats={stats} T={T} S={S}/>
         <div style={{ ...S.card, background:"#0a1020", border:"1px solid "+T.gold+"33", marginBottom:14 }}>
           <div style={{ fontSize:11, color:T.gold, fontWeight:700, letterSpacing:"1px" }}>TOP PICKS — JUNE 14, 2026</div>
-          <div style={{ fontSize:10, color:T.muted, marginTop:3 }}>{simsReady}/{MATCHES.length} matches simulated · {allBets.length} qualifying signals · Click "+ LOG BET" to track</div>
+          <div style={{ fontSize:10, color:T.muted, marginTop:3 }}>
+            {simsReady}/{MATCHES.length} matches simulated · {allBets.length} qualifying signals
+            {saving ? " · Saving to Gist..." : allSimsReady && loggedCount > 0 ? " · "+loggedCount+" auto-logged ✓" : ""}
+          </div>
         </div>
       </div>
-      {[{label:"LOCK Bets",bets:locks,color:T.red},{label:"HIGH Confidence",bets:highs,color:T.green},{label:"LEAN Signals",bets:leans,color:T.gold}]
-        .map(({label,bets,color}) => bets.length > 0 && (
+      {[{label:"LOCK Bets",bets:locks},{label:"HIGH Confidence",bets:highs},{label:"LEAN Signals",bets:leans}]
+        .map(({label,bets}) => bets.length > 0 && (
           <div key={label} style={S.sec}>
             <div style={S.secLabel}>{label} ({bets.length})</div>
             {bets.map((bet,i) => (
-              <TopBetCard key={i} bet={bet} T={T} S={S}
-                onLog={()=>logBet(bet)} logged={isLogged(bet.gameId, bet.market)}/>
+              <TopBetCard key={i} bet={bet} T={T} S={S} logged={isLogged(bet.gameId, bet.market)}/>
             ))}
           </div>
         ))}
@@ -1501,7 +1532,7 @@ function WCTopPicksTab({ simData, betLogger }) {
       <div style={S.sec}>
         <div style={S.secLabel}>Bet Log — WC 2026 ({betLogger.bets.filter(b=>b.sport==="WC").length} bets)</div>
         {betLogger.bets.filter(b=>b.sport==="WC").length===0
-          ? <div style={{ ...S.card, color:T.muted, fontSize:10, textAlign:"center", padding:24 }}>No WC bets logged yet.</div>
+          ? <div style={{ ...S.card, color:T.muted, fontSize:10, textAlign:"center", padding:24 }}>Bets will auto-log once all match sims complete.</div>
           : <div style={S.card}>
               <div style={{ ...S.betRow, fontSize:"8px", fontWeight:700 }}>
                 <span style={{ minWidth:120, color:T.muted }}>DATE</span>
