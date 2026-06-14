@@ -783,11 +783,14 @@ async function autoResolveBets(bets, oddsKey) {
       const scores = await res.json();
       const today = new Date().toLocaleDateString("en-CA");
       scores.forEach(g => {
-        if (g.completed && g.scores && new Date(g.commence_time).toLocaleDateString("en-CA") === today) {
-          scoreMap[g.id] = g;
-          scoreMap[g.home_team + "|" + g.away_team] = g;
-          scoreMap[g.away_team + "|" + g.home_team] = g;
-        }
+        if (g.completed !== true || !g.scores || !g.scores.length) return;
+        const commenceTime = new Date(g.commence_time).getTime();
+        const threeHoursMs = 3 * 60 * 60 * 1000;
+        if (Date.now() - commenceTime < threeHoursMs) return;
+        if (new Date(g.commence_time).toLocaleDateString("en-CA") !== today) return;
+        scoreMap[g.id] = g;
+        scoreMap[g.home_team + "|" + g.away_team] = g;
+        scoreMap[g.away_team + "|" + g.home_team] = g;
       });
     } catch(e) {}
   }
@@ -795,7 +798,7 @@ async function autoResolveBets(bets, oddsKey) {
   return bets.map(bet => {
     if (bet.result !== "pending") return bet;
     const game = scoreMap[bet.gameId] || scoreMap[bet.homeTeam + "|" + bet.awayTeam];
-    if (!game || !game.completed) return bet;
+    if (!game || game.completed !== true) return bet;
 
     const homeScore = parseInt((game.scores.find(s => s.name === game.home_team) || {}).score || "0");
     const awayScore = parseInt((game.scores.find(s => s.name !== game.home_team) || {}).score || "0");
@@ -1480,7 +1483,6 @@ function MatchView({ match, agg, running, onRun, runCount }) {
 // ── WC Top Picks Tab ─────────────────────────────────────────────────────────
 function WCTopPicksTab({ simData, betLogger }) {
   const { logAllBets, isLogged, stats, saving } = betLogger;
-  const autoLoggedRef = useRef(false);
 
   const allBets = [];
   MATCHES.forEach(m => {
@@ -1495,13 +1497,6 @@ function WCTopPicksTab({ simData, betLogger }) {
 
   const simsReady = MATCHES.filter(m => simData[m.id]).length;
   const allSimsReady = simsReady === MATCHES.length;
-
-  // Auto-log all bets once all sims complete and logger is loaded
-  useEffect(() => {
-    if (!allSimsReady || !betLogger.loaded || autoLoggedRef.current || !allBets.length) return;
-    autoLoggedRef.current = true;
-    logAllBets(allBets);
-  }, [allSimsReady, betLogger.loaded]);
 
   const locks = allBets.filter(b=>b.tier==="LOCK");
   const highs = allBets.filter(b=>b.tier==="HIGH");

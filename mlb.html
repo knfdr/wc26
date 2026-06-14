@@ -567,16 +567,12 @@ async function autoResolveBets(bets, oddsKey) {
       if (!res.ok) continue;
       const scores = await res.json();
       const today = new Date().toLocaleDateString("en-CA");
-      console.log("[resolve] today =", today, "| total scores returned:", scores.length);
       scores.forEach(g => {
-        const gameDate = new Date(g.commence_time).toLocaleDateString("en-CA");
-        console.log("[resolve] game:", g.home_team, "vs", g.away_team, "| date:", gameDate, "| completed:", g.completed);
         if (g.completed !== true || !g.scores || !g.scores.length) return;
         const commenceTime = new Date(g.commence_time).getTime();
         const threeHoursMs = 3 * 60 * 60 * 1000;
         if (Date.now() - commenceTime < threeHoursMs) return;
-        if (gameDate !== today) { console.log("[resolve] SKIPPED (wrong date):", g.home_team, "vs", g.away_team, gameDate); return; }
-        console.log("[resolve] ADDED to scoreMap:", g.home_team, "vs", g.away_team, g.scores);
+        if (new Date(g.commence_time).toLocaleDateString("en-CA") !== today) return;
         scoreMap[g.id] = g;
         scoreMap[g.home_team + "|" + g.away_team] = g;
         scoreMap[g.away_team + "|" + g.home_team] = g;
