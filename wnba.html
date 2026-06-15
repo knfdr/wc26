@@ -1,0 +1,1099 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sharp Sim — WNBA</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100vh;background:#070b14;font-family:'IBM Plex Mono','Courier New',monospace;color:#dde5f0}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:#0c1526}
+::-webkit-scrollbar-thumb{background:#1a2a3e;border-radius:3px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+const GIST_ID   = "8a76d2b09c709882e4364528a0152ccc";
+const GIST_FILE = "sharpsim_bets.json";
+const SPORT_KEY = "basketball_wnba";
+const ODDS_CACHE_KEY  = "sharp_odds_cache_wnba";
+const SCORES_CACHE_KEY = "sharp_scores_cache_wnba";
+const CACHE_TTL = 30 * 60 * 1000;
+const SIM_CACHE_KEY = "sharp_sim_cache_wnba_" + new Date().toLocaleDateString("en-CA");
+const LEAGUE_AVG = 103;
+const HCA = 2.5;
+
+// ── Theme ─────────────────────────────────────────────────────────────────────
+const T = {
+  bg:"#070b14", navy:"#101d30", border:"#1a2a3e",
+  text:"#dde5f0", muted:"#4b6280",
+  green:"#22c55e", red:"#ef4444", blue:"#3b82f6",
+  gold:"#e8c547", yellow:"#fbbf24", purple:"#a78bfa",
+  accent:"#e879f9",
+};
+
+const S = {
+  wrap:{ minHeight:"100vh", background:T.bg, color:T.text },
+  header:{ background:"linear-gradient(160deg,#0c1526 0%,#070b14 100%)", borderBottom:"1px solid "+T.border, padding:"28px 20px 22px", textAlign:"center", position:"relative", overflow:"hidden" },
+  glow:{ position:"absolute", top:0, left:0, right:0, bottom:0, background:"radial-gradient(ellipse at 50% -10%,rgba(232,121,249,0.08) 0%,transparent 65%)", pointerEvents:"none" },
+  badge:(c)=>({ display:"inline-block", background:c+"1a", border:"1px solid "+c+"44", color:c, fontSize:"9px", letterSpacing:"2px", padding:"2px 10px", borderRadius:2, marginBottom:12 }),
+  title:{ fontSize:"clamp(20px,4vw,32px)", fontWeight:700, letterSpacing:-0.5, marginBottom:6 },
+  vs:{ color:T.muted, margin:"0 10px" },
+  meta:{ fontSize:10, color:T.muted, marginTop:4 },
+  modelTag:(c)=>({ display:"inline-block", background:"rgba(167,139,250,0.08)", border:"1px solid rgba(167,139,250,0.2)", color:T.purple, fontSize:"8px", letterSpacing:"1.5px", padding:"2px 10px", borderRadius:2, marginTop:8 }),
+  body:{ maxWidth:960, margin:"0 auto", padding:"20px 16px 60px" },
+  tabBar:{ display:"flex", borderBottom:"1px solid "+T.border, overflowX:"auto", background:T.navy, flexWrap:"nowrap" },
+  tab:(active)=>({ background:"none", border:"none", color:active?T.text:T.muted, fontSize:"9px", letterSpacing:"1px", padding:"12px 14px", cursor:"pointer", borderBottom:active?"2px solid "+T.accent:"2px solid transparent", whiteSpace:"nowrap", fontFamily:"inherit", fontWeight:active?700:400 }),
+  sec:{ marginBottom:16 },
+  secLabel:{ fontSize:"8px", letterSpacing:"2.5px", color:T.muted, textTransform:"uppercase", marginBottom:8, paddingBottom:6, borderBottom:"1px solid "+T.border },
+  card:{ background:T.navy, border:"1px solid "+T.border, borderRadius:6, padding:"12px 14px" },
+  g2:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 },
+  g3:{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:10 },
+  g4:{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:10 },
+  sL:{ fontSize:"9px", color:T.muted, letterSpacing:"1px", textTransform:"uppercase", marginBottom:4 },
+  sV:{ fontSize:22, fontWeight:700 },
+  sSub:{ fontSize:"9px", color:T.muted, marginTop:2 },
+  betRow:{ display:"flex", alignItems:"center", gap:8, padding:"6px 0", borderBottom:"1px solid "+T.border+"66" },
+  barWrap:{ display:"flex", height:28, borderRadius:4, overflow:"hidden", marginTop:10 },
+  pill:(c)=>({ minWidth:64, textAlign:"right", fontSize:"8px", fontWeight:700, letterSpacing:"1px", color:c }),
+  btn:(active,c)=>({ background:active?c+"22":T.navy, border:"1px solid "+(active?c:T.border), color:active?c:T.muted, padding:"10px 18px", borderRadius:4, cursor:"pointer", fontSize:"10px", fontWeight:700, letterSpacing:"1px", marginBottom:16, fontFamily:"inherit", width:"100%" }),
+  input:{ background:T.bg, border:"1px solid "+T.border, color:T.text, padding:"8px 10px", borderRadius:4, fontSize:10, fontFamily:"inherit", width:"100%" },
+  table:{ width:"100%", borderCollapse:"collapse", fontSize:10 },
+  th:{ textAlign:"left", color:T.muted, fontSize:"8px", letterSpacing:"1px", paddingBottom:6, borderBottom:"1px solid "+T.border, textTransform:"uppercase" },
+  td:{ padding:"5px 0", borderBottom:"1px solid "+T.border+"44", color:T.text },
+  disclaimer:{ fontSize:"9px", color:T.muted, marginTop:16, padding:10, borderTop:"1px solid "+T.border, lineHeight:1.7 },
+};
+
+// ── Team Parameters (2025 WNBA Season) ───────────────────────────────────────
+// ortg: offensive rating (pts per 100 poss), drtg: defensive rating, pace: possessions per 40 min
+const TEAM_PARAMS = {
+  "New York Liberty":       { abbr:"NYL", ortg:110, drtg:97,  pace:84, color:"#6ECEB2" },
+  "Las Vegas Aces":         { abbr:"LVA", ortg:108, drtg:99,  pace:85, color:"#C8B400" },
+  "Minnesota Lynx":         { abbr:"MIN", ortg:107, drtg:98,  pace:83, color:"#236192" },
+  "Connecticut Sun":        { abbr:"CON", ortg:105, drtg:100, pace:82, color:"#E2632A" },
+  "Indiana Fever":          { abbr:"IND", ortg:104, drtg:102, pace:87, color:"#FFCD00" },
+  "Seattle Storm":          { abbr:"SEA", ortg:103, drtg:101, pace:83, color:"#2C5234" },
+  "Atlanta Dream":          { abbr:"ATL", ortg:103, drtg:103, pace:85, color:"#E31837" },
+  "Chicago Sky":            { abbr:"CHI", ortg:102, drtg:104, pace:84, color:"#418FDE" },
+  "Phoenix Mercury":        { abbr:"PHX", ortg:101, drtg:104, pace:86, color:"#CB6015" },
+  "Dallas Wings":           { abbr:"DAL", ortg:101, drtg:106, pace:87, color:"#C4D600" },
+  "Washington Mystics":     { abbr:"WAS", ortg:100, drtg:105, pace:83, color:"#C8102E" },
+  "Los Angeles Sparks":     { abbr:"LAS", ortg:100, drtg:107, pace:84, color:"#702F8A" },
+  "Golden State Valkyries": { abbr:"GSV", ortg:100, drtg:106, pace:85, color:"#1D428A" },
+  "Portland Fire":          { abbr:"POR", ortg:99,  drtg:107, pace:84, color:"#E03A3E" },
+};
+const TEAM_NAMES = Object.keys(TEAM_PARAMS).sort();
+
+// Team name normalization for Odds API inconsistencies
+const TEAM_NAME_MAP = {};
+function normalizeTeamName(n) { return TEAM_NAME_MAP[n] || n; }
+
+// ── Simulation ────────────────────────────────────────────────────────────────
+function randNormal(mean, std) {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return mean + std * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function simulateWNBAGame(homeTeam, awayTeam) {
+  const home = TEAM_PARAMS[homeTeam];
+  const away = TEAM_PARAMS[awayTeam];
+
+  // Multiplicative efficiency adjustment
+  const homeEff = (home.ortg / LEAGUE_AVG) * (away.drtg / LEAGUE_AVG) * LEAGUE_AVG;
+  const awayEff = (away.ortg / LEAGUE_AVG) * (home.drtg / LEAGUE_AVG) * LEAGUE_AVG;
+  const pace = (home.pace + away.pace) / 2;
+
+  const homeExpPts = homeEff * pace / 100 + HCA / 2;
+  const awayExpPts = awayEff * pace / 100 - HCA / 2;
+
+  // Quarter-by-quarter simulation (std dev ~7.5 pts per quarter)
+  const Q_STD = 7.5;
+  const homeQpts = [], awayQpts = [];
+  for (let q = 0; q < 4; q++) {
+    homeQpts.push(Math.max(8, Math.round(randNormal(homeExpPts / 4, Q_STD))));
+    awayQpts.push(Math.max(8, Math.round(randNormal(awayExpPts / 4, Q_STD))));
+  }
+
+  let homeScore = homeQpts.reduce((a, b) => a + b, 0);
+  let awayScore = awayQpts.reduce((a, b) => a + b, 0);
+  const homeH1 = homeQpts[0] + homeQpts[1];
+  const awayH1 = awayQpts[0] + awayQpts[1];
+
+  // OT for ties
+  if (homeScore === awayScore) {
+    const otH = Math.max(0, Math.round(randNormal(homeExpPts / 10, 4)));
+    const otA = Math.max(0, Math.round(randNormal(awayExpPts / 10, 4)));
+    if (otH >= otA) { homeScore += otH + 2; awayScore += otA; }
+    else { awayScore += otA + 2; homeScore += otH; }
+  }
+
+  return { homeScore, awayScore, homeH1, awayH1 };
+}
+
+function runWNBASim(homeTeam, awayTeam) {
+  if (!TEAM_PARAMS[homeTeam] || !TEAM_PARAMS[awayTeam]) return null;
+  const n = 100000;
+  let homeWins = 0, awayWins = 0;
+  let h1HomeWins = 0, h1AwayWins = 0;
+  const homeScores = [], awayScores = [], totals = [], spreads = [], h1Totals = [];
+
+  for (let i = 0; i < n; i++) {
+    const { homeScore, awayScore, homeH1, awayH1 } = simulateWNBAGame(homeTeam, awayTeam);
+    if (homeScore > awayScore) homeWins++; else awayWins++;
+    if (homeH1 > awayH1) h1HomeWins++; else if (awayH1 > homeH1) h1AwayWins++;
+    homeScores.push(homeScore);
+    awayScores.push(awayScore);
+    totals.push(homeScore + awayScore);
+    spreads.push(homeScore - awayScore);
+    h1Totals.push(homeH1 + awayH1);
+  }
+
+  const avg = arr => arr.reduce((a, b) => a + b, 0) / n;
+  const pct = (arr, fn) => (arr.filter(fn).length / n * 100).toFixed(1);
+  const fmt = (v, d = 1) => parseFloat(v).toFixed(d);
+
+  const avgTotal = avg(totals);
+  const avgH1 = avg(h1Totals);
+  const avgSpread = avg(spreads);
+
+  // Round total line to nearest 0.5
+  const totalLine = Math.round(avgTotal * 2) / 2;
+  const h1Line = Math.round(avgH1 * 2) / 2;
+
+  const scoreFreq = {};
+  for (let i = 0; i < n; i++) {
+    const k = awayScores[i] + "-" + homeScores[i];
+    scoreFreq[k] = (scoreFreq[k] || 0) + 1;
+  }
+  const topScores = Object.entries(scoreFreq).sort((a, b) => b[1] - a[1]).slice(0, 8)
+    .map(([score, count]) => ({ score, count, pct: ((count / n) * 100).toFixed(1) }));
+
+  return {
+    homeTeam, awayTeam,
+    hWPct: fmt(homeWins / n * 100), aWPct: fmt(awayWins / n * 100),
+    hWins: homeWins, aWins: awayWins,
+    avgHome: fmt(avg(homeScores)), avgAway: fmt(avg(awayScores)),
+    avgTotal: fmt(avgTotal), avgH1: fmt(avgH1), avgSpread: fmt(avgSpread),
+    totalLine, h1Line,
+    overPct: pct(totals, v => v > totalLine),
+    underPct: pct(totals, v => v < totalLine),
+    over155Pct: pct(totals, v => v > 155), under155Pct: pct(totals, v => v < 155),
+    over160Pct: pct(totals, v => v > 160), under160Pct: pct(totals, v => v < 160),
+    over165Pct: pct(totals, v => v > 165), under165Pct: pct(totals, v => v < 165),
+    over170Pct: pct(totals, v => v > 170), under170Pct: pct(totals, v => v < 170),
+    over175Pct: pct(totals, v => v > 175), under175Pct: pct(totals, v => v < 175),
+    h1Over75Pct: pct(h1Totals, v => v > 75), h1Under75Pct: pct(h1Totals, v => v < 75),
+    h1Over80Pct: pct(h1Totals, v => v > 80), h1Under80Pct: pct(h1Totals, v => v < 80),
+    h1Over85Pct: pct(h1Totals, v => v > 85), h1Under85Pct: pct(h1Totals, v => v < 85),
+    h1HomeWPct: fmt(h1HomeWins / n * 100), h1AwayWPct: fmt(h1AwayWins / n * 100),
+    homeSpread35Pct: pct(spreads, v => v > 3.5),  awaySpread35Pct: pct(spreads, v => v < -3.5),
+    homeSpread55Pct: pct(spreads, v => v > 5.5),  awaySpread55Pct: pct(spreads, v => v < -5.5),
+    homeSpread75Pct: pct(spreads, v => v > 7.5),  awaySpread75Pct: pct(spreads, v => v < -7.5),
+    homeSpread105Pct: pct(spreads, v => v > 10.5), awaySpread105Pct: pct(spreads, v => v < -10.5),
+    topScores,
+  };
+}
+
+// ── Odds API ──────────────────────────────────────────────────────────────────
+function formatAge(ts) {
+  const mins = Math.floor((Date.now() - ts) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return mins + "m ago";
+  const hrs = Math.floor(mins / 60);
+  return hrs + "h " + (mins % 60) + "m ago";
+}
+
+async function fetchWNBAGames(apiKey, { force = false } = {}) {
+  if (!force) {
+    try {
+      const cached = JSON.parse(localStorage.getItem(ODDS_CACHE_KEY) || "null");
+      if (cached && Date.now() - cached.ts < CACHE_TTL) return cached;
+    } catch(e) {}
+  }
+  const url = "https://api.the-odds-api.com/v4/sports/" + SPORT_KEY + "/odds/?apiKey="
+    + apiKey + "&regions=us&markets=h2h,spreads,totals&oddsFormat=american&bookmakers=fanduel,draftkings";
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("API error: " + res.status);
+  const data = await res.json();
+  const result = { ts: Date.now(), data };
+  localStorage.setItem(ODDS_CACHE_KEY, JSON.stringify(result));
+  return result;
+}
+
+function parseOddsGame(game) {
+  const h2h = {}, spread = {}, total = {};
+  (game.bookmakers || []).forEach(bm => {
+    (bm.markets || []).forEach(mkt => {
+      if (mkt.key === "h2h") {
+        mkt.outcomes.forEach(o => {
+          if (o.name === game.home_team) h2h.home = o.price;
+          else h2h.away = o.price;
+        });
+      }
+      if (mkt.key === "spreads") {
+        mkt.outcomes.forEach(o => {
+          if (o.name === game.home_team) { spread.homePoint = o.point; spread.homePrice = o.price; }
+          else { spread.awayPoint = o.point; spread.awayPrice = o.price; }
+        });
+      }
+      if (mkt.key === "totals") {
+        mkt.outcomes.forEach(o => {
+          if (o.name === "Over") { total.line = o.point; total.overPrice = o.price; }
+          else { total.underPrice = o.price; }
+        });
+      }
+    });
+  });
+  if (!h2h.home && !h2h.away) return null;
+  return {
+    id: game.id,
+    homeTeam: normalizeTeamName(game.home_team),
+    awayTeam: normalizeTeamName(game.away_team),
+    commenceTime: game.commence_time,
+    h2h, spread, total,
+  };
+}
+
+// ── Gist helpers ──────────────────────────────────────────────────────────────
+async function gistRead(token) {
+  const res = await fetch("https://api.github.com/gists/" + GIST_ID, { headers: { Authorization: "token " + token } });
+  if (!res.ok) throw new Error("Gist read failed");
+  const data = await res.json();
+  return JSON.parse((data.files[GIST_FILE] || {}).content || "[]");
+}
+async function gistWrite(token, bets) {
+  await fetch("https://api.github.com/gists/" + GIST_ID, {
+    method: "PATCH",
+    headers: { Authorization: "token " + token, "Content-Type": "application/json" },
+    body: JSON.stringify({ files: { [GIST_FILE]: { content: JSON.stringify(bets, null, 2) } } }),
+  });
+}
+
+// ── Odds helpers ──────────────────────────────────────────────────────────────
+function fmtOdds(v) {
+  if (v == null) return "—";
+  return v > 0 ? "+" + v : String(v);
+}
+function impliedProb(odds) {
+  if (!odds) return 0;
+  return odds < 0 ? (-odds / (-odds + 100)) * 100 : (100 / (odds + 100)) * 100;
+}
+function tierToUnits(t) { return t==="LOCK"?2:t==="HIGH"?1.5:1; }
+function tierColor(t, T) { return t==="LOCK"?T.red:t==="HIGH"?T.green:t==="LEAN"?T.gold:T.muted; }
+
+// ── Auto-resolve ──────────────────────────────────────────────────────────────
+async function fetchScores(oddsKey) {
+  try {
+    const cached = JSON.parse(localStorage.getItem(SCORES_CACHE_KEY) || "null");
+    if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data;
+  } catch(e) {}
+  const res = await fetch(
+    "https://api.the-odds-api.com/v4/sports/" + SPORT_KEY + "/scores/?daysFrom=3&apiKey=" + oddsKey
+  );
+  if (!res.ok) throw new Error("scores API error: " + res.status);
+  const data = await res.json();
+  localStorage.setItem(SCORES_CACHE_KEY, JSON.stringify({ ts: Date.now(), data }));
+  return data;
+}
+
+async function autoResolveBets(bets, oddsKey) {
+  const pending = bets.filter(b => b.result === "pending" && b.sport === "WNBA");
+  if (!pending.length || !oddsKey) return bets;
+
+  const scoreMap = {};
+  try {
+    const scores = await fetchScores(oddsKey);
+    const today = new Date().toLocaleDateString("en-CA");
+    scores.forEach(g => {
+      if (g.completed !== true || !g.scores || !g.scores.length) return;
+      const commenceTime = new Date(g.commence_time).getTime();
+      if (Date.now() - commenceTime < 3 * 60 * 60 * 1000) return;
+      if (new Date(g.commence_time).toLocaleDateString("en-CA") !== today) return;
+      scoreMap[g.id] = g;
+      scoreMap[g.home_team + "|" + g.away_team] = g;
+      scoreMap[g.away_team + "|" + g.home_team] = g;
+    });
+  } catch(e) {}
+
+  return bets.map(bet => {
+    if (bet.result !== "pending" || bet.sport !== "WNBA") return bet;
+    const game = scoreMap[bet.gameId] || scoreMap[bet.homeTeam + "|" + bet.awayTeam];
+    if (!game || game.completed !== true) return bet;
+
+    const homeScore = parseInt((game.scores.find(s => s.name === game.home_team) || {}).score || "0");
+    const awayScore = parseInt((game.scores.find(s => s.name !== game.home_team) || {}).score || "0");
+
+    let result = "loss";
+    const market = bet.market.toLowerCase();
+
+    if (market.includes(" ml")) {
+      const pickedHome = bet.market.includes(game.home_team);
+      if (pickedHome && homeScore > awayScore) result = "win";
+      else if (!pickedHome && awayScore > homeScore) result = "win";
+      else if (homeScore === awayScore) result = "push";
+    } else if (market.startsWith("over")) {
+      const line = parseFloat(bet.market.match(/[\d.]+/) || [0]);
+      if (homeScore + awayScore > line) result = "win";
+      else if (homeScore + awayScore === line) result = "push";
+    } else if (market.startsWith("under")) {
+      const line = parseFloat(bet.market.match(/[\d.]+/) || [0]);
+      if (homeScore + awayScore < line) result = "win";
+      else if (homeScore + awayScore === line) result = "push";
+    } else {
+      // Spread: "{team} -X.5" or "{team} +X.5"
+      const pointMatch = bet.market.match(/([+-][\d.]+)$/);
+      if (pointMatch) {
+        const point = parseFloat(pointMatch[1]);
+        const pickedHome = bet.market.includes(game.home_team);
+        const margin = homeScore - awayScore;
+        if (pickedHome && margin + point > 0) result = "win";
+        else if (!pickedHome && -margin + (-point) > 0) result = "win";
+        else if ((pickedHome ? margin + point : -margin + (-point)) === 0) result = "push";
+      }
+    }
+
+    return { ...bet, result, resolvedAt: new Date().toISOString(), finalScore: homeScore + "-" + awayScore };
+  });
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+function calcStats(bets) {
+  const resolved = bets.filter(b => b.result !== "pending");
+  const wins = resolved.filter(b => b.result === "win");
+  const losses = resolved.filter(b => b.result === "loss");
+  const pushes = resolved.filter(b => b.result === "push");
+  const totalUnits = resolved.reduce((a, b) => a + (b.result === "win" ? b.units : b.result === "loss" ? -b.units : 0), 0);
+  const bySport = {};
+  resolved.forEach(b => {
+    if (!bySport[b.sport]) bySport[b.sport] = { wins:0, losses:0, pushes:0, units:0 };
+    bySport[b.sport].units += b.result === "win" ? b.units : b.result === "loss" ? -b.units : 0;
+    if (b.result === "win") bySport[b.sport].wins++;
+    else if (b.result === "loss") bySport[b.sport].losses++;
+    else bySport[b.sport].pushes++;
+  });
+  return {
+    total: resolved.length, wins: wins.length, losses: losses.length, pushes: pushes.length,
+    winPct: resolved.length ? ((wins.length / (resolved.length - pushes.length)) * 100).toFixed(1) : "—",
+    totalUnits: totalUnits.toFixed(1),
+    pending: bets.filter(b => b.result === "pending").length,
+    bySport,
+  };
+}
+
+// ── Extract top bets ──────────────────────────────────────────────────────────
+function extractTopBets(agg, game) {
+  const bets = [];
+  const gameId = game ? game.id : (agg.homeTeam + "|" + agg.awayTeam);
+  const homeTeam = agg.homeTeam || game.homeTeam;
+  const awayTeam = agg.awayTeam || game.awayTeam;
+  const hasOdds = game && game.h2h && game.h2h.home;
+  const hImp = hasOdds ? impliedProb(game.h2h.home) : 0;
+  const aImp = hasOdds ? impliedProb(game.h2h.away) : 0;
+  const totalLine = hasOdds && game.total.line ? game.total.line : agg.totalLine;
+  const spreadLine = hasOdds && game.spread.homePoint != null ? game.spread.homePoint : null;
+
+  function push(market, simPct, bookOdds, tier) {
+    bets.push({
+      id: Date.now() + "_" + Math.random().toString(36).slice(2, 7),
+      sport: "WNBA", gameId, homeTeam, awayTeam,
+      market, simPct, bookOdds,
+      tier, units: tierToUnits(tier),
+      loggedAt: new Date().toISOString(),
+      result: "pending", resolvedAt: null, finalScore: null,
+      gameDate: new Date().toLocaleDateString("en-CA"),
+    });
+  }
+
+  const checks = [
+    { market: homeTeam + " ML", pct: parseFloat(agg.hWPct), imp: hImp, odds: hasOdds ? fmtOdds(game.h2h.home) : "—" },
+    { market: awayTeam + " ML", pct: parseFloat(agg.aWPct), imp: aImp, odds: hasOdds ? fmtOdds(game.h2h.away) : "—" },
+    { market: "Over " + totalLine + " Total", pct: parseFloat(agg.overPct), imp: 0, odds: hasOdds ? fmtOdds(game.total.overPrice) : "—" },
+    { market: "Under " + totalLine + " Total", pct: parseFloat(agg.underPct), imp: 0, odds: hasOdds ? fmtOdds(game.total.underPrice) : "—" },
+    { market: homeTeam + " H1 ML", pct: parseFloat(agg.h1HomeWPct), imp: 0, odds: "~ML" },
+    { market: awayTeam + " H1 ML", pct: parseFloat(agg.h1AwayWPct), imp: 0, odds: "~ML" },
+    { market: "Over " + agg.h1Line + " H1 Total", pct: parseFloat(agg.h1Over80Pct), imp: 0, odds: "~-110" },
+    { market: "Under " + agg.h1Line + " H1 Total", pct: parseFloat(agg.h1Under80Pct), imp: 0, odds: "~-110" },
+  ];
+
+  // Add spread if available
+  if (spreadLine != null) {
+    const favTeam = spreadLine < 0 ? homeTeam : awayTeam;
+    const dogTeam = spreadLine < 0 ? awayTeam : homeTeam;
+    const favPt = spreadLine < 0 ? spreadLine : game.spread.awayPoint;
+    const dogPt = spreadLine < 0 ? game.spread.awayPoint : spreadLine;
+    const favCoverPct = spreadLine < 0
+      ? parseFloat(agg["homeSpread" + Math.abs(favPt).toString().replace(".", "") + "Pct"] || agg.homeSpread55Pct)
+      : parseFloat(agg["awaySpread" + Math.abs(favPt).toString().replace(".", "") + "Pct"] || agg.awaySpread55Pct);
+    checks.push(
+      { market: favTeam + " " + (favPt > 0 ? "+" : "") + favPt, pct: favCoverPct, imp: 0, odds: hasOdds ? fmtOdds(spreadLine < 0 ? game.spread.homePrice : game.spread.awayPrice) : "—" },
+      { market: dogTeam + " " + (dogPt > 0 ? "+" : "") + dogPt, pct: 100 - favCoverPct, imp: 0, odds: hasOdds ? fmtOdds(spreadLine < 0 ? game.spread.awayPrice : game.spread.homePrice) : "—" },
+    );
+  }
+
+  checks.forEach(({ market, pct, imp, odds }) => {
+    if (pct >= 70) push(market, pct.toFixed(1) + "%", odds, "LOCK");
+    else if (pct >= 60) push(market, pct.toFixed(1) + "%", odds, "HIGH");
+    else if (pct > 52 && pct > imp + 3) push(market, pct.toFixed(1) + "%", odds, "LEAN");
+  });
+
+  return bets.sort((a, b) => parseFloat(b.simPct) - parseFloat(a.simPct));
+}
+
+// ── Bet Logger ────────────────────────────────────────────────────────────────
+function useBetLogger(ghToken, oddsKey) {
+  const [bets, setBets] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!ghToken) return;
+    gistRead(ghToken).then(data => {
+      if (oddsKey) {
+        autoResolveBets(data, oddsKey).then(resolved => {
+          setBets(resolved);
+          setLoaded(true);
+          if (resolved.some((b, i) => b.result !== data[i]?.result)) {
+            gistWrite(ghToken, resolved).catch(console.error);
+          }
+        });
+      } else {
+        setBets(data);
+        setLoaded(true);
+      }
+    }).catch(e => { console.error(e); setLoaded(true); });
+  }, [ghToken]);
+
+  async function logAllBets(newBets) {
+    if (!ghToken || !newBets.length) return;
+    setSaving(true);
+    const today = new Date().toLocaleDateString("en-CA");
+    const existingKeys = new Set(bets.filter(b => b.gameDate === today).map(b => b.gameId + "|" + b.market));
+    const toAdd = newBets.filter(b => !existingKeys.has(b.gameId + "|" + b.market));
+    if (!toAdd.length) { setSaving(false); return; }
+    const updated = [...bets, ...toAdd];
+    setBets(updated);
+    try { await gistWrite(ghToken, updated); } catch(e) { console.error(e); }
+    setSaving(false);
+  }
+
+  async function removeBet(id) {
+    if (!ghToken) return;
+    const updated = bets.filter(b => b.id !== id);
+    setBets(updated);
+    try { await gistWrite(ghToken, updated); } catch(e) { console.error(e); }
+  }
+
+  const stats = calcStats(bets);
+  const today = new Date().toLocaleDateString("en-CA");
+  const isLogged = (gameId, market) => bets.some(b => b.gameId === gameId && b.market === market && b.gameDate === today);
+
+  return { bets, stats, logAllBets, removeBet, saving, loaded, isLogged };
+}
+
+// ── Shared UI Components ──────────────────────────────────────────────────────
+function StatCard({ label, value, sub, color }) {
+  return (
+    <div style={S.card}>
+      <div style={S.sL}>{label}</div>
+      <div style={{ ...S.sV, color: color || T.text }}>{value}</div>
+      {sub && <div style={S.sSub}>{sub}</div>}
+    </div>
+  );
+}
+
+function BetRow({ market, simPct, bookOdds, sig }) {
+  const sc = sig==="LOCK"?T.red:sig==="HIGH"?T.green:sig==="LEAN"?T.gold:T.muted;
+  return (
+    <div style={S.betRow}>
+      <span style={{ color:T.muted, minWidth:200, fontSize:10 }}>{market}</span>
+      <span style={{ flex:1, textAlign:"center", fontSize:11 }}>{simPct}</span>
+      <span style={{ color:T.muted, flex:1, textAlign:"center", fontSize:10 }}>{bookOdds}</span>
+      <span style={S.pill(sc)}>{sig}</span>
+    </div>
+  );
+}
+
+function sigLabel(simPct, imp=0, lockT=70, highT=60, leanT=52) {
+  const s = parseFloat(simPct);
+  if (s >= lockT) return "LOCK";
+  if (s >= highT) return "HIGH";
+  if (s > leanT && (imp===0 || s > imp + 3)) return "LEAN";
+  return "PASS";
+}
+
+function TopBetCard({ bet, logged }) {
+  const tc = tierColor(bet.tier, T);
+  return (
+    <div style={{ ...S.card, borderLeft:"3px solid "+tc, marginBottom:8 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:6 }}>
+        <div>
+          <div style={{ fontSize:9, color:T.muted, marginBottom:3 }}>{bet.homeTeam} vs {bet.awayTeam}</div>
+          <div style={{ fontSize:13, fontWeight:700, color:T.text }}>{bet.market}</div>
+          <div style={{ display:"flex", gap:10, marginTop:5, flexWrap:"wrap" }}>
+            <span style={{ fontSize:10, color:tc, fontWeight:700 }}>{bet.simPct}</span>
+            <span style={{ fontSize:10, color:T.muted }}>{bet.bookOdds}</span>
+            <span style={{ background:tc+"22", border:"1px solid "+tc+"44", color:tc, fontSize:"8px", fontWeight:700, padding:"1px 6px", borderRadius:2 }}>{bet.tier}</span>
+            <span style={{ background:T.purple+"1a", border:"1px solid "+T.purple+"33", color:T.purple, fontSize:"8px", padding:"1px 6px", borderRadius:2 }}>{bet.units}u</span>
+          </div>
+        </div>
+        <div style={{ background:logged?T.green+"22":T.border+"44", border:"1px solid "+(logged?T.green:T.border), color:logged?T.green:T.muted, borderRadius:4, padding:"5px 10px", fontSize:9, fontWeight:700, letterSpacing:"1px" }}>
+          {logged ? "✓ LOGGED" : "PENDING"}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BetHistoryRow({ bet }) {
+  const rc = bet.result==="win"?T.green:bet.result==="loss"?T.red:bet.result==="push"?T.muted:T.yellow;
+  const tc = tierColor(bet.tier, T);
+  return (
+    <div style={{ ...S.betRow, flexWrap:"wrap" }}>
+      <div style={{ minWidth:120, fontSize:9, color:T.muted }}>{bet.gameDate} · {bet.sport}</div>
+      <div style={{ flex:2, fontSize:10, color:T.text }}>{bet.market}</div>
+      <div style={{ fontSize:9, color:T.muted, flex:1 }}>{bet.homeTeam} vs {bet.awayTeam}</div>
+      <div style={{ fontSize:9, color:tc }}>{bet.tier} · {bet.units}u</div>
+      <div style={{ fontSize:10, color:T.muted }}>{bet.simPct}</div>
+      <div style={{ minWidth:50, textAlign:"right" }}>
+        <span style={{ background:rc+"22", border:"1px solid "+rc+"44", color:rc, fontSize:"8px", fontWeight:700, padding:"2px 6px", borderRadius:2 }}>
+          {bet.result==="pending"?"PENDING":bet.result==="win"?"WIN":bet.result==="loss"?"LOSS":"PUSH"}
+        </span>
+      </div>
+      {bet.finalScore && <div style={{ fontSize:9, color:T.muted, width:"100%", marginTop:3 }}>Final: {bet.finalScore}</div>}
+    </div>
+  );
+}
+
+function StatsBanner({ stats }) {
+  if (!stats || stats.total === 0) return null;
+  const unitColor = parseFloat(stats.totalUnits) >= 0 ? T.green : T.red;
+  return (
+    <div style={{ background:T.navy, border:"1px solid "+T.border, borderRadius:6, padding:"12px 16px", display:"flex", gap:20, flexWrap:"wrap", alignItems:"center", marginBottom:16 }}>
+      <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Win %</div><div style={{ fontSize:20, fontWeight:700, color:T.green }}>{stats.winPct}{stats.winPct!=="—"?"%":""}</div></div>
+      <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Record</div><div style={{ fontSize:14, fontWeight:700 }}><span style={{ color:T.green }}>{stats.wins}W</span>-<span style={{ color:T.red }}>{stats.losses}L</span>-<span style={{ color:T.muted }}>{stats.pushes}P</span></div></div>
+      <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Units</div><div style={{ fontSize:20, fontWeight:700, color:unitColor }}>{parseFloat(stats.totalUnits)>=0?"+":""}{stats.totalUnits}u</div></div>
+      <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Pending</div><div style={{ fontSize:14, fontWeight:700, color:T.yellow }}>{stats.pending}</div></div>
+    </div>
+  );
+}
+
+// ── API Key Gate ──────────────────────────────────────────────────────────────
+function ApiKeyGate({ onKeys }) {
+  const [ok, setOk] = useState(localStorage.getItem("sharp_odds_key") || "");
+  const [gt, setGt] = useState(localStorage.getItem("sharp_gh_token") || "");
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit() {
+    if (!ok.trim() || !gt.trim()) { setErr("Both fields required."); return; }
+    setLoading(true); setErr("");
+    try {
+      const r = await fetch("https://api.github.com/gists/" + GIST_ID, { headers: { Authorization: "token " + gt.trim() } });
+      if (!r.ok) throw new Error("GitHub token invalid");
+      localStorage.setItem("sharp_odds_key", ok.trim());
+      localStorage.setItem("sharp_gh_token", gt.trim());
+      onKeys(ok.trim(), gt.trim());
+    } catch(e) { setErr(e.message); }
+    setLoading(false);
+  }
+
+  return (
+    <div style={{ maxWidth:480, margin:"60px auto", padding:"0 20px" }}>
+      <div style={{ background:T.navy, border:"1px solid "+T.border, borderRadius:8, padding:24 }}>
+        <div style={{ fontSize:"8px", letterSpacing:"2px", color:T.accent, marginBottom:16 }}>SHARP SIM · WNBA · API SETUP</div>
+        <div style={{ marginBottom:12 }}>
+          <label style={{ fontSize:10, color:T.muted, display:"block", marginBottom:4 }}>THE ODDS API KEY</label>
+          <input style={S.input} value={ok} onChange={e => setOk(e.target.value)} placeholder="Enter Odds API key..." />
+        </div>
+        <div style={{ marginBottom:16 }}>
+          <label style={{ fontSize:10, color:T.muted, display:"block", marginBottom:4 }}>GITHUB TOKEN</label>
+          <input style={S.input} type="password" value={gt} onChange={e => setGt(e.target.value)} placeholder="Enter GitHub token..." />
+        </div>
+        {err && <div style={{ color:T.red, fontSize:10, marginBottom:10 }}>{err}</div>}
+        <button style={{ ...S.btn(true, T.accent), marginBottom:0 }} onClick={handleSubmit} disabled={loading}>
+          {loading ? "Connecting..." : "Connect →"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Game Sim View ─────────────────────────────────────────────────────────────
+function GameSimView({ game, agg, running, onRun, runCount, betLogger }) {
+  const hasOdds = game && game.h2h && game.h2h.home;
+  const hImp = hasOdds ? impliedProb(game.h2h.home) : 0;
+  const aImp = hasOdds ? impliedProb(game.h2h.away) : 0;
+  const totalLine = hasOdds && game.total.line ? game.total.line : (agg ? agg.totalLine : 165);
+  const h1Line = agg ? agg.h1Line : 80;
+  const commenceStr = game ? new Date(game.commenceTime).toLocaleString("en-US", { weekday:"short", month:"short", day:"numeric", hour:"numeric", minute:"2-digit", timeZoneName:"short" }) : "";
+  const topBets = agg ? extractTopBets(agg, game) : [];
+
+  return (
+    <div>
+      <div style={S.header}>
+        <div style={S.glow}/>
+        <div style={S.badge(T.accent)}>🏀 WNBA · POSSESSION SIM</div>
+        <div style={S.title}>
+          <span>{game ? game.awayTeam : "—"}</span>
+          <span style={S.vs}>@</span>
+          <span>{game ? game.homeTeam : "—"}</span>
+        </div>
+        <div style={S.meta}>{commenceStr || "Select a game"}</div>
+        <div style={S.modelTag(T.accent)}>POSSESSION-BY-POSSESSION · OffRtg/DefRtg/Pace · 100,000 ITERATIONS</div>
+      </div>
+
+      <div style={S.body}>
+        {game && (
+          <button style={S.btn(running, T.accent)} onClick={onRun} disabled={running}>
+            {running ? "⟳ Running Possession Sim (100,000 iterations)..." : ("↻ Re-Run Simulation" + (runCount > 0 ? " (Run #" + runCount + ")" : ""))}
+          </button>
+        )}
+
+        {hasOdds && (
+          <div style={S.sec}>
+            <div style={S.secLabel}>Live Odds (The Odds API)</div>
+            <div style={S.g3}>
+              <div style={S.card}>
+                <div style={S.sL}>{game.awayTeam} ML</div>
+                <div style={{ ...S.sV, color:T.blue, fontSize:20 }}>{fmtOdds(game.h2h.away)}</div>
+                <div style={S.sSub}>Implied: {aImp.toFixed(1)}%</div>
+              </div>
+              <div style={S.card}>
+                <div style={S.sL}>{game.homeTeam} ML</div>
+                <div style={{ ...S.sV, color:T.green, fontSize:20 }}>{fmtOdds(game.h2h.home)}</div>
+                <div style={S.sSub}>Implied: {hImp.toFixed(1)}%</div>
+              </div>
+              <div style={S.card}>
+                <div style={S.sL}>Total O/U</div>
+                <div style={{ ...S.sV, color:T.gold, fontSize:20 }}>{game.total.line || "—"}</div>
+                <div style={S.sSub}>O {fmtOdds(game.total.overPrice)} · U {fmtOdds(game.total.underPrice)}</div>
+              </div>
+            </div>
+            {game.spread && game.spread.homePoint != null && (
+              <div style={{ ...S.card, marginTop:9, display:"flex", gap:20, flexWrap:"wrap" }}>
+                <div><div style={S.sL}>{game.awayTeam} Spread</div><div style={{ fontSize:14, fontWeight:700, color:T.blue }}>{game.spread.awayPoint > 0 ? "+" : ""}{game.spread.awayPoint} <span style={{ color:T.muted, fontSize:11 }}>{fmtOdds(game.spread.awayPrice)}</span></div></div>
+                <div><div style={S.sL}>{game.homeTeam} Spread</div><div style={{ fontSize:14, fontWeight:700, color:T.green }}>{game.spread.homePoint > 0 ? "+" : ""}{game.spread.homePoint} <span style={{ color:T.muted, fontSize:11 }}>{fmtOdds(game.spread.homePrice)}</span></div></div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {game && (
+          <div style={S.sec}>
+            <div style={S.secLabel}>Model Inputs (2025 Season)</div>
+            <div style={S.card}>
+              <table style={S.table}>
+                <thead><tr>
+                  <th style={S.th}>Team</th>
+                  <th style={S.th}>Role</th>
+                  <th style={S.th}>Off Rtg</th>
+                  <th style={S.th}>Def Rtg</th>
+                  <th style={S.th}>Net Rtg</th>
+                  <th style={S.th}>Pace</th>
+                </tr></thead>
+                <tbody>
+                  {[{ t:game.awayTeam, role:"Away", c:T.blue }, { t:game.homeTeam, role:"Home", c:T.green }].map(({ t, role, c }) => {
+                    const p = TEAM_PARAMS[t] || {};
+                    return (
+                      <tr key={t}>
+                        <td style={{ ...S.td, color:c, fontWeight:700 }}>{t}</td>
+                        <td style={S.td}>{role}</td>
+                        <td style={S.td}>{p.ortg}</td>
+                        <td style={S.td}>{p.drtg}</td>
+                        <td style={{ ...S.td, color: p.ortg - p.drtg >= 0 ? T.green : T.red }}>{p.ortg - p.drtg >= 0 ? "+" : ""}{p.ortg - p.drtg}</td>
+                        <td style={S.td}>{p.pace}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {agg && (
+          <div>
+            <div style={S.sec}>
+              <div style={S.secLabel}>Win Probabilities (n=100,000)</div>
+              <div style={S.g2}>
+                <StatCard label={agg.awayTeam + " Win"} value={agg.aWPct + "%"} sub={agg.aWins.toLocaleString() + " / 100,000 sims"} color={T.blue}/>
+                <StatCard label={agg.homeTeam + " Win"} value={agg.hWPct + "%"} sub={agg.hWins.toLocaleString() + " / 100,000 sims"} color={T.green}/>
+              </div>
+              <div style={S.barWrap}>
+                <div style={{ width:agg.aWPct+"%", background:"linear-gradient(90deg,#1d4ed8,#3b82f6)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700, color:T.text }}>
+                  {parseFloat(agg.aWPct)>8 ? agg.awayTeam+" "+agg.aWPct+"%" : ""}
+                </div>
+                <div style={{ width:agg.hWPct+"%", background:"linear-gradient(90deg,#16a34a,#22c55e)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700, color:"#070b14" }}>
+                  {parseFloat(agg.hWPct)>8 ? agg.homeTeam+" "+agg.hWPct+"%" : ""}
+                </div>
+              </div>
+            </div>
+
+            <div style={S.sec}>
+              <div style={S.secLabel}>Scoring</div>
+              <div style={S.g3}>
+                <StatCard label={agg.awayTeam + " Avg Pts"} value={agg.avgAway} color={T.blue}/>
+                <StatCard label="Avg Total" value={agg.avgTotal} color={T.gold}/>
+                <StatCard label={agg.homeTeam + " Avg Pts"} value={agg.avgHome} color={T.green}/>
+              </div>
+              <div style={{ ...S.g2, marginTop:10 }}>
+                <StatCard label="Avg H1 Total" value={agg.avgH1} color={T.purple}/>
+                <StatCard label="Avg Spread (Home)" value={(parseFloat(agg.avgSpread)>=0?"+":"")+agg.avgSpread} color={parseFloat(agg.avgSpread)>=0?T.green:T.blue}/>
+              </div>
+              <div style={{ ...S.card, marginTop:9 }}>
+                <div style={S.sL}>Score Distribution — Away @ Home (Top 8)</div>
+                {agg.topScores.map(({ score, count, pct }) => (
+                  <div key={score} style={{ marginTop:7 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:2 }}>
+                      <span>{score}</span><span style={{ color:T.muted }}>{count.toLocaleString()}× ({pct}%)</span>
+                    </div>
+                    <div style={{ height:4, background:T.border, borderRadius:2 }}>
+                      <div style={{ height:"100%", width:Math.min(parseFloat(pct)*5,100)+"%", background:parseFloat(pct)>=8?T.green:T.blue, borderRadius:2 }}/>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={S.sec}>
+              <div style={S.secLabel}>Betting Signals</div>
+
+              <div style={S.card}>
+                <div style={{ ...S.sL, marginBottom:8 }}>Full Game</div>
+                <div style={{ ...S.betRow, fontSize:"8px", fontWeight:700 }}>
+                  <span style={{ color:T.muted, minWidth:200 }}>MARKET</span>
+                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>SIM PROB</span>
+                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>LIVE ODDS</span>
+                  <span style={{ minWidth:64, textAlign:"right", color:T.muted }}>SIGNAL</span>
+                </div>
+                <BetRow market={agg.awayTeam+" ML"} simPct={agg.aWPct+"%"} bookOdds={fmtOdds(hasOdds?game.h2h.away:null)} sig={sigLabel(agg.aWPct, aImp)}/>
+                <BetRow market={agg.homeTeam+" ML"} simPct={agg.hWPct+"%"} bookOdds={fmtOdds(hasOdds?game.h2h.home:null)} sig={sigLabel(agg.hWPct, hImp)}/>
+                {hasOdds && game.spread.homePoint != null && <>
+                  <BetRow market={agg.awayTeam+" "+game.spread.awayPoint} simPct={agg.awaySpread55Pct+"%"} bookOdds={fmtOdds(game.spread.awayPrice)} sig={sigLabel(agg.awaySpread55Pct, 0)}/>
+                  <BetRow market={agg.homeTeam+" "+game.spread.homePoint} simPct={agg.homeSpread55Pct+"%"} bookOdds={fmtOdds(game.spread.homePrice)} sig={sigLabel(agg.homeSpread55Pct, 0)}/>
+                </>}
+                <BetRow market={"Over "+totalLine+" Total"} simPct={agg.overPct+"%"} bookOdds={fmtOdds(hasOdds?game.total.overPrice:null)} sig={sigLabel(agg.overPct)}/>
+                <BetRow market={"Under "+totalLine+" Total"} simPct={agg.underPct+"%"} bookOdds={fmtOdds(hasOdds?game.total.underPrice:null)} sig={sigLabel(agg.underPct)}/>
+                <BetRow market="Over 160 Total" simPct={agg.over160Pct+"%"} bookOdds="~Market" sig={sigLabel(agg.over160Pct)}/>
+                <BetRow market="Over 165 Total" simPct={agg.over165Pct+"%"} bookOdds="~Market" sig={sigLabel(agg.over165Pct)}/>
+                <BetRow market="Over 170 Total" simPct={agg.over170Pct+"%"} bookOdds="~Market" sig={sigLabel(agg.over170Pct, 0, 55, 42, 35)}/>
+                <BetRow market="Under 160 Total" simPct={agg.under160Pct+"%"} bookOdds="~Market" sig={sigLabel(agg.under160Pct)}/>
+                <BetRow market="Under 155 Total" simPct={agg.under155Pct+"%"} bookOdds="~Market" sig={sigLabel(agg.under155Pct, 0, 55, 42, 35)}/>
+              </div>
+
+              <div style={{ ...S.card, marginTop:10 }}>
+                <div style={{ ...S.sL, marginBottom:8 }}>First Half</div>
+                <div style={{ ...S.betRow, fontSize:"8px", fontWeight:700 }}>
+                  <span style={{ color:T.muted, minWidth:200 }}>MARKET</span>
+                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>SIM PROB</span>
+                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>BOOK ODDS</span>
+                  <span style={{ minWidth:64, textAlign:"right", color:T.muted }}>SIGNAL</span>
+                </div>
+                <BetRow market={agg.awayTeam+" H1 ML"} simPct={agg.h1AwayWPct+"%"} bookOdds="~ML" sig={sigLabel(agg.h1AwayWPct, aImp)}/>
+                <BetRow market={agg.homeTeam+" H1 ML"} simPct={agg.h1HomeWPct+"%"} bookOdds="~ML" sig={sigLabel(agg.h1HomeWPct, hImp)}/>
+                <BetRow market={"Over "+h1Line+" H1 Total"} simPct={agg.h1Over80Pct+"%"} bookOdds="~-110" sig={sigLabel(agg.h1Over80Pct)}/>
+                <BetRow market={"Under "+h1Line+" H1 Total"} simPct={agg.h1Under80Pct+"%"} bookOdds="~-110" sig={sigLabel(agg.h1Under80Pct)}/>
+                <BetRow market="Over 75 H1 Total" simPct={agg.h1Over75Pct+"%"} bookOdds="~Market" sig={sigLabel(agg.h1Over75Pct)}/>
+                <BetRow market="Over 85 H1 Total" simPct={agg.h1Over85Pct+"%"} bookOdds="~Market" sig={sigLabel(agg.h1Over85Pct, 0, 55, 42, 35)}/>
+                <div style={{ padding:"8px 0 2px", fontSize:10, color:T.muted }}>
+                  Avg H1 Total: <span style={{ color:T.text, fontWeight:700 }}>{agg.avgH1}</span>
+                </div>
+              </div>
+            </div>
+
+            {topBets.length > 0 && (
+              <div style={S.sec}>
+                <div style={S.secLabel}>Top Signals This Game</div>
+                {topBets.filter(b => b.tier !== "LEAN" || parseFloat(b.simPct) > 55).map(b => (
+                  <TopBetCard key={b.market} bet={b} logged={betLogger.isLogged(b.gameId, b.market)}/>
+                ))}
+              </div>
+            )}
+
+            <div style={{ background:"#0a0f1a", border:"1px solid "+T.purple+"33", borderRadius:6, padding:"11px 14px", fontSize:"10px", color:T.muted, marginTop:18, lineHeight:1.8 }}>
+              <div style={{ color:T.purple, fontWeight:700, fontSize:"9px", letterSpacing:"2px", marginBottom:7 }}>MODEL METHODOLOGY</div>
+              <div><span style={{ color:T.text }}>Possession Model:</span> Quarter-by-quarter simulation using team offensive rating, opponent defensive rating, and pace (possessions per 40 min). Each quarter drawn from a calibrated normal distribution.</div>
+              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Efficiency Adjustment:</span> Multiplicative model — (TeamOrtg / LeagueAvg) × (OppDrtg / LeagueAvg) × LeagueAvg. League average: {LEAGUE_AVG} pts/100 poss.</div>
+              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Home Court:</span> {HCA} point advantage applied to home team expected scoring.</div>
+              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Parameters:</span> 2025 WNBA season team ratings. Expansion teams (Golden State Valkyries, Portland Fire) calibrated to league-average efficiency.</div>
+            </div>
+            <div style={S.disclaimer}>
+              Simulation parameters sourced from 2025 WNBA season statistics. Live odds from The Odds API. Not professional betting advice. Gamble responsibly.
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Top Picks Tab ─────────────────────────────────────────────────────────────
+function TopPicksTab({ simData, games, betLogger }) {
+  const { logAllBets, isLogged, stats, saving } = betLogger;
+
+  const allBets = [];
+  games.forEach(game => {
+    const key = game.homeTeam + "|" + game.awayTeam;
+    const agg = simData[key];
+    if (!agg) return;
+    extractTopBets(agg, game).forEach(b => allBets.push({ ...b, gameTime: game.commenceTime }));
+  });
+  allBets.sort((a, b) => parseFloat(b.simPct) - parseFloat(a.simPct));
+
+  const simsReady = games.filter(g => simData[g.homeTeam + "|" + g.awayTeam]).length;
+  const allSimsReady = simsReady === games.length && games.length > 0;
+
+  const locks = allBets.filter(b => b.tier === "LOCK");
+  const highs = allBets.filter(b => b.tier === "HIGH");
+  const leans = allBets.filter(b => b.tier === "LEAN");
+
+  return (
+    <div style={S.body}>
+      <StatsBanner stats={stats}/>
+
+      {!allSimsReady && (
+        <div style={{ ...S.card, color:T.muted, fontSize:10, textAlign:"center", padding:20 }}>
+          {simsReady}/{games.length} sims complete — visit each game tab to run simulations
+        </div>
+      )}
+
+      {allSimsReady && allBets.length === 0 && (
+        <div style={{ ...S.card, color:T.muted, fontSize:10, textAlign:"center", padding:20 }}>No signals above threshold for today's slate.</div>
+      )}
+
+      {locks.length > 0 && (
+        <div style={S.sec}>
+          <div style={S.secLabel}>🔒 LOCKS ({locks.length})</div>
+          {locks.map(b => <TopBetCard key={b.gameId + b.market} bet={b} logged={isLogged(b.gameId, b.market)}/>)}
+        </div>
+      )}
+      {highs.length > 0 && (
+        <div style={S.sec}>
+          <div style={S.secLabel}>⭐ HIGH CONFIDENCE ({highs.length})</div>
+          {highs.map(b => <TopBetCard key={b.gameId + b.market} bet={b} logged={isLogged(b.gameId, b.market)}/>)}
+        </div>
+      )}
+      {leans.length > 0 && (
+        <div style={S.sec}>
+          <div style={S.secLabel}>LEAN ({leans.length})</div>
+          {leans.map(b => <TopBetCard key={b.gameId + b.market} bet={b} logged={isLogged(b.gameId, b.market)}/>)}
+        </div>
+      )}
+
+      {betLogger.bets.filter(b => b.sport === "WNBA").length > 0 && (
+        <div style={S.sec}>
+          <div style={S.secLabel}>Bet Log — WNBA</div>
+          <div style={S.card}>
+            {betLogger.bets.filter(b => b.sport === "WNBA").slice().reverse().map(b => (
+              <BetHistoryRow key={b.id} bet={b}/>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+function App() {
+  const [oddsKey, setOddsKey] = useState(localStorage.getItem("sharp_odds_key") || "");
+  const [ghToken, setGhToken] = useState(localStorage.getItem("sharp_gh_token") || "");
+  const [games, setGames] = useState([]);
+  const [activeTab, setActiveTab] = useState("top_picks");
+  const [simData, setSimData] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(SIM_CACHE_KEY) || "{}"); } catch(e) { return {}; }
+  });
+  const [runningId, setRunningId] = useState(null);
+  const [runCounts, setRunCounts] = useState({});
+  const [lastFetched, setLastFetched] = useState(() => {
+    try { const c = JSON.parse(localStorage.getItem(ODDS_CACHE_KEY) || "null"); return c ? c.ts : null; } catch(e) { return null; }
+  });
+  const [loadingGames, setLoadingGames] = useState(false);
+  const [gamesError, setGamesError] = useState("");
+
+  const betLogger = useBetLogger(ghToken, oddsKey);
+
+  // App-level auto-log
+  const appAutoLoggedRef = useRef(false);
+  const allSimsReady = games.length > 0 && games.every(g => simData[g.homeTeam + "|" + g.awayTeam]);
+  useEffect(() => {
+    if (!allSimsReady || !betLogger.loaded || appAutoLoggedRef.current) return;
+    const allBets = [];
+    games.forEach(game => {
+      const agg = simData[game.homeTeam + "|" + game.awayTeam];
+      if (!agg) return;
+      extractTopBets(agg, game).forEach(b => allBets.push({ ...b, gameTime: game.commenceTime }));
+    });
+    if (!allBets.length) return;
+    appAutoLoggedRef.current = true;
+    betLogger.logAllBets(allBets);
+  }, [allSimsReady, betLogger.loaded]);
+
+  // Gate: require keys
+  if (!oddsKey || !ghToken) {
+    return (
+      <div style={S.wrap}>
+        <div style={{ ...S.header, padding:"20px 20px 16px" }}>
+          <div style={S.glow}/>
+          <a href="index.html" style={{ fontSize:9, color:T.muted, letterSpacing:"1px" }}>← SHARP SIM</a>
+        </div>
+        <ApiKeyGate onKeys={(ok, gt) => { setOddsKey(ok); setGhToken(gt); loadGames(ok); }}/>
+      </div>
+    );
+  }
+
+  async function loadGames(key, opts = {}) {
+    setLoadingGames(true); setGamesError("");
+    try {
+      const result = await fetchWNBAGames(key || oddsKey, opts);
+      setLastFetched(result.ts);
+      const today = new Date().toLocaleDateString("en-CA");
+      const parsed = (result.data || [])
+        .filter(g => new Date(g.commence_time).toLocaleDateString("en-CA") === today)
+        .map(parseOddsGame).filter(Boolean);
+      setGames(parsed);
+      if (parsed.length > 0 && activeTab === "top_picks") {
+        // auto-sim uncached games
+        const uncached = parsed.filter(g => !simData[g.homeTeam + "|" + g.awayTeam]
+          && TEAM_PARAMS[g.homeTeam] && TEAM_PARAMS[g.awayTeam]);
+        if (uncached.length > 0) {
+          runAutoSim(uncached, 0);
+        }
+      }
+    } catch(e) { setGamesError(e.message); }
+    setLoadingGames(false);
+  }
+
+  function runAutoSim(queue, idx) {
+    if (idx >= queue.length) return;
+    const g = queue[idx];
+    const key = g.homeTeam + "|" + g.awayTeam;
+    setRunningId(key);
+    setTimeout(() => {
+      const result = runWNBASim(g.homeTeam, g.awayTeam);
+      if (result) {
+        setSimData(prev => {
+          const next = { ...prev, [key]: result };
+          localStorage.setItem(SIM_CACHE_KEY, JSON.stringify(next));
+          return next;
+        });
+      }
+      setRunningId(null);
+      runAutoSim(queue, idx + 1);
+    }, 50);
+  }
+
+  useEffect(() => {
+    if (oddsKey) loadGames();
+  }, []);
+
+  function runSim(game) {
+    if (!game || runningId) return;
+    const key = game.homeTeam + "|" + game.awayTeam;
+    setRunningId(key);
+    setTimeout(() => {
+      const result = runWNBASim(game.homeTeam, game.awayTeam);
+      if (result) {
+        setSimData(prev => {
+          const next = { ...prev, [key]: result };
+          localStorage.setItem(SIM_CACHE_KEY, JSON.stringify(next));
+          return next;
+        });
+        setRunCounts(prev => ({ ...prev, [key]: (prev[key] || 0) + 1 }));
+      }
+      setRunningId(null);
+    }, 50);
+  }
+
+  const activeGameIdx = activeTab.startsWith("game_") ? parseInt(activeTab.split("_")[1]) : 0;
+  const isSpecialTab = activeTab === "top_picks";
+  const activeGame = isSpecialTab ? null : games[activeGameIdx];
+  const gameKey = activeGame ? activeGame.homeTeam + "|" + activeGame.awayTeam : null;
+  const topBetCount = (() => {
+    let n = 0;
+    games.forEach(g => {
+      const agg = simData[g.homeTeam + "|" + g.awayTeam];
+      if (agg) n += extractTopBets(agg, g).length;
+    });
+    return n;
+  })();
+
+  return (
+    <div style={S.wrap}>
+      {/* Nav */}
+      <div style={{ background:T.navy, borderBottom:"1px solid "+T.border, padding:"10px 16px", display:"flex", alignItems:"center", gap:12, justifyContent:"space-between" }}>
+        <a href="index.html" style={{ fontSize:9, color:T.muted, letterSpacing:"1px" }}>← SHARP SIM</a>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          {lastFetched && <span style={{ fontSize:9, color:T.muted }}>fetched {formatAge(lastFetched)}</span>}
+          <button style={{ background:"none", border:"1px solid "+T.border, color:T.muted, fontSize:9, padding:"4px 10px", borderRadius:3, cursor:"pointer", fontFamily:"inherit" }}
+            onClick={() => loadGames(oddsKey, { force: true })} disabled={loadingGames}>
+            {loadingGames ? "..." : "⟳ Refresh"}
+          </button>
+        </div>
+      </div>
+
+      {/* Game tabs */}
+      <div style={S.tabBar}>
+        {games.map((g, i) => (
+          <button key={g.id} style={S.tab(activeTab === "game_" + i)} onClick={() => setActiveTab("game_" + i)}>
+            {(TEAM_PARAMS[g.awayTeam]?.abbr || g.awayTeam.split(" ").pop())} @ {(TEAM_PARAMS[g.homeTeam]?.abbr || g.homeTeam.split(" ").pop())}
+            {runningId === (g.homeTeam + "|" + g.awayTeam) ? " ⟳" : !simData[g.homeTeam + "|" + g.awayTeam] ? " ·" : ""}
+          </button>
+        ))}
+        <div style={{ flex:1 }}/>
+        <button style={{ ...S.tab(activeTab === "top_picks"), color:activeTab==="top_picks"?T.green:T.muted, borderBottom:activeTab==="top_picks"?"2px solid "+T.green:"2px solid transparent", borderLeft:"1px solid "+T.border }}
+          onClick={() => setActiveTab("top_picks")}>
+          ⭐ TOP PICKS {topBetCount > 0 ? "(" + topBetCount + ")" : ""}
+        </button>
+      </div>
+
+      {gamesError && (
+        <div style={{ background:T.red+"22", border:"1px solid "+T.red+"44", color:T.red, padding:"10px 16px", fontSize:10 }}>
+          Error loading games: {gamesError}
+        </div>
+      )}
+
+      {loadingGames && games.length === 0 && (
+        <div style={{ padding:40, textAlign:"center", color:T.muted, fontSize:10 }}>Loading today's WNBA games...</div>
+      )}
+
+      {!loadingGames && games.length === 0 && !gamesError && (
+        <div style={{ padding:40, textAlign:"center", color:T.muted, fontSize:10 }}>No WNBA games scheduled for today.</div>
+      )}
+
+      {activeTab === "top_picks" && <TopPicksTab simData={simData} games={games} betLogger={betLogger}/>}
+      {!isSpecialTab && activeGame && (
+        <GameSimView
+          game={activeGame}
+          agg={simData[gameKey]}
+          running={runningId === gameKey}
+          runCount={runCounts[gameKey] || 0}
+          onRun={() => runSim(activeGame)}
+          betLogger={betLogger}
+        />
+      )}
+      {!isSpecialTab && activeGame && !TEAM_PARAMS[activeGame.homeTeam] && (
+        <div style={{ padding:20, color:T.yellow, fontSize:10 }}>
+          Team not in model: {activeGame.homeTeam} or {activeGame.awayTeam} — parameters not yet calibrated.
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
