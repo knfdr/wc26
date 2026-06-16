@@ -518,6 +518,7 @@ function extractLegs(matchId, agg, homeTeam, awayTeam) {
   if (hWin  >= 85) push(homeTeam + " Win",          agg.hWPct,  "ML",        "LOCK");
   else if (hWin >= 70) push(homeTeam + " Win",       agg.hWPct,  "ML",        "HIGH");
   else if (hWin >  52) push(homeTeam + " Win",       agg.hWPct,  "ML",        "LEAN");
+  else if (hWin >  45) push(homeTeam + " Win",       agg.hWPct,  "ML",        "CONSIDER");
 
   if (aWin  >= 70) push(awayTeam + " Win",           agg.aWPct,  "ML",        "HIGH");
   else if (aWin > 30) push(awayTeam + " Win",        agg.aWPct,  "ML",        "LEAN");
@@ -525,15 +526,20 @@ function extractLegs(matchId, agg, homeTeam, awayTeam) {
   if (overP >= 85) push("Over Goals",                agg.overPct,"O/U Over",  "LOCK");
   else if (overP >= 70) push("Over Goals",           agg.overPct,"O/U Over",  "HIGH");
   else if (overP >  52) push("Over Goals",           agg.overPct,"O/U Over",  "LEAN");
+  else if (overP >  45) push("Over Goals",           agg.overPct,"O/U Over",  "CONSIDER");
 
   if (underP >= 85) push("Under Goals",              agg.underPct,"O/U Under","LOCK");
   else if (underP >= 70) push("Under Goals",         agg.underPct,"O/U Under","HIGH");
   else if (underP >  55) push("Under Goals",         agg.underPct,"O/U Under","LEAN");
+  else if (underP >  45) push("Under Goals",         agg.underPct,"O/U Under","CONSIDER");
 
   if (csP >= 70) push(homeTeam + " Clean Sheet",     agg.csPct,  "CS",        "HIGH");
   else if (csP > 50) push(homeTeam + " Clean Sheet", agg.csPct,  "CS",        "LEAN");
+  else if (csP > 40) push(homeTeam + " Clean Sheet", agg.csPct,  "CS",        "CONSIDER");
 
   if (bttsP >= 70) push("Both Teams Score",          agg.bttsPct,"BTTS",      "HIGH");
+  else if (bttsP > 52) push("Both Teams Score",      agg.bttsPct,"BTTS",      "LEAN");
+  else if (bttsP > 45) push("Both Teams Score",      agg.bttsPct,"BTTS",      "CONSIDER");
 
   // ── 1H markets ───────────────────────────────────────────────────────────
   const ht_hW = parseFloat(agg.ht_hWPct);
@@ -685,16 +691,18 @@ const SIZE_LABELS = { 2:"2-Leg", 3:"3-Leg", 4:"4-Leg", 5:"5-Leg" };
 const GIST_ID = "8a76d2b09c709882e4364528a0152ccc";
 const GIST_FILENAME = "sharpsim_bets.json";
 
-// Unit sizing: LOCK=2u, HIGH=1.5u, LEAN=1u
+// Unit sizing: LOCK=2u, HIGH=1.5u, LEAN=1u, CONSIDER=0.5u
 function tierToUnits(tier) {
   if (tier === "LOCK") return 2.0;
   if (tier === "HIGH") return 1.5;
+  if (tier === "CONSIDER") return 0.5;
   return 1.0;
 }
 
 function tierColor(tier, T) {
   if (tier === "LOCK") return T.red;
   if (tier === "HIGH") return T.green;
+  if (tier === "CONSIDER") return "#f97316";
   return T.gold;
 }
 
@@ -886,6 +894,7 @@ function extractTopBets(agg, game, sport) {
       if (pct >= 85) push(market, pct.toFixed(1)+"%", odds, "LOCK");
       else if (pct >= 70) push(market, pct.toFixed(1)+"%", odds, "HIGH");
       else if (pct > 52) push(market, pct.toFixed(1)+"%", odds, "LEAN");
+      else if (pct > 45) push(market, pct.toFixed(1)+"%", odds, "CONSIDER");
     });
   }
 
@@ -1118,7 +1127,7 @@ function ParlayTab({ simData, betLogger }) {
         <div style={S.secLabel}>Signal Pool ({legs.length} qualifying legs)</div>
         <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
           {legs.map((leg, i) => {
-            const tc = leg.tier==="LOCK"?T.red:leg.tier==="HIGH"?T.green:T.gold;
+            const tc = leg.tier==="LOCK"?T.red:leg.tier==="HIGH"?T.green:leg.tier==="CONSIDER"?"#f97316":T.gold;
             return (
               <div key={i} style={{ background:T.card, border:`1px solid ${T.border}`, borderLeft:`3px solid ${tc}`, borderRadius:4, padding:"5px 10px", fontSize:10, display:"flex", alignItems:"center", gap:6 }}>
                 <span style={{ background:tc+"22", color:tc, fontSize:"8px", fontWeight:700, padding:"1px 5px", borderRadius:2 }}>{leg.tier}</span>
@@ -1164,7 +1173,7 @@ function ParlayTab({ simData, betLogger }) {
             </div>
             <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
               {parlay.legs.map((leg, li) => {
-                const tc = leg.tier==="LOCK"?T.red:leg.tier==="HIGH"?T.green:T.gold;
+                const tc = leg.tier==="LOCK"?T.red:leg.tier==="HIGH"?T.green:leg.tier==="CONSIDER"?"#f97316":T.gold;
                 return (
                   <div key={li} style={{ display:"flex", alignItems:"center", gap:8, background:T.navy, borderRadius:4, padding:"7px 10px", borderLeft:`2px solid ${tc}` }}>
                     <span style={{ background:tc+"22", color:tc, fontSize:"8px", fontWeight:700, padding:"1px 5px", borderRadius:2, minWidth:32, textAlign:"center" }}>{leg.tier}</span>
@@ -1467,6 +1476,7 @@ function WCTopPicksTab({ simData, betLogger }) {
   const locks = allBets.filter(b=>b.tier==="LOCK");
   const highs = allBets.filter(b=>b.tier==="HIGH");
   const leans = allBets.filter(b=>b.tier==="LEAN");
+  const considers = allBets.filter(b=>b.tier==="CONSIDER");
   const loggedCount = allBets.filter(b => isLogged(b.gameId, b.market)).length;
 
   return (
@@ -1474,14 +1484,14 @@ function WCTopPicksTab({ simData, betLogger }) {
       <div style={S.sec}>
         <StatsBanner stats={stats} T={T} S={S}/>
         <div style={{ ...S.card, background:"#0a1020", border:"1px solid "+T.gold+"33", marginBottom:14 }}>
-          <div style={{ fontSize:11, color:T.gold, fontWeight:700, letterSpacing:"1px" }}>TOP PICKS — JUNE 14, 2026</div>
+          <div style={{ fontSize:11, color:T.gold, fontWeight:700, letterSpacing:"1px" }}>TOP PICKS — JUNE 16, 2026</div>
           <div style={{ fontSize:10, color:T.muted, marginTop:3 }}>
             {simsReady}/{MATCHES.length} matches simulated · {allBets.length} qualifying signals
             {saving ? " · Saving to Gist..." : allSimsReady && loggedCount > 0 ? " · "+loggedCount+" auto-logged ✓" : ""}
           </div>
         </div>
       </div>
-      {[{label:"LOCK Bets",bets:locks},{label:"HIGH Confidence",bets:highs},{label:"LEAN Signals",bets:leans}]
+      {[{label:"LOCK Bets",bets:locks},{label:"HIGH Confidence",bets:highs},{label:"LEAN Signals",bets:leans},{label:"CONSIDER (0.5u)",bets:considers}]
         .map(({label,bets}) => bets.length > 0 && (
           <div key={label} style={S.sec}>
             <div style={S.secLabel}>{label} ({bets.length})</div>
