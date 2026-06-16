@@ -32,55 +32,41 @@ const { useState, useEffect, useCallback, useRef } = React;
 // All values per-90-minute / per-match, neutral venue adjusted.
 // ════════════════════════════════════════════════════════════════════════════════
 const TEAMS = {
-  Germany: {
-    alpha: 2.18,   // attack strength — 16 goals/5 matches; xG ~2.1/game vs top opposition
-    beta:  0.68,   // defense strength (lower = better) — 5 GA/5, xGA ~0.7
-    // Key inputs: W5 run, 6-0 vs Slovakia, 2-1 USA, 4-0 Finland
-    // Injury discount: Gnabry out, Karl out, Musiala 95%, Neuer calf risk
-    injuryFactor: 0.94,
-    notes: ["Gnabry/Karl out", "Musiala 95%", "Neuer calf concern", "W5-D0-L0 run"],
+  France: {
+    alpha: 1.95,   // Mbappé-led attack; 2022 WC finalists, Euro 2024 SF; xG ~1.85/game
+    beta:  0.82,   // elite defensive structure; Saliba-Koundé CB pairing
+    injuryFactor: 0.97,
+    notes: ["2022 WC finalists (lost to Argentina on penalties)", "Mbappé captaining at peak powers", "Camavinga/Tchouaméni dominant in midfield", "Thuram leading line; Griezmann in supporting role"],
   },
-  Curacao: {
-    alpha: 0.58,   // CONCACAF quals vs Bermuda/Jamaica; 0W Gold Cup 2025
-    beta:  1.95,   // concedes heavily vs quality; 10 GA in 5 recent vs elite
+  Senegal: {
+    alpha: 1.22,   // Sarr, Jackson (Chelsea), Dia; AFCON contenders
+    beta:  1.08,   // organized defensively; Koulibaly (36) aging but experienced
+    injuryFactor: 0.98,
+    notes: ["Mané retired internationally (2025)", "Nicolas Jackson (Chelsea) leads line", "Koulibaly (36) still anchoring defense", "Ismaila Sarr key wide threat"],
+  },
+  Iraq: {
+    alpha: 0.88,   // AFC qualifier; Aymen Hussein leads attack
+    beta:  1.52,   // struggles defensively vs elite European sides
     injuryFactor: 1.0,
-    notes: ["WC debut", "Full squad", "0-3 at Gold Cup 2025", "Strong vs CONCACAF minnows only"],
+    notes: ["AFC 4th-place qualifier", "First WC since 1986", "Aymen Hussein primary striker", "Expect defensive 5-4-1 block vs Norway"],
   },
-  Netherlands: {
-    alpha: 1.72,   // Gakpo 7G PL, Depay, Brobbey; xG ~1.65 in qualifiers
-    beta:  0.92,   // solid but not elite; lost to Algeria in warm-up
+  Norway: {
+    alpha: 1.82,   // Haaland (26) at absolute peak; Ødegaard orchestrating
+    beta:  1.08,   // solid but not elite defensive unit
+    injuryFactor: 0.98,
+    notes: ["Haaland 50+ PL goals in 2024/25 season", "Ødegaard (27) — Arsenal captain, world-class #10", "First WC since 1998 — massive motivation", "Sørloth + Berge provide physical depth"],
+  },
+  Argentina: {
+    alpha: 1.92,   // Reigning WC champs; Lautaro (28) leads, Messi in final WC
+    beta:  0.80,   // elite defensive unit; Otamendi, Lisandro Martínez
     injuryFactor: 0.99,
-    notes: ["FIFA #8", "Lost to Algeria in warm-up", "Created many chances vs Uzbekistan", "Gakpo/Depay/Brobbey trio"],
+    notes: ["Reigning 2022 World Cup champions", "Messi (38) — announced final World Cup", "Lautaro Martínez (28) in prime as main striker", "Mac Allister, Enzo Fernández, De Paul — elite midfield"],
   },
-  Japan: {
-    alpha: 1.48,   // beat Germany & Spain at 2022 WC; Kubo, Tanaka
-    beta:  0.98,   // disciplined defensive structure
-    injuryFactor: 1.0,
-    notes: ["Giant-killers at 2022 WC", "Moriyasu 3rd WC", "High press style", "Suzuki (GK) in top form"],
-  },
-  "Ivory Coast": {
-    alpha: 1.52,   // beat France 2-1, 4-0 vs Korea, 1-0 Scotland; AFCON champs
-    beta:  1.18,   // some defensive fragility; Ndicka doubtful
-    injuryFactor: 0.97,
-    notes: ["AFCON champions", "W7-D1-L1 last 9", "Ndicka (CB) doubtful", "Age 25.8 — youngest squad"],
-  },
-  Ecuador: {
-    alpha: 1.28,   // low-scoring; 14 goals in 18 qualifiers; draw specialists
-    beta:  0.88,   // elite D: Caicedo, Pacho (UCL winner), Hincapie
-    injuryFactor: 1.0,
-    notes: ["19-game unbeaten run", "9/13 draws — ultra-cautious", "Caicedo/Pacho/Hincapie defensive spine", "Beat Argentina 1-0 in qualifying"],
-  },
-  Sweden: {
-    alpha: 1.78,   // Isak + Gyokeres — elite dual threat; 3-0 each play-off game
-    beta:  1.32,   // no clean sheet in 11 matches; leaky at back
-    injuryFactor: 0.96,
-    notes: ["Isak + Gyokeres = elite duo", "Kulusevski out (knee)", "0 clean sheets last 11", "New coach Graham Potter"],
-  },
-  Tunisia: {
-    alpha: 0.92,   // 5-0 loss to Belgium; never out of group stage in 6 WCs
-    beta:  1.38,   // 10 CS in African qualifying but that was vs weaker sides
-    injuryFactor: 0.97,
-    notes: ["Lost 5-0 to Belgium (warm-up)", "Mejbri carrying knock", "Never past group stage in WC", "Won all 10 African qualifiers w/ 10 CS"],
+  Algeria: {
+    alpha: 1.08,   // Aouar, Bennacer; CAF qualifier; AFCON contenders
+    beta:  1.22,   // disciplined but vulnerable to elite movement
+    injuryFactor: 0.98,
+    notes: ["Mahrez retired internationally (2025)", "Houssem Aouar key creative outlet", "Ismaël Bennacer (AC Milan) controls midfield", "Lost to Netherlands 0-1 in warm-up"],
   },
 };
 
@@ -140,14 +126,12 @@ function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }
 // Shot profile per team — shots/90 and shot quality (xG per shot)
 // Derived from: xG/match ÷ shots/match from national team xG data
 const SHOT_PROFILES = {
-  Germany:        { shotsPerGame: 17.2, xgPerShot: 0.127, onTargetRate: 0.44 },
-  Curacao:        { shotsPerGame: 6.1,  xgPerShot: 0.095, onTargetRate: 0.28 },
-  Netherlands:    { shotsPerGame: 14.8, xgPerShot: 0.116, onTargetRate: 0.40 },
-  Japan:          { shotsPerGame: 12.4, xgPerShot: 0.119, onTargetRate: 0.37 },
-  "Ivory Coast":  { shotsPerGame: 13.1, xgPerShot: 0.116, onTargetRate: 0.38 },
-  Ecuador:        { shotsPerGame: 11.2, xgPerShot: 0.114, onTargetRate: 0.34 },
-  Sweden:         { shotsPerGame: 14.4, xgPerShot: 0.124, onTargetRate: 0.39 },
-  Tunisia:        { shotsPerGame: 9.3,  xgPerShot: 0.099, onTargetRate: 0.31 },
+  France:    { shotsPerGame: 15.8, xgPerShot: 0.123, onTargetRate: 0.41 },
+  Senegal:   { shotsPerGame: 10.8, xgPerShot: 0.109, onTargetRate: 0.33 },
+  Iraq:      { shotsPerGame: 9.2,  xgPerShot: 0.103, onTargetRate: 0.30 },
+  Norway:    { shotsPerGame: 14.2, xgPerShot: 0.128, onTargetRate: 0.39 },
+  Argentina: { shotsPerGame: 16.4, xgPerShot: 0.117, onTargetRate: 0.42 },
+  Algeria:   { shotsPerGame: 10.4, xgPerShot: 0.104, onTargetRate: 0.32 },
 };
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -156,14 +140,12 @@ const SHOT_PROFILES = {
 // 9.45 in UEFA qualifying). Dominant team attacking into a low block = more corners.
 // ════════════════════════════════════════════════════════════════════════════════
 const CORNER_PROFILES = {
-  Germany:       { cFor: 6.2, cAgainst: 3.8 },
-  Curacao:       { cFor: 2.8, cAgainst: 6.4 },
-  Netherlands:   { cFor: 5.6, cAgainst: 4.1 },
-  Japan:         { cFor: 4.8, cAgainst: 4.9 },
-  "Ivory Coast": { cFor: 5.1, cAgainst: 4.6 },
-  Ecuador:       { cFor: 4.2, cAgainst: 4.5 },
-  Sweden:        { cFor: 5.4, cAgainst: 4.3 },
-  Tunisia:       { cFor: 3.8, cAgainst: 5.2 },
+  France:    { cFor: 5.8, cAgainst: 3.9 },
+  Senegal:   { cFor: 4.2, cAgainst: 4.8 },
+  Iraq:      { cFor: 3.5, cAgainst: 5.4 },
+  Norway:    { cFor: 5.2, cAgainst: 4.5 },
+  Argentina: { cFor: 6.0, cAgainst: 3.7 },
+  Algeria:   { cFor: 4.0, cAgainst: 5.1 },
 };
 
 function simulateCorners(homeTeam, awayTeam, hGoals, aGoals) {
@@ -234,8 +216,7 @@ function negBinRandom(r, p) {
 
 function simulateCards(teamName, isUnderdog, goalDeficit) {
   const baseYellow = {
-    Germany: 1.55, Curacao: 2.05, Netherlands: 1.72, Japan: 1.48,
-    "Ivory Coast": 1.88, Ecuador: 1.65, Sweden: 1.62, Tunisia: 1.71,
+    France: 1.62, Senegal: 1.85, Iraq: 2.08, Norway: 1.58, Argentina: 1.92, Algeria: 1.88,
   }[teamName] || 1.7;
 
   // Pressure multiplier: losing teams collect more yellows
@@ -248,8 +229,9 @@ function simulateCards(teamName, isUnderdog, goalDeficit) {
   const yellows = negBinRandom(r, p);
 
   // Red card: base rate + escalation for repeated fouls + scoreline pressure
-  const baseRedRate = { Germany: 0.038, Curacao: 0.082, Netherlands: 0.045,
-    Japan: 0.031, "Ivory Coast": 0.062, Ecuador: 0.042, Sweden: 0.048, Tunisia: 0.055 }[teamName] || 0.05;
+  const baseRedRate = {
+    France: 0.036, Senegal: 0.055, Iraq: 0.068, Norway: 0.040, Argentina: 0.055, Algeria: 0.058,
+  }[teamName] || 0.05;
   const redRate = clamp(baseRedRate + (goalDeficit > 2 ? 0.05 : 0) + (yellows > 3 ? 0.04 : 0), 0, 0.35);
   const reds = Math.random() < redRate ? 1 : 0;
 
@@ -261,111 +243,84 @@ function simulateCards(teamName, isUnderdog, goalDeficit) {
 // ════════════════════════════════════════════════════════════════════════════════
 const MATCHES = [
   {
-    id: "ger-crc", group: "E",
-    time: "1:00 PM ET · NRG Stadium, Houston",
-    homeTeam: "Germany", awayTeam: "Curacao",
-    homeIsSeeded: true,
-    venue: "NRG Stadium, Houston — Retractable roof, climate controlled (AC indoors)",
-    weather: "~94°F outside; AC indoors — no weather impact on play",
-    overUnderLine: 4.5, overOdds: "+116", underOdds: "-140",
-    homeOdds: "-2000", awayOdds: "+4000", drawOdds: "+1900",
-    homeImplied: 95.2, awayImplied: 2.4,
-    homeIntel: [
-      "W5-D0-L0 run — 16 GF, 5 GA across last 5 matches",
-      "Musiala at ~95% fitness (fractured fibula, Club WC 2025)",
-      "Out: Gnabry (thigh), Karl (muscle tear) → Ouedraogo in",
-      "Neuer (calf) missed both warm-ups — confirmed to start",
-      "Wirtz + Musiala: most dangerous young duo at tournament",
-      "Motivation: back-to-back group stage exits 2018 & 2022",
-    ],
-    awayIntel: [
-      "World Cup debut — smallest nation ever to qualify",
-      "0W-0D-3L at 2025 Gold Cup vs elite competition",
-      "Full squad available, zero injuries reported",
-      "Coach Dick Advocaat; likely 5-4-1 deep block",
-      "Key: Eloy Room (GK), Bacuna brothers (CM), Locadia (FW)",
-      "Locadia red card (Scotland friendly) — does NOT carry to WC",
-    ],
-  },
-  {
-    id: "ned-jpn", group: "F",
-    time: "4:00 PM ET · AT&T Stadium, Arlington TX",
-    homeTeam: "Netherlands", awayTeam: "Japan",
+    id: "fra-sen", group: "A",
+    time: "3:00 PM ET · AT&T Stadium, Arlington TX",
+    homeTeam: "France", awayTeam: "Senegal",
     homeIsSeeded: true,
     venue: "AT&T Stadium, Arlington TX — Retractable roof, climate controlled",
-    weather: "Afternoon heat outside (90°F+); AC indoors — no impact",
-    overUnderLine: 2.5, overOdds: "+115", underOdds: "-140",
-    homeOdds: "+100", awayOdds: "+270", drawOdds: "+250",
-    homeImplied: 46.5, awayImplied: 27.0,
+    weather: "AC indoors — no weather impact on play",
+    overUnderLine: 2.5, overOdds: "+105", underOdds: "-128",
+    homeOdds: "-280", awayOdds: "+650", drawOdds: "+380",
+    homeImplied: 73.7, awayImplied: 13.3,
     homeIntel: [
-      "FIFA Rank #8 — lost to Algeria, scraped past Uzbekistan in warm-ups",
-      "Created many chances pre-WC but failed to convert; expect regression",
-      "Gakpo (7G/5A PL season) anchors left flank threat",
-      "Gravenberch (Liverpool) sets tempo; Van Dijk leads D",
-      "QF at 2022 WC; SF at Euro 2024 — big tournament DNA",
-      "Full squad fit; no significant injury concerns",
+      "2022 WC finalists — lost to Argentina on penalties after 3-3 AET",
+      "Mbappé (27) captaining at absolute peak — best player in the world",
+      "Camavinga + Tchouaméni: dominant physical midfield pair",
+      "Saliba-Koundé CB partnership — among best in Europe",
+      "Thuram (Marcus) leads line; Griezmann in deeper creative role",
+      "No significant injury concerns; full strength squad",
     ],
     awayIntel: [
-      "Giant-killers: beat Germany & Spain at 2022 WC group stage",
-      "Moriyasu's 3rd consecutive World Cup as head coach",
-      "High press + fast transitions; Kubo and Tanaka key creators",
-      "Suzuki (GK, Parma): 5 PL clean sheets, 166 saves in 20 apps",
-      "Next step: Japan have yet to win a WC Round of 16 match",
-      "No injuries reported — full squad available",
+      "Mané retired from international football (announced 2025)",
+      "Nicolas Jackson (Chelsea, 25) leads attack — inconsistent finisher",
+      "Koulibaly (36) still anchoring defense despite age concerns",
+      "Ismaila Sarr (28) key wide threat; Edouard Mendy (34) in goal",
+      "AFCON 2021 champions; solid but step up in class vs France",
+      "No major injuries — full squad available",
     ],
   },
   {
-    id: "ivo-ecu", group: "E",
-    time: "7:00 PM ET · Lincoln Financial Field, Philadelphia",
-    homeTeam: "Ivory Coast", awayTeam: "Ecuador",
+    id: "irq-nor", group: "B",
+    time: "6:00 PM ET · SoFi Stadium, Inglewood CA",
+    homeTeam: "Iraq", awayTeam: "Norway",
     homeIsSeeded: false,
-    venue: "Lincoln Financial Field, Philadelphia — Open air stadium",
-    weather: "Warm, cloudy evening. No rain forecast. Manageable conditions.",
-    overUnderLine: 2.5, overOdds: "+105", underOdds: "-125",
-    homeOdds: "+257", awayOdds: "-115", drawOdds: "+220",
-    homeImplied: 28.0, awayImplied: 43.5,
+    venue: "SoFi Stadium, Inglewood CA — Open air, evening kickoff",
+    weather: "Mild Southern California evening. No weather concerns.",
+    overUnderLine: 2.5, overOdds: "+120", underOdds: "-148",
+    homeOdds: "+900", awayOdds: "-380", drawOdds: "+420",
+    homeImplied: 10.0, awayImplied: 79.2,
     homeIntel: [
-      "AFCON champions; W7-D1-L1 last 9 — beat France 2-1 in warm-up",
-      "Youngest squad at tournament (avg age 25.8)",
-      "Evan Ndicka (CB, Roma) — Doubtful with undisclosed knock",
-      "Kessié + Sangaré + Fofana: physical midfield trio",
-      "Adingra, Diallo, Guessand: pace in wide areas",
-      "Back at WC after 12-year absence (last appeared 2014)",
+      "First World Cup appearance since 1986 — 40-year wait",
+      "Qualified 4th in AFC final round qualifying",
+      "Aymen Hussein leads attack; Mohanad Ali controls midfield",
+      "Expected 5-4-1 deep block — will sit and counter",
+      "Limited experience vs top European opposition",
+      "Full squad available; no major injuries reported",
     ],
     awayIntel: [
-      "19-match unbeaten streak; 9/13 recent matches ended in draws",
-      "Only 14 goals in 18 CONMEBOL qualifiers — disciplined, low-risk",
-      "Beat Argentina 1-0 at home in qualifying (Enner Valencia)",
-      "Caicedo (CM) + Pacho (CB, UCL winner) + Hincapie: elite defensive spine",
-      "Pervis Estupiñán provides outlet from left-back",
-      "No injuries confirmed — full squad available",
+      "Haaland (26) — 50+ PL goals in 2024/25; absolute peak form",
+      "Ødegaard (27) — Arsenal captain and creative fulcrum",
+      "First World Cup since 1998 — massive national motivation",
+      "Sørloth + Berge provide physical depth alongside Haaland",
+      "Aggressive 4-3-3 with high press and direct attacking intent",
+      "Full squad fit; no injury concerns",
     ],
   },
   {
-    id: "swe-tun", group: "F",
-    time: "10:00 PM ET · Estadio BBVA, Monterrey MX",
-    homeTeam: "Sweden", awayTeam: "Tunisia",
-    homeIsSeeded: false,
-    venue: "Estadio BBVA, Monterrey MX — Open air, evening kickoff",
-    weather: "Evening in Monterrey; cooler than afternoon. Outdoor stadium.",
-    overUnderLine: 2.5, overOdds: "+100", underOdds: "-125",
-    homeOdds: "-200", awayOdds: "+350", drawOdds: "+270",
-    homeImplied: 45.0, awayImplied: 22.2,
+    id: "arg-alg", group: "C",
+    time: "9:00 PM ET · Rose Bowl, Pasadena CA",
+    homeTeam: "Argentina", awayTeam: "Algeria",
+    homeIsSeeded: true,
+    venue: "Rose Bowl, Pasadena CA — Open air, evening kickoff",
+    weather: "Cool Pasadena evening. Comfortable outdoor conditions.",
+    overUnderLine: 2.5, overOdds: "+110", underOdds: "-135",
+    homeOdds: "-500", awayOdds: "+1100", drawOdds: "+450",
+    homeImplied: 83.3, awayImplied: 8.3,
     homeIntel: [
-      "Missed 2022 WC; returned via play-offs beating Ukraine + Poland 3-0 each",
-      "Only 1 pt from 5 qualifiers before play-offs — inconsistent form",
-      "Isak + Gyokeres strike partnership: most feared duo at tournament",
-      "0 clean sheets in last 11 matches — vulnerable at back",
-      "New coach Graham Potter; Kulusevski absent (knee injury)",
-      "Elanga (knee) & Lindelof (foot) both confirmed fit to play",
+      "Reigning 2022 World Cup champions — defending title",
+      "Messi (38) — announced this as his final World Cup",
+      "Lautaro Martínez (28) leads line at absolute prime",
+      "Mac Allister + Enzo Fernández + De Paul — elite midfield trio",
+      "Julián Álvarez (26) ready from the bench or alongside",
+      "Lisandro Martínez + Otamendi: battle-hardened CB partnership",
     ],
     awayIntel: [
-      "Lost 5-0 to Belgium in final warm-up — alarming form drop",
-      "Won all 10 African qualifiers; kept 10 clean sheets vs weak opposition",
-      "AFCON R16 exit on penalties vs Mali (Mali had 10 men from 26')",
-      "Hannibal Mejbri (Burnley) — carrying knock, late fitness test",
-      "Talbi (Lorient) anchors back three; limited top-level experience",
-      "Never advanced past group stage in 6 World Cup appearances",
+      "Mahrez retired from international football (2025)",
+      "Houssem Aouar (Lyon, 28) key creative outlet",
+      "Ismaël Bennacer (AC Milan) controls midfield",
+      "Lost to Netherlands 0-1 in warm-up — defensive solidity key",
+      "CAF qualifier — will set up in compact low block",
+      "Full squad available; no injuries reported",
     ],
   },
 ];
