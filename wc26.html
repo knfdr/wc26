@@ -826,7 +826,7 @@ async function fetchScores(sportKey, oddsKey) {
     if (cached && Date.now() - cached.ts < SCORES_CACHE_TTL) return cached.data;
   } catch(e) {}
   const res = await fetch(
-    "https://api.the-odds-api.com/v4/sports/" + sportKey + "/scores/?daysFrom=3&apiKey=" + oddsKey
+    "https://api.the-odds-api.com/v4/sports/" + sportKey + "/scores/?daysFrom=4&apiKey=" + oddsKey
   );
   if (!res.ok) throw new Error("scores API error: " + res.status);
   const data = await res.json();
@@ -845,15 +845,16 @@ async function autoResolveBets(bets, oddsKey) {
     const sportKey = sport === "MLB" ? "baseball_mlb" : "soccer_fifa_world_cup";
     try {
       const scores = await fetchScores(sportKey, oddsKey);
-      const today = new Date().toLocaleDateString("en-CA");
       scores.forEach(g => {
         if (g.completed !== true || !g.scores || !g.scores.length) return;
         const commenceTime = new Date(g.commence_time).getTime();
         const threeHoursMs = 3 * 60 * 60 * 1000;
         if (Date.now() - commenceTime < threeHoursMs) return;
-        // Include all completed games in the 3-day window; date-match happens per-bet below
+        // Include all completed games in the 4-day window; date-match happens per-bet below
         // Normalize known API name variants to our internal names
-        const normName = n => n === "Congo DR" ? "DR Congo" : n;
+        const normName = n => n
+          .replace("Congo DR", "DR Congo")
+          .replace("Curaçao", "Curacao");
         const h = normName(g.home_team);
         const a = normName(g.away_team);
         scoreMap[g.id] = g;
