@@ -1650,9 +1650,9 @@ function WCKeyGate({ onToken }) {
     <div style={{ position:"fixed", top:0, left:0, right:0, background:T.navy, borderBottom:"1px solid "+T.border, padding:"10px 16px", display:"flex", gap:10, alignItems:"center", zIndex:100, flexWrap:"wrap" }}>
       <div style={{ fontSize:10, color:T.gold, fontWeight:700 }}>SHARP SIM</div>
       <div style={{ fontSize:9, color:T.muted }}>GitHub token for bet tracking (optional):</div>
-      <input style={{ ...S.input, width:240, padding:"5px 10px", fontSize:10 }} type="password" placeholder="ghp_..." value={val} onChange={e=>setVal(e.target.value)} onKeyDown={e=>e.key==="Enter"&&connect()} />
+      <input style={{ background:T.card, border:"1px solid "+T.border, borderRadius:4, color:T.text, fontFamily:"'IBM Plex Mono','Courier New',monospace", outline:"none", width:240, padding:"5px 10px", fontSize:10 }} type="password" placeholder="ghp_..." value={val} onChange={e=>setVal(e.target.value)} onKeyDown={e=>e.key==="Enter"&&connect()} />
       {err && <span style={{ fontSize:9, color:T.red }}>{err}</span>}
-      <button onClick={connect} disabled={testing} style={{ ...S.btn(testing,T.gold), width:"auto", padding:"5px 12px", marginTop:0, fontSize:9, color:"#070b14" }}>
+      <button onClick={connect} disabled={testing} style={{ background:testing?"#1a2a3e":T.gold, color:"#070b14", border:"none", borderRadius:4, fontWeight:700, letterSpacing:"1px", cursor:testing?"default":"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace", width:"auto", padding:"5px 12px", marginTop:0, fontSize:9 }}>
         {testing?"Connecting...":"Connect"}
       </button>
       <button onClick={()=>onToken(null)} style={{ background:"none", border:"1px solid "+T.border, color:T.muted, padding:"5px 10px", borderRadius:4, fontSize:9, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
