@@ -1674,10 +1674,11 @@ function App() {
   const [runningId, setRunningId] = useState(null);
   const [runCounts, setRunCounts] = useState({});
   const [ghToken, setGhToken] = useState(localStorage.getItem("sharp_gh_token") || null);
+  const [oddsKey] = useState(localStorage.getItem("sharp_odds_key") || null);
   const [showKeyGate, setShowKeyGate] = useState(!localStorage.getItem("sharp_gh_token"));
   const autoRanRef = useRef(false);
 
-  const betLogger = useBetLogger(ghToken, null);
+  const betLogger = useBetLogger(ghToken, oddsKey);
 
   const runMatch = useCallback((matchId) => {
     const match = MATCHES.find(m => m.id === matchId);
