@@ -834,6 +834,14 @@ async function fetchScores(sportKey, oddsKey) {
   return data;
 }
 
+// Static fallback for WC games that have aged out of the Odds API 4-day window
+const FALLBACK_GAMES = {
+  "ger-crc": { home_team:"Germany", away_team:"Curacao", completed:true,
+    scores:[{name:"Germany",score:"7"},{name:"Curacao",score:"1"}], h1Home:3, h1Away:1 },
+  "ned-jpn": { home_team:"Netherlands", away_team:"Japan", completed:true,
+    scores:[{name:"Netherlands",score:"2"},{name:"Japan",score:"2"}], h1Home:0, h1Away:0 },
+};
+
 async function autoResolveBets(bets, oddsKey) {
   const pending = bets.filter(b => b.result === "pending");
   if (!pending.length || !oddsKey) return bets;
@@ -868,24 +876,52 @@ async function autoResolveBets(bets, oddsKey) {
 
   return bets.map(bet => {
     if (bet.result !== "pending") return bet;
-    const game = scoreMap[bet.gameId] || scoreMap[bet.homeTeam + "|" + bet.awayTeam];
-    console.log("[resolve] bet=" + bet.market + " home=" + bet.homeTeam + " away=" + bet.awayTeam + " gameId=" + bet.gameId + " => found=" + !!game);
+    const game = scoreMap[bet.gameId] || scoreMap[bet.homeTeam + "|" + bet.awayTeam] || FALLBACK_GAMES[bet.gameId];
     if (!game || game.completed !== true) return bet;
     // For MLB only: verify game date matches bet date to prevent same-series cross-day false matches
-    // WC teams play every 3+ days so cross-day false matches can't occur there
-    if (bet.sport === "MLB" && bet.gameDate && new Date(game.commence_time).toISOString().slice(0,10) !== bet.gameDate) return bet;
+    if (bet.sport === "MLB" && bet.gameDate && game.commence_time &&
+        new Date(game.commence_time).toISOString().slice(0,10) !== bet.gameDate) return bet;
 
     const homeScore = parseInt((game.scores.find(s => s.name === game.home_team) || {}).score || "0");
     const awayScore = parseInt((game.scores.find(s => s.name !== game.home_team) || {}).score || "0");
+    // h1 scores only available for fallback games
+    const h1Home = game.h1Home != null ? game.h1Home : null;
+    const h1Away = game.h1Away != null ? game.h1Away : null;
 
     let result = "loss";
     const market = bet.market.toLowerCase();
 
-    if (market.includes("ml") || market.includes("win")) {
-      const pickedHome = bet.market.includes(game.home_team);
+    if (market.includes("corners")) {
+      // Can't resolve corners from the scores API — void as push
+      result = "push";
+    } else if (market.includes("1h over") || market.includes("1h under")) {
+      const line = parseFloat(bet.market.match(/[\d.]+/) || [0]);
+      const h1Total = h1Home != null ? h1Home + h1Away : homeScore + awayScore;
+      if (market.includes("1h over")) {
+        if (h1Total > line) result = "win";
+        else if (h1Total === line) result = "push";
+      } else {
+        if (h1Total < line) result = "win";
+        else if (h1Total === line) result = "push";
+      }
+    } else if (market.includes("ht win") || market.includes("halftime")) {
+      const h1H = h1Home != null ? h1Home : homeScore;
+      const h1A = h1Away != null ? h1Away : awayScore;
+      const pickedHome = bet.market.toLowerCase().includes(game.home_team.toLowerCase());
+      if (pickedHome && h1H > h1A) result = "win";
+      else if (!pickedHome && h1A > h1H) result = "win";
+      else if (h1H === h1A) result = "push";
+    } else if (market.includes("1h") && market.includes("spread")) {
+      const h1H = h1Home != null ? h1Home : homeScore;
+      const h1A = h1Away != null ? h1Away : awayScore;
+      const pickedHome = bet.market.toLowerCase().includes(game.home_team.toLowerCase());
+      if (pickedHome && h1H > h1A) result = "win";
+      else if (!pickedHome && h1A > h1H) result = "win";
+      else if (h1H === h1A) result = "push";
+    } else if (market.includes("ml") || market.includes("win")) {
+      const pickedHome = bet.market.toLowerCase().includes(game.home_team.toLowerCase());
       if (pickedHome && homeScore > awayScore) result = "win";
       else if (!pickedHome && awayScore > homeScore) result = "win";
-      // draws are a push for MLB ML but a loss for soccer Win bets
       else if (homeScore === awayScore && bet.sport === "MLB") result = "push";
     } else if (market.includes("over")) {
       const line = parseFloat(bet.market.match(/[\d.]+/) || [0]);
@@ -900,7 +936,7 @@ async function autoResolveBets(bets, oddsKey) {
     } else if (market.includes("yrfi")) {
       if (homeScore > 0 || awayScore > 0) result = "win";
     } else if (market.includes("-1.5") || market.includes("run line")) {
-      const pickedHome = bet.market.includes(game.home_team);
+      const pickedHome = bet.market.toLowerCase().includes(game.home_team.toLowerCase());
       if (pickedHome && (homeScore - awayScore) >= 2) result = "win";
       else if (!pickedHome && (awayScore - homeScore) >= 2) result = "win";
     }
