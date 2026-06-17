@@ -376,19 +376,26 @@ function calcStats(bets) {
   const pushes = resolved.filter(b => b.result === "push");
   const totalUnits = resolved.reduce((a, b) => a + (b.result === "win" ? b.units : b.result === "loss" ? -b.units : 0), 0);
   const bySport = {};
+  const byTier = {};
   resolved.forEach(b => {
     if (!bySport[b.sport]) bySport[b.sport] = { wins:0, losses:0, pushes:0, units:0 };
     bySport[b.sport].units += b.result === "win" ? b.units : b.result === "loss" ? -b.units : 0;
     if (b.result === "win") bySport[b.sport].wins++;
     else if (b.result === "loss") bySport[b.sport].losses++;
     else bySport[b.sport].pushes++;
+    const tier = b.tier || "OTHER";
+    if (!byTier[tier]) byTier[tier] = { wins:0, losses:0, pushes:0, units:0 };
+    byTier[tier].units += b.result === "win" ? b.units : b.result === "loss" ? -b.units : 0;
+    if (b.result === "win") byTier[tier].wins++;
+    else if (b.result === "loss") byTier[tier].losses++;
+    else byTier[tier].pushes++;
   });
   return {
     total: resolved.length, wins: wins.length, losses: losses.length, pushes: pushes.length,
     winPct: resolved.length ? ((wins.length / (resolved.length - pushes.length)) * 100).toFixed(1) : "—",
     totalUnits: totalUnits.toFixed(1),
     pending: bets.filter(b => b.result === "pending").length,
-    bySport,
+    bySport, byTier,
   };
 }
 
@@ -576,15 +583,34 @@ function BetHistoryRow({ bet }) {
   );
 }
 
+const TIER_ORDER = ["LOCK","HIGH","LEAN","CONSIDER","OTHER"];
+const TIER_COLORS = { LOCK:"#ef4444", HIGH:"#22c55e", LEAN:"#e8c547", CONSIDER:"#f97316", OTHER:"#4b6280" };
+
 function StatsBanner({ stats }) {
   if (!stats || stats.total === 0) return null;
   const unitColor = parseFloat(stats.totalUnits) >= 0 ? T.green : T.red;
+  const tierRows = TIER_ORDER.filter(t => stats.byTier && stats.byTier[t]);
   return (
-    <div style={{ background:T.navy, border:"1px solid "+T.border, borderRadius:6, padding:"12px 16px", display:"flex", gap:20, flexWrap:"wrap", alignItems:"center", marginBottom:16 }}>
-      <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Win %</div><div style={{ fontSize:20, fontWeight:700, color:T.green }}>{stats.winPct}{stats.winPct!=="—"?"%":""}</div></div>
-      <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Record</div><div style={{ fontSize:14, fontWeight:700 }}><span style={{ color:T.green }}>{stats.wins}W</span>-<span style={{ color:T.red }}>{stats.losses}L</span>-<span style={{ color:T.muted }}>{stats.pushes}P</span></div></div>
-      <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Units</div><div style={{ fontSize:20, fontWeight:700, color:unitColor }}>{parseFloat(stats.totalUnits)>=0?"+":""}{stats.totalUnits}u</div></div>
-      <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Pending</div><div style={{ fontSize:14, fontWeight:700, color:T.yellow }}>{stats.pending}</div></div>
+    <div style={{ background:T.navy, border:"1px solid "+T.border, borderRadius:6, padding:"12px 16px", marginBottom:16, display:"flex", flexDirection:"column", gap:10 }}>
+      <div style={{ display:"flex", gap:20, flexWrap:"wrap", alignItems:"center" }}>
+        <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Win %</div><div style={{ fontSize:20, fontWeight:700, color:T.green }}>{stats.winPct}{stats.winPct!=="—"?"%":""}</div></div>
+        <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Record</div><div style={{ fontSize:14, fontWeight:700 }}><span style={{ color:T.green }}>{stats.wins}W</span>-<span style={{ color:T.red }}>{stats.losses}L</span>-<span style={{ color:T.muted }}>{stats.pushes}P</span></div></div>
+        <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Units</div><div style={{ fontSize:20, fontWeight:700, color:unitColor }}>{parseFloat(stats.totalUnits)>=0?"+":""}{stats.totalUnits}u</div></div>
+        <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Pending</div><div style={{ fontSize:14, fontWeight:700, color:T.yellow }}>{stats.pending}</div></div>
+      </div>
+      {tierRows.length > 0 && <div style={{ borderTop:"1px solid "+T.border, paddingTop:8, display:"flex", flexWrap:"wrap", gap:10 }}>
+        {tierRows.map(t => {
+          const d = stats.byTier[t];
+          const wp = (d.wins + d.losses) > 0 ? ((d.wins / (d.wins + d.losses)) * 100).toFixed(0) : "—";
+          const uc = d.units >= 0 ? T.green : T.red;
+          return <div key={t} style={{ display:"flex", alignItems:"center", gap:6, fontSize:12 }}>
+            <span style={{ background:TIER_COLORS[t], color:"#fff", borderRadius:3, padding:"1px 5px", fontSize:10, fontWeight:700 }}>{t}</span>
+            <span style={{ color:T.green }}>{d.wins}W</span>-<span style={{ color:T.red }}>{d.losses}L</span>{d.pushes>0&&<span>-<span style={{ color:T.muted }}>{d.pushes}P</span></span>}
+            <span style={{ color:T.muted }}>{wp !== "—" ? wp+"%" : "—"}</span>
+            <span style={{ color:uc }}>{d.units >= 0 ? "+" : ""}{d.units.toFixed(1)}u</span>
+          </div>;
+        })}
+      </div>}
     </div>
   );
 }
