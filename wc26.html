@@ -851,10 +851,14 @@ async function autoResolveBets(bets, oddsKey) {
         const commenceTime = new Date(g.commence_time).getTime();
         const threeHoursMs = 3 * 60 * 60 * 1000;
         if (Date.now() - commenceTime < threeHoursMs) return;
-        if (new Date(g.commence_time).toLocaleDateString("en-CA") !== today) return;
+        // Include all completed games in the 3-day window; date-match happens per-bet below
+        // Normalize known API name variants to our internal names
+        const normName = n => n === "Congo DR" ? "DR Congo" : n;
+        const h = normName(g.home_team);
+        const a = normName(g.away_team);
         scoreMap[g.id] = g;
-        scoreMap[g.home_team + "|" + g.away_team] = g;
-        scoreMap[g.away_team + "|" + g.home_team] = g;
+        scoreMap[h + "|" + a] = g;
+        scoreMap[a + "|" + h] = g;
       });
     } catch(e) {}
   }
@@ -863,6 +867,8 @@ async function autoResolveBets(bets, oddsKey) {
     if (bet.result !== "pending") return bet;
     const game = scoreMap[bet.gameId] || scoreMap[bet.homeTeam + "|" + bet.awayTeam];
     if (!game || game.completed !== true) return bet;
+    // Verify game date matches bet date to prevent cross-day team-name false matches
+    if (bet.gameDate && new Date(game.commence_time).toLocaleDateString("en-CA") !== bet.gameDate) return bet;
 
     const homeScore = parseInt((game.scores.find(s => s.name === game.home_team) || {}).score || "0");
     const awayScore = parseInt((game.scores.find(s => s.name !== game.home_team) || {}).score || "0");
@@ -874,7 +880,8 @@ async function autoResolveBets(bets, oddsKey) {
       const pickedHome = bet.market.includes(game.home_team);
       if (pickedHome && homeScore > awayScore) result = "win";
       else if (!pickedHome && awayScore > homeScore) result = "win";
-      else if (homeScore === awayScore) result = "push";
+      // draws are a push for MLB ML but a loss for soccer Win bets
+      else if (homeScore === awayScore && bet.sport === "MLB") result = "push";
     } else if (market.includes("over")) {
       const line = parseFloat(bet.market.match(/[\d.]+/) || [0]);
       if (homeScore + awayScore > line) result = "win";
