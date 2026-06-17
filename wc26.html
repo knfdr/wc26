@@ -845,13 +845,12 @@ async function autoResolveBets(bets, oddsKey) {
     const sportKey = sport === "MLB" ? "baseball_mlb" : "soccer_fifa_world_cup";
     try {
       const scores = await fetchScores(sportKey, oddsKey);
+      console.log("[resolve] sport=" + sport + " raw scores count=" + scores.length);
       scores.forEach(g => {
         if (g.completed !== true || !g.scores || !g.scores.length) return;
         const commenceTime = new Date(g.commence_time).getTime();
         const threeHoursMs = 3 * 60 * 60 * 1000;
         if (Date.now() - commenceTime < threeHoursMs) return;
-        // Include all completed games in the 4-day window; date-match happens per-bet below
-        // Normalize known API name variants to our internal names
         const normName = n => n
           .replace("Congo DR", "DR Congo")
           .replace("Curaçao", "Curacao");
@@ -860,13 +859,17 @@ async function autoResolveBets(bets, oddsKey) {
         scoreMap[g.id] = g;
         scoreMap[h + "|" + a] = g;
         scoreMap[a + "|" + h] = g;
+        console.log("[resolve] scoreMap ADDED " + h + " vs " + a + " id=" + g.id);
       });
-    } catch(e) {}
+    } catch(e) { console.error("[resolve] fetch error", e); }
   }
+
+  console.log("[resolve] scoreMap keys:", Object.keys(scoreMap));
 
   return bets.map(bet => {
     if (bet.result !== "pending") return bet;
     const game = scoreMap[bet.gameId] || scoreMap[bet.homeTeam + "|" + bet.awayTeam];
+    console.log("[resolve] bet=" + bet.market + " home=" + bet.homeTeam + " away=" + bet.awayTeam + " gameId=" + bet.gameId + " => found=" + !!game);
     if (!game || game.completed !== true) return bet;
     // For MLB only: verify game date matches bet date to prevent same-series cross-day false matches
     // WC teams play every 3+ days so cross-day false matches can't occur there
