@@ -868,8 +868,9 @@ async function autoResolveBets(bets, oddsKey) {
     if (bet.result !== "pending") return bet;
     const game = scoreMap[bet.gameId] || scoreMap[bet.homeTeam + "|" + bet.awayTeam];
     if (!game || game.completed !== true) return bet;
-    // Verify game date matches bet date to prevent cross-day team-name false matches
-    if (bet.gameDate && new Date(game.commence_time).toLocaleDateString("en-CA") !== bet.gameDate) return bet;
+    // For MLB only: verify game date matches bet date to prevent same-series cross-day false matches
+    // WC teams play every 3+ days so cross-day false matches can't occur there
+    if (bet.sport === "MLB" && bet.gameDate && new Date(game.commence_time).toISOString().slice(0,10) !== bet.gameDate) return bet;
 
     const homeScore = parseInt((game.scores.find(s => s.name === game.home_team) || {}).score || "0");
     const awayScore = parseInt((game.scores.find(s => s.name !== game.home_team) || {}).score || "0");
