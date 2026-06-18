@@ -32,65 +32,53 @@ const { useState, useEffect, useCallback, useRef } = React;
 // All values per-90-minute / per-match, neutral venue adjusted.
 // ════════════════════════════════════════════════════════════════════════════════
 const TEAMS = {
-  Austria: {
-    alpha: 1.45,   // Arnautovic leads; Sabitzer/Laimer strong midfield; UEFA qualifier
-    beta:  0.95,   // solid defensive block; vulnerable to elite pace
-    injuryFactor: 0.97,
-    notes: ["Marko Arnautovic leads attack despite age", "Marcel Sabitzer (RB Leipzig) controls midfield", "David Alaba returning from extended injury", "Experienced UEFA qualifier — dangerous vs minnows"],
-  },
-  Jordan: {
-    alpha: 0.80,   // Ali Olwan leads; limited quality at WC level
-    beta:  1.42,   // porous defensively vs technical sides
-    injuryFactor: 1.0,
-    notes: ["AFC qualifier — WC group stage underdog", "Ali Olwan leads attack; deep defensive block expected", "Compact 4-4-2 low-block strategy vs Austria", "Limited experience vs top European opposition"],
-  },
-  Portugal: {
-    alpha: 1.90,   // Ronaldo (41) still dangerous; Bruno, Leão, Bernardo elite
-    beta:  0.82,   // Rúben Dias + Gonçalo Inácio elite CB pairing
-    injuryFactor: 0.97,
-    notes: ["Cristiano Ronaldo (41) — announced final World Cup", "Bruno Fernandes creative orchestrator behind Ronaldo", "Bernardo Silva + Rafael Leão provide wide danger", "Won 2025 UEFA Nations League as tune-up"],
-  },
-  "DR Congo": {
-    alpha: 0.88,   // Mbemba captain; Bolasie on wing; CAF qualifier
-    beta:  1.48,   // defensive vulnerability vs top European pressure
-    injuryFactor: 1.0,
-    notes: ["CAF qualifier — rare World Cup appearance", "Chancel Mbemba (captain) anchors defense", "Yannick Bolasie (35) veteran wide threat", "Will set up 5-4-1 low block vs Portugal"],
-  },
-  England: {
-    alpha: 1.72,   // Bellingham, Kane, Foden — elite attacking trio
-    beta:  0.88,   // Declan Rice shields defense; solid unit overall
-    injuryFactor: 0.97,
-    notes: ["Jude Bellingham (22) — world-class engine at peak form", "Harry Kane — 40+ goals for Bayern in 2024/25 season", "Phil Foden + Saka provide width and creativity", "Declan Rice + Kobbie Mainoo control midfield"],
-  },
-  Croatia: {
-    alpha: 1.18,   // Modrić (40) elder role; Kovačić still prime; limited goals
-    beta:  1.05,   // disciplined but aging backline; vulnerable to pace
+  Czechia: {
+    alpha: 1.35,   // Schick leads; Souček engine; solid UEFA qualifier
+    beta:  1.08,   // decent defensive shape; vulnerable to pace
     injuryFactor: 0.98,
-    notes: ["Luka Modrić (40) — likely last World Cup, elder statesman", "Mateo Kovačić (32) still in prime", "2022 WC 3rd place — counter-attack and set pieces", "Known to slow tempo and frustrate tournament favorites"],
+    notes: ["Patrick Schick leads attack; physical target man", "Tomáš Souček (West Ham) box-to-box engine", "Both Czechia and South Africa lost their openers — must-win", "Solid European qualifier; experienced WC campaigners"],
   },
-  Ghana: {
-    alpha: 1.10,   // Inaki Williams leads; Kudus adds creativity
-    beta:  1.18,   // defensively reactive; can be exposed on counter
+  "South Africa": {
+    alpha: 0.88,   // CAF qualifier; limited quality at WC level
+    beta:  1.30,   // porous defensively; missing red card players
+    injuryFactor: 0.94, // Sithole + Thema Zwane suspended after red cards in opener
+    notes: ["Yaya Sithole + Thema Zwane suspended (red cards vs Mexico)", "Percy Tau veteran winger; limited WC-level attack depth", "Lost opener vs Mexico — must win to stay alive", "Compact defensive block; set pieces only real threat"],
+  },
+  Switzerland: {
+    alpha: 1.42,   // Granit Xhaka leads; Shaqiri elder; well-organized
+    beta:  0.95,   // disciplined Swiss defensive structure; hard to break
     injuryFactor: 0.98,
-    notes: ["Inaki Williams leads attack", "Mohammed Kudus (West Ham) key creative threat", "Thomas Partey anchors midfield when fully fit", "Group L dark horse — tournament experience"],
+    notes: ["Granit Xhaka (38) veteran captain and midfield engine", "Xherdan Shaqiri elder statesman; Embolo leads line", "Swiss are well-drilled, disciplined, hard to break down", "Consistent WC performers — won Group B opener vs Qatar"],
   },
-  Panama: {
-    alpha: 0.72,   // 2nd WC appearance; limited technical quality
-    beta:  1.42,   // porous vs physical/technical opponents
+  "Bosnia-Herzegovina": {
+    alpha: 1.05,   // Džeko (39) fading; Pjanić influence gone; some depth
+    beta:  1.22,   // defensive vulnerability; susceptible to set pieces
     injuryFactor: 1.0,
-    notes: ["Second World Cup appearance after Russia 2018", "Lost all three games in 2018 WC, conceded 11 goals", "Rolando Blackburn leads line; compact 4-4-2 defense", "Will sit deep and hope to nick a set piece goal"],
+    notes: ["Edin Džeko (39) — iconic striker, fading pace but poacher instinct", "Miralem Pjanić effectively retired from national team", "Lost opener to Canada — must win to remain in contention", "Set piece threat; physical and direct style"],
   },
-  Uzbekistan: {
-    alpha: 0.85,   // first-ever WC; Fayzullaev key attacker; AFC qualifier
-    beta:  1.32,   // organized but limited vs South American quality
-    injuryFactor: 1.0,
-    notes: ["First-ever World Cup appearance for Uzbekistan", "Abbosbek Fayzullaev key attacking threat", "AFC qualifier — energetic high-press style", "Physical and determined; may tire vs Colombia class"],
-  },
-  Colombia: {
-    alpha: 1.52,   // Luis Díaz at peak; Durán emerging star; James still key
-    beta:  1.08,   // solid midfield shield; slight defensive vulnerability
+  Canada: {
+    alpha: 1.48,   // Davies elite; Jonathan David sharp; host nation energy
+    beta:  1.02,   // solid defensively; Vitória anchors back line
     injuryFactor: 0.98,
-    notes: ["Luis Díaz (Liverpool) wide threat at peak form", "Jhon Durán (Aston Villa) leads line — emerging star", "James Rodríguez (34) experience and creativity still key", "Copa América runners-up 2024 — tournament pedigree"],
+    notes: ["Alphonso Davies (Bayern Munich) — elite wide threat", "Jonathan David (Juventus) leads line in top form", "Host nation advantage — massive BC Place crowd", "Won opener vs Bosnia — confident and in form"],
+  },
+  Qatar: {
+    alpha: 0.72,   // host 2022, went 0-3; limited technical quality
+    beta:  1.45,   // porous defensively vs European/CONCACAF sides
+    injuryFactor: 1.0,
+    notes: ["2022 host went 0-3, conceded 7 goals in group stage", "Akram Afif (Ballon d'Or nominated) lone quality threat", "Will set up in deep defensive block vs Canada", "Lost opener vs Switzerland; must win but very limited"],
+  },
+  Mexico: {
+    alpha: 1.55,   // Jiménez leads; Lozano veteran; home nation
+    beta:  1.05,   // solid midfield; some defensive vulnerability
+    injuryFactor: 0.98,
+    notes: ["Raúl Jiménez (Fulham) leads line in strong form", "Hirving Lozano (35) veteran wide threat; fading but dangerous", "Playing at Estadio Akron in Guadalajara — home nation advantage", "South Korea are dangerous — Mexico need a win to top Group A"],
+  },
+  "South Korea": {
+    alpha: 1.22,   // Son (34) still elite; Lee Kang-in creative; organized
+    beta:  1.18,   // disciplined pressing; can be exposed in transitions
+    injuryFactor: 0.98,
+    notes: ["Son Heung-min (34) — still world-class, captain and talisman", "Lee Kang-in (PSG) creative spark behind Son", "Cho Gue-sung physical striker; set piece threat", "Lost opener to Czechia — must get result vs Mexico to advance"],
   },
 };
 
@@ -150,16 +138,14 @@ function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }
 // Shot profile per team — shots/90 and shot quality (xG per shot)
 // Derived from: xG/match ÷ shots/match from national team xG data
 const SHOT_PROFILES = {
-  Austria:    { shotsPerGame: 13.8, xgPerShot: 0.108, onTargetRate: 0.36 },
-  Jordan:     { shotsPerGame: 8.5,  xgPerShot: 0.095, onTargetRate: 0.28 },
-  Portugal:   { shotsPerGame: 16.2, xgPerShot: 0.118, onTargetRate: 0.40 },
-  "DR Congo": { shotsPerGame: 8.8,  xgPerShot: 0.098, onTargetRate: 0.29 },
-  England:    { shotsPerGame: 15.0, xgPerShot: 0.115, onTargetRate: 0.39 },
-  Croatia:    { shotsPerGame: 11.5, xgPerShot: 0.103, onTargetRate: 0.33 },
-  Ghana:      { shotsPerGame: 10.8, xgPerShot: 0.102, onTargetRate: 0.32 },
-  Panama:     { shotsPerGame: 7.8,  xgPerShot: 0.093, onTargetRate: 0.27 },
-  Uzbekistan: { shotsPerGame: 9.2,  xgPerShot: 0.098, onTargetRate: 0.29 },
-  Colombia:   { shotsPerGame: 13.5, xgPerShot: 0.113, onTargetRate: 0.37 },
+  Czechia:              { shotsPerGame: 12.5, xgPerShot: 0.108, onTargetRate: 0.34 },
+  "South Africa":       { shotsPerGame: 9.5,  xgPerShot: 0.093, onTargetRate: 0.28 },
+  Switzerland:          { shotsPerGame: 13.2, xgPerShot: 0.108, onTargetRate: 0.36 },
+  "Bosnia-Herzegovina": { shotsPerGame: 10.2, xgPerShot: 0.098, onTargetRate: 0.30 },
+  Canada:               { shotsPerGame: 14.0, xgPerShot: 0.112, onTargetRate: 0.37 },
+  Qatar:                { shotsPerGame: 8.2,  xgPerShot: 0.088, onTargetRate: 0.26 },
+  Mexico:               { shotsPerGame: 14.5, xgPerShot: 0.107, onTargetRate: 0.36 },
+  "South Korea":        { shotsPerGame: 12.0, xgPerShot: 0.103, onTargetRate: 0.34 },
 };
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -168,16 +154,14 @@ const SHOT_PROFILES = {
 // 9.45 in UEFA qualifying). Dominant team attacking into a low block = more corners.
 // ════════════════════════════════════════════════════════════════════════════════
 const CORNER_PROFILES = {
-  Austria:    { cFor: 5.5, cAgainst: 4.2 },
-  Jordan:     { cFor: 3.8, cAgainst: 5.8 },
-  Portugal:   { cFor: 6.5, cAgainst: 3.8 },
-  "DR Congo": { cFor: 3.5, cAgainst: 6.0 },
-  England:    { cFor: 6.2, cAgainst: 4.0 },
-  Croatia:    { cFor: 4.8, cAgainst: 4.5 },
-  Ghana:      { cFor: 4.5, cAgainst: 4.8 },
-  Panama:     { cFor: 3.2, cAgainst: 5.5 },
-  Uzbekistan: { cFor: 3.8, cAgainst: 5.2 },
-  Colombia:   { cFor: 5.5, cAgainst: 4.5 },
+  Czechia:              { cFor: 5.2, cAgainst: 4.5 },
+  "South Africa":       { cFor: 4.0, cAgainst: 5.5 },
+  Switzerland:          { cFor: 5.5, cAgainst: 4.2 },
+  "Bosnia-Herzegovina": { cFor: 4.2, cAgainst: 5.0 },
+  Canada:               { cFor: 5.8, cAgainst: 4.5 },
+  Qatar:                { cFor: 3.5, cAgainst: 6.0 },
+  Mexico:               { cFor: 6.0, cAgainst: 4.5 },
+  "South Korea":        { cFor: 4.8, cAgainst: 4.8 },
 };
 
 function simulateCorners(homeTeam, awayTeam, hGoals, aGoals) {
@@ -248,9 +232,8 @@ function negBinRandom(r, p) {
 
 function simulateCards(teamName, isUnderdog, goalDeficit) {
   const baseYellow = {
-    Austria: 1.78, Jordan: 2.12, Portugal: 1.65, "DR Congo": 1.95,
-    England: 1.58, Croatia: 1.98, Ghana: 2.05, Panama: 2.18,
-    Uzbekistan: 2.08, Colombia: 2.02,
+    Czechia: 1.72, "South Africa": 2.15, Switzerland: 1.65, "Bosnia-Herzegovina": 2.05,
+    Canada: 1.80, Qatar: 2.20, Mexico: 1.95, "South Korea": 1.85,
   }[teamName] || 1.7;
 
   // Pressure multiplier: losing teams collect more yellows
@@ -264,9 +247,8 @@ function simulateCards(teamName, isUnderdog, goalDeficit) {
 
   // Red card: base rate + escalation for repeated fouls + scoreline pressure
   const baseRedRate = {
-    Austria: 0.040, Jordan: 0.062, Portugal: 0.032, "DR Congo": 0.058,
-    England: 0.034, Croatia: 0.050, Ghana: 0.055, Panama: 0.065,
-    Uzbekistan: 0.060, Colombia: 0.048,
+    Czechia: 0.038, "South Africa": 0.072, Switzerland: 0.030, "Bosnia-Herzegovina": 0.050,
+    Canada: 0.040, Qatar: 0.065, Mexico: 0.045, "South Korea": 0.040,
   }[teamName] || 0.05;
   const redRate = clamp(baseRedRate + (goalDeficit > 2 ? 0.05 : 0) + (yellows > 3 ? 0.04 : 0), 0, 0.35);
   const reds = Math.random() < redRate ? 1 : 0;
@@ -279,138 +261,111 @@ function simulateCards(teamName, isUnderdog, goalDeficit) {
 // ════════════════════════════════════════════════════════════════════════════════
 const MATCHES = [
   {
-    id: "aut-jor", group: "J",
-    time: "12:00 AM ET · Levi's Stadium, Santa Clara CA",
-    homeTeam: "Austria", awayTeam: "Jordan",
+    id: "czr-rsa", group: "A",
+    time: "12:00 PM ET · Mercedes-Benz Stadium, Atlanta GA",
+    homeTeam: "Czechia", awayTeam: "South Africa",
     homeIsSeeded: true,
-    venue: "Levi's Stadium, Santa Clara CA — Open air, mild Bay Area night",
-    weather: "Cool night in Santa Clara. No weather concerns.",
-    overUnderLine: 2.5, overOdds: "+110", underOdds: "-135",
-    homeOdds: "-260", awayOdds: "+700", drawOdds: "+370",
-    homeImplied: 72.2, awayImplied: 12.5,
+    venue: "Mercedes-Benz Stadium, Atlanta GA — Closed dome, climate controlled",
+    weather: "AC indoors — no weather impact on play",
+    overUnderLine: 2.5, overOdds: "+110", underOdds: "-165",
+    homeOdds: "-130", awayOdds: "+370", drawOdds: "+270",
+    homeImplied: 56.5, awayImplied: 21.3,
     homeIntel: [
-      "Marcel Sabitzer (RB Leipzig) controls midfield — excellent form",
-      "Marko Arnautovic leads attack; top anytime scorer odds at +125",
-      "David Alaba returning from long injury — fitness uncertain",
-      "Austria qualified comfortably through UEFA path",
-      "Expect high possession and patient buildup vs deep block",
-      "No major injury concerns beyond Alaba",
+      "Patrick Schick leads attack — physical target man, clinical in box",
+      "Tomáš Souček (West Ham) box-to-box engine, aerial threat at set pieces",
+      "Lost opener — must win to keep Group A knockout hopes alive",
+      "Ondřej Kolář reliable in goal; strong defensive organization",
+      "Well-drilled European side; experience in tight tournament games",
+      "Full squad available; no significant injury concerns",
     ],
     awayIntel: [
-      "AFC qualifier — heavy underdogs in Group J opener",
-      "Ali Olwan leads attack; limited quality at WC level",
-      "Will deploy compact 4-4-2 low block and look to counter",
-      "Minimal experience vs top European opposition",
-      "First World Cup match likely to be a learning experience",
-      "Full squad available; no reported injuries",
+      "Yaya Sithole + Thema Zwane both suspended after red cards vs Mexico",
+      "Percy Tau (Al-Ahly) lone genuine attacking quality — key man",
+      "Lost opener to Mexico; already under severe pressure to advance",
+      "Will attempt compact defensive block but missing key midfielders",
+      "Set pieces and counter-attacks only realistic path to a goal",
+      "Historically limited at World Cup level — just second WC appearance",
     ],
   },
   {
-    id: "por-cod", group: "K",
-    time: "1:00 PM ET · NRG Stadium, Houston TX",
-    homeTeam: "Portugal", awayTeam: "DR Congo",
+    id: "sui-bih", group: "B",
+    time: "3:00 PM ET · SoFi Stadium, Inglewood CA",
+    homeTeam: "Switzerland", awayTeam: "Bosnia-Herzegovina",
     homeIsSeeded: true,
-    venue: "NRG Stadium, Houston TX — Retractable roof, climate controlled",
+    venue: "SoFi Stadium, Inglewood CA — Closed dome, climate controlled",
     weather: "AC indoors — no weather impact on play",
-    overUnderLine: 2.5, overOdds: "-125", underOdds: "+130",
-    homeOdds: "-350", awayOdds: "+1000", drawOdds: "+475",
+    overUnderLine: 2.5, overOdds: "+100", underOdds: "-123",
+    homeOdds: "-188", awayOdds: "+506", drawOdds: "+310",
+    homeImplied: 65.3, awayImplied: 16.5,
+    homeIntel: [
+      "Granit Xhaka (38) veteran captain; midfield general controls tempo",
+      "Breel Embolo leads attack; physical against Bosnia's aging backline",
+      "Swiss won Group B opener vs Qatar — confident and organized",
+      "Disciplined low-block defending; hard to break but limited flair",
+      "Historically consistent WC performers — rarely capitulate",
+      "No major injury concerns; strong experienced squad",
+    ],
+    awayIntel: [
+      "Edin Džeko (39) — iconic striker, poacher instinct still sharp",
+      "Miralem Pjanić effectively retired from international duty",
+      "Lost opener to Canada — must win to stay in tournament",
+      "Physical and direct; set pieces from Džeko are a real threat",
+      "Limited quality to unlock Swiss defensive shape in open play",
+      "Full squad available; desperate for a result",
+    ],
+  },
+  {
+    id: "can-qat", group: "B",
+    time: "6:00 PM ET · BC Place, Vancouver BC",
+    homeTeam: "Canada", awayTeam: "Qatar",
+    homeIsSeeded: true,
+    venue: "BC Place, Vancouver BC — Retractable roof, climate controlled",
+    weather: "Indoor dome — no weather impact on play",
+    overUnderLine: 2.5, overOdds: "-135", underOdds: "+105",
+    homeOdds: "-350", awayOdds: "+1000", drawOdds: "+450",
     homeImplied: 77.8, awayImplied: 9.1,
     homeIntel: [
-      "Cristiano Ronaldo (41) — announced this as his final World Cup",
-      "Bruno Fernandes creative orchestrator; key to unlocking defense",
-      "Bernardo Silva + Rafael Leão provide elite wide danger",
-      "Rúben Dias + Gonçalo Inácio — top-class CB pairing",
-      "Won 2025 UEFA Nations League — in excellent tournament form",
-      "No significant injury concerns; full-strength squad available",
+      "Alphonso Davies (Bayern Munich) — elite wide threat, will terrorize Qatar",
+      "Jonathan David (Juventus) in top club form; leads line with pace",
+      "Won opener vs Bosnia — riding confidence in front of home crowd",
+      "BC Place sellout — massive home advantage for host nation Canada",
+      "Cyle Larin and Tajon Buchanan provide dangerous depth wide",
+      "No significant injury concerns; full squad available",
     ],
     awayIntel: [
-      "CAF qualifier — rare World Cup appearance for DR Congo",
-      "Chancel Mbemba (captain) anchors defense; experienced CB",
-      "Yannick Bolasie (35) veteran wide threat; fading pace",
-      "Will set up in 5-4-1 low block — protect and counter",
-      "Minimal WC experience at this level; Portugal far superior on paper",
-      "Full squad available; no major injuries reported",
+      "2022 host; went 0-3 and conceded 7 goals in their own group stage",
+      "Akram Afif (Ballon d'Or nominated 2023) lone genuine quality threat",
+      "Lost opener to Switzerland — no path to advancement unless Canada implodes",
+      "Will set up in deep 5-4-1; limited ability to threaten Canada's backline",
+      "Hassan Al-Haydos veteran captain; 2022 experience means little here",
+      "Full squad available but significant quality gap vs Canada",
     ],
   },
   {
-    id: "eng-cro", group: "L",
-    time: "4:00 PM ET · AT&T Stadium, Arlington TX",
-    homeTeam: "England", awayTeam: "Croatia",
+    id: "mex-kor", group: "A",
+    time: "9:00 PM ET · Estadio Akron, Guadalajara Mexico",
+    homeTeam: "Mexico", awayTeam: "South Korea",
     homeIsSeeded: true,
-    venue: "AT&T Stadium, Arlington TX — Retractable roof, climate controlled",
-    weather: "AC indoors — no weather impact on play",
-    overUnderLine: 2.5, overOdds: "+116", underOdds: "-142",
-    homeOdds: "-145", awayOdds: "+420", drawOdds: "+270",
-    homeImplied: 59.2, awayImplied: 19.2,
+    venue: "Estadio Akron, Guadalajara, Mexico — Open air, 45,000 capacity",
+    weather: "Guadalajara elevation ~1,540m. Warm evening kickoff.",
+    overUnderLine: 2.5, overOdds: "+140", underOdds: "-175",
+    homeOdds: "-105", awayOdds: "+320", drawOdds: "+230",
+    homeImplied: 48.8, awayImplied: 23.8,
     homeIntel: [
-      "Jude Bellingham (22) — world-class engine at absolute peak form",
-      "Harry Kane — 40+ goals for Bayern Munich in 2024/25 season",
-      "Phil Foden + Bukayo Saka provide elite width and creativity",
-      "Declan Rice + Kobbie Mainoo control the midfield battle",
-      "England eliminated Croatia in 2021 Euro group stage 1-0",
-      "No major injury concerns; strong squad depth throughout",
+      "Raúl Jiménez (Fulham) leads line — in strong Premier League form",
+      "Hirving Lozano (35) veteran wide threat; dangerous on the break",
+      "Playing at Akron in Guadalajara — enormous home crowd energy",
+      "Beat South Africa in opener — must win or draw to advance",
+      "Héctor Herrera midfield anchor; high press style at altitude",
+      "Home nation pressure is double-edged — crowd or burden",
     ],
     awayIntel: [
-      "Luka Modrić (40) — almost certainly his last World Cup appearance",
-      "Mateo Kovačić (32) still operating at peak — key midfield anchor",
-      "2022 WC 3rd place — counter-attack and set pieces as weapons",
-      "Known to slow tempo and frustrate tournament favorites",
-      "Ivan Perišić returned from ACL — fitness and sharpness unknown",
-      "Aging squad; less physical than 2022 vintage",
-    ],
-  },
-  {
-    id: "gha-pan", group: "L",
-    time: "7:00 PM ET · BMO Field, Toronto ON",
-    homeTeam: "Ghana", awayTeam: "Panama",
-    homeIsSeeded: false,
-    venue: "BMO Field, Toronto ON — Open air, evening kickoff",
-    weather: "Mild Toronto summer evening. No weather concerns.",
-    overUnderLine: 2.5, overOdds: "+130", underOdds: "-155",
-    homeOdds: "+115", awayOdds: "+230", drawOdds: "+250",
-    homeImplied: 46.5, awayImplied: 30.3,
-    homeIntel: [
-      "Inaki Williams leads attack — Athletic Bilbao striker, physical threat",
-      "Mohammed Kudus (West Ham) key creative and goalscoring threat",
-      "Thomas Partey anchors midfield when fully fit — fitness key",
-      "Group L dark horse — tournament experience from 2022 WC",
-      "Both teams need points desperately with England/Croatia in group",
-      "No major injury concerns; full squad available",
-    ],
-    awayIntel: [
-      "Second World Cup appearance — debut in Russia 2018",
-      "Lost all three games in 2018, conceded 11 goals total",
-      "Rolando Blackburn leads line; limited WC-level quality",
-      "Will sit in compact 4-4-2 and hope to nick a set piece goal",
-      "Historically strong at set pieces — threat from dead balls",
-      "Full squad available; no reported injuries",
-    ],
-  },
-  {
-    id: "uzb-col", group: "K",
-    time: "10:00 PM ET · Estadio Azteca, Mexico City",
-    homeTeam: "Uzbekistan", awayTeam: "Colombia",
-    homeIsSeeded: false,
-    venue: "Estadio Azteca, Mexico City — Altitude ~2,240m; heat factor",
-    weather: "Mexico City altitude (7,350 ft). Affects stamina in second half.",
-    overUnderLine: 2.5, overOdds: "-110", underOdds: "-110",
-    homeOdds: "+650", awayOdds: "-250", drawOdds: "+350",
-    homeImplied: 13.3, awayImplied: 71.4,
-    homeIntel: [
-      "First-ever World Cup appearance for Uzbekistan — historic moment",
-      "Abbosbek Fayzullaev key attacking threat; energetic pressing style",
-      "AFC qualifier — organized and physical, but limited at this level",
-      "Altitude at Azteca partially neutralizes Colombia's fitness advantage",
-      "Will press high early and look to disrupt Colombia's rhythm",
-      "Full squad available; no reported injuries",
-    ],
-    awayIntel: [
-      "Luis Díaz (Liverpool) wide threat operating at peak form",
-      "Jhon Durán (Aston Villa) leads line — powerful emerging star",
-      "James Rodríguez (34) creative experience; fitness must be managed",
-      "Copa América runners-up 2024 — proven tournament pedigree",
-      "Altitude at Azteca is neutral — neither team trains there",
-      "No significant injury concerns; strong squad depth",
+      "Son Heung-min (34) — still world-class captain and talisman",
+      "Lee Kang-in (PSG) creative spark; set piece delivery elite",
+      "Cho Gue-sung physical striker; aerial threat at set pieces",
+      "Lost opener to Czechia — need win to advance; nothing to lose",
+      "Korea press intensely and transition quickly — dangerous vs Mexico",
+      "No major injury concerns; physical, disciplined squad",
     ],
   },
 ];
@@ -836,10 +791,22 @@ async function fetchScores(sportKey, oddsKey) {
 
 // Static fallback for WC games that have aged out of the Odds API 4-day window
 const FALLBACK_GAMES = {
+  // June 14
   "ger-crc": { home_team:"Germany", away_team:"Curacao", completed:true,
     scores:[{name:"Germany",score:"7"},{name:"Curacao",score:"1"}], h1Home:3, h1Away:1 },
   "ned-jpn": { home_team:"Netherlands", away_team:"Japan", completed:true,
     scores:[{name:"Netherlands",score:"2"},{name:"Japan",score:"2"}], h1Home:0, h1Away:0 },
+  // June 17
+  "aut-jor": { home_team:"Austria", away_team:"Jordan", completed:true,
+    scores:[{name:"Austria",score:"3"},{name:"Jordan",score:"1"}], h1Home:1, h1Away:0 },
+  "por-cod": { home_team:"Portugal", away_team:"DR Congo", completed:true,
+    scores:[{name:"Portugal",score:"1"},{name:"DR Congo",score:"1"}], h1Home:1, h1Away:1 },
+  "eng-cro": { home_team:"England", away_team:"Croatia", completed:true,
+    scores:[{name:"England",score:"4"},{name:"Croatia",score:"2"}], h1Home:2, h1Away:2 },
+  "gha-pan": { home_team:"Ghana", away_team:"Panama", completed:true,
+    scores:[{name:"Ghana",score:"1"},{name:"Panama",score:"0"}], h1Home:0, h1Away:0 },
+  "uzb-col": { home_team:"Uzbekistan", away_team:"Colombia", completed:true,
+    scores:[{name:"Uzbekistan",score:"1"},{name:"Colombia",score:"3"}], h1Home:0, h1Away:1 },
 };
 
 async function autoResolveBets(bets, oddsKey) {
@@ -1656,7 +1623,7 @@ function WCTopPicksTab({ simData, betLogger }) {
       <div style={S.sec}>
         <StatsBanner stats={stats} T={T} S={S}/>
         <div style={{ ...S.card, background:"#0a1020", border:"1px solid "+T.gold+"33", marginBottom:14 }}>
-          <div style={{ fontSize:11, color:T.gold, fontWeight:700, letterSpacing:"1px" }}>TOP PICKS — JUNE 17, 2026</div>
+          <div style={{ fontSize:11, color:T.gold, fontWeight:700, letterSpacing:"1px" }}>TOP PICKS — JUNE 18, 2026</div>
           <div style={{ fontSize:10, color:T.muted, marginTop:3 }}>
             {simsReady}/{MATCHES.length} matches simulated · {allBets.length} qualifying signals
             {saving ? " · Saving to Gist..." : allSimsReady && loggedCount > 0 ? " · "+loggedCount+" auto-logged ✓" : ""}
