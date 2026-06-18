@@ -921,7 +921,7 @@ function calcStats(bets) {
   const totalUnits = resolved.reduce((a, b) => a + (b.result === "win" ? b.units : b.result === "loss" ? -b.units : 0), 0);
 
   const bySport = {};
-  const byTier = {};
+  const bySportTier = {};
   resolved.forEach(b => {
     if (!bySport[b.sport]) bySport[b.sport] = { wins:0, losses:0, pushes:0, units:0 };
     bySport[b.sport].units += b.result === "win" ? b.units : b.result === "loss" ? -b.units : 0;
@@ -929,11 +929,12 @@ function calcStats(bets) {
     else if (b.result === "loss") bySport[b.sport].losses++;
     else bySport[b.sport].pushes++;
     const tier = b.tier || "OTHER";
-    if (!byTier[tier]) byTier[tier] = { wins:0, losses:0, pushes:0, units:0 };
-    byTier[tier].units += b.result === "win" ? b.units : b.result === "loss" ? -b.units : 0;
-    if (b.result === "win") byTier[tier].wins++;
-    else if (b.result === "loss") byTier[tier].losses++;
-    else byTier[tier].pushes++;
+    if (!bySportTier[b.sport]) bySportTier[b.sport] = {};
+    if (!bySportTier[b.sport][tier]) bySportTier[b.sport][tier] = { wins:0, losses:0, pushes:0, units:0 };
+    bySportTier[b.sport][tier].units += b.result === "win" ? b.units : b.result === "loss" ? -b.units : 0;
+    if (b.result === "win") bySportTier[b.sport][tier].wins++;
+    else if (b.result === "loss") bySportTier[b.sport][tier].losses++;
+    else bySportTier[b.sport][tier].pushes++;
   });
 
   return {
@@ -941,7 +942,7 @@ function calcStats(bets) {
     winPct: resolved.length ? ((wins.length / (resolved.length - pushes.length)) * 100).toFixed(1) : "—",
     totalUnits: totalUnits.toFixed(1),
     pending: bets.filter(b => b.result === "pending").length,
-    bySport, byTier,
+    bySport, bySportTier,
   };
 }
 
@@ -1083,7 +1084,6 @@ const TIER_COLORS = { LOCK:"#ef4444", HIGH:"#22c55e", LEAN:"#e8c547", CONSIDER:"
 function StatsBanner({ stats, T, S }) {
   if (!stats || stats.total === 0) return null;
   const unitColor = parseFloat(stats.totalUnits) >= 0 ? T.green : T.red;
-  const tierEntries = TIER_ORDER.filter(t => stats.byTier && stats.byTier[t]);
   return (
     <div style={{ background:T.navy, border:"1px solid "+T.border, borderRadius:6, padding:"12px 16px", marginBottom:16 }}>
       <div style={{ display:"flex", gap:20, flexWrap:"wrap", alignItems:"center" }}>
@@ -1091,37 +1091,33 @@ function StatsBanner({ stats, T, S }) {
         <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Record</div><div style={{ fontSize:14, fontWeight:700 }}><span style={{ color:T.green }}>{stats.wins}W</span>-<span style={{ color:T.red }}>{stats.losses}L</span>-<span style={{ color:T.muted }}>{stats.pushes}P</span></div></div>
         <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Units</div><div style={{ fontSize:20, fontWeight:700, color:unitColor }}>{parseFloat(stats.totalUnits)>=0?"+":""}{stats.totalUnits}u</div></div>
         <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Pending</div><div style={{ fontSize:14, fontWeight:700, color:T.yellow }}>{stats.pending}</div></div>
-        {Object.entries(stats.bySport||{}).map(([sport,s]) => (
-          <div key={sport} style={{ borderLeft:"1px solid "+T.border, paddingLeft:16 }}>
-            <div style={{ fontSize:"8px", color:T.muted, letterSpacing:"1px", textTransform:"uppercase" }}>{sport}</div>
-            <div style={{ fontSize:12, fontWeight:700 }}>
-              <span style={{ color:T.green }}>{s.wins}W</span>-<span style={{ color:T.red }}>{s.losses}L</span>
-              <span style={{ fontSize:10, color:parseFloat(s.units)>=0?T.green:T.red, marginLeft:6 }}>{parseFloat(s.units)>=0?"+":""}{s.units.toFixed(1)}u</span>
-            </div>
-          </div>
-        ))}
       </div>
-      {tierEntries.length > 0 && (
-        <div style={{ marginTop:10, paddingTop:10, borderTop:"1px solid "+T.border, display:"flex", gap:12, flexWrap:"wrap" }}>
-          {tierEntries.map(tier => {
-            const s = stats.byTier[tier];
-            const tc = TIER_COLORS[tier];
-            const nonPush = s.wins + s.losses;
-            const wpct = nonPush > 0 ? ((s.wins/nonPush)*100).toFixed(0) : "—";
-            return (
-              <div key={tier} style={{ display:"flex", alignItems:"center", gap:6 }}>
-                <span style={{ background:tc+"22", border:"1px solid "+tc+"44", color:tc, fontSize:"7px", fontWeight:700, padding:"1px 5px", borderRadius:2, letterSpacing:"1px" }}>{tier}</span>
-                <span style={{ fontSize:11, fontWeight:700 }}>
-                  <span style={{ color:T.green }}>{s.wins}W</span>-<span style={{ color:T.red }}>{s.losses}L</span>
-                  {s.pushes > 0 && <span style={{ color:T.muted }}>-{s.pushes}P</span>}
-                </span>
-                <span style={{ fontSize:9, color:T.muted }}>{wpct}{wpct!=="—"?"%":""}</span>
-                <span style={{ fontSize:9, color:parseFloat(s.units)>=0?T.green:T.red }}>{parseFloat(s.units)>=0?"+":""}{s.units.toFixed(1)}u</span>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      {Object.entries(stats.bySportTier||{}).map(([sport, tiers]) => {
+        const sp = stats.bySport[sport];
+        const spUc = sp.units >= 0 ? T.green : T.red;
+        const sportTiers = TIER_ORDER.filter(t => tiers[t]);
+        return (
+          <div key={sport} style={{ marginTop:10, paddingTop:10, borderTop:"1px solid "+T.border, display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+            <div style={{ minWidth:52 }}>
+              <div style={{ fontSize:"8px", color:T.muted, letterSpacing:"1px", textTransform:"uppercase", marginBottom:2 }}>{sport}</div>
+              <span style={{ fontSize:11, fontWeight:700 }}><span style={{ color:T.green }}>{sp.wins}W</span>-<span style={{ color:T.red }}>{sp.losses}L</span></span>
+              <span style={{ fontSize:9, color:spUc, marginLeft:5 }}>{sp.units>=0?"+":""}{sp.units.toFixed(1)}u</span>
+            </div>
+            {sportTiers.map(tier => {
+              const s = tiers[tier]; const tc = TIER_COLORS[tier];
+              const wpct = (s.wins+s.losses) > 0 ? ((s.wins/(s.wins+s.losses))*100).toFixed(0) : "—";
+              return (
+                <div key={tier} style={{ display:"flex", alignItems:"center", gap:5 }}>
+                  <span style={{ background:tc+"22", border:"1px solid "+tc+"44", color:tc, fontSize:"7px", fontWeight:700, padding:"1px 5px", borderRadius:2, letterSpacing:"1px" }}>{tier}</span>
+                  <span style={{ fontSize:11, fontWeight:700 }}><span style={{ color:T.green }}>{s.wins}W</span>-<span style={{ color:T.red }}>{s.losses}L</span>{s.pushes>0&&<span style={{ color:T.muted }}>-{s.pushes}P</span>}</span>
+                  <span style={{ fontSize:9, color:T.muted }}>{wpct}{wpct!=="—"?"%":""}</span>
+                  <span style={{ fontSize:9, color:s.units>=0?T.green:T.red }}>{s.units>=0?"+":""}{s.units.toFixed(1)}u</span>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
     </div>
   );
 }
