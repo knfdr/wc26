@@ -1699,6 +1699,33 @@ function App() {
     setTimeout(runNext, 200);
   }, []);
 
+  function refreshAll() {
+    if (runningId) return;
+    localStorage.removeItem(SIM_CACHE_KEY);
+    setSimData({});
+    appAutoLoggedRef.current = false;
+    autoRanRef.current = false;
+    let idx = 0;
+    function runNext() {
+      if (idx >= MATCHES.length) return;
+      const match = MATCHES[idx++];
+      setRunningId(match.id);
+      setTimeout(() => {
+        const raw = runSimulation(match, 100000);
+        const agg = aggregate(match, raw);
+        setSimData(prev => {
+          const next = { ...prev, [match.id]: agg };
+          localStorage.setItem(SIM_CACHE_KEY, JSON.stringify(next));
+          return next;
+        });
+        setRunCounts(prev => ({ ...prev, [match.id]: (prev[match.id] || 0) + 1 }));
+        setRunningId(null);
+        setTimeout(runNext, 30);
+      }, 50);
+    }
+    setTimeout(runNext, 50);
+  }
+
   const isParlayTab = activeId === "parlays";
   const isTopPicksTab = activeId === "top_picks";
   const allSimsReady = MATCHES.every(m => !!simData[m.id]);
@@ -1739,6 +1766,9 @@ function App() {
             <span style={{ color:parseFloat(betLogger.stats.totalUnits)>=0?T.green:T.red, marginLeft:6 }}>{parseFloat(betLogger.stats.totalUnits)>=0?"+":""}{betLogger.stats.totalUnits}u</span>
           </div>
         )}
+        <button onClick={refreshAll} disabled={!!runningId} style={{ background:"none", border:"1px solid "+T.border, color:runningId?T.muted:T.green, padding:"4px 10px", borderRadius:4, fontSize:9, cursor:runningId?"default":"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
+          {runningId ? "Running..." : "↻ Refresh"}
+        </button>
       </div>
 
       {/* LOADING BAR */}
