@@ -814,6 +814,183 @@ function TopPicksTab({ simData, games, betLogger }) {
   );
 }
 
+// ── Parlay Builder ────────────────────────────────────────────────────────────
+const PARLAY_SIZE_LABELS = { 2:"2-Leg", 3:"3-Leg", 4:"4-Leg", 5:"5-Leg" };
+
+function buildWNBAParlays(simData, games) {
+  const allLegs = [];
+  games.forEach(game => {
+    const key = game.homeTeam + "|" + game.awayTeam;
+    const agg = simData[key];
+    if (!agg) return;
+    extractTopBets(agg, game).forEach(b => {
+      allLegs.push({ matchId: key, match: b.awayTeam + " @ " + b.homeTeam,
+        market: b.market, prob: parseFloat(b.simPct)/100, probPct: b.simPct, tier: b.tier, units: b.units });
+    });
+  });
+
+  if (allLegs.length === 0) return { legs: allLegs, parlays: [] };
+
+  function buildCombos(legs, size) {
+    const results = [];
+    function combine(start, current) {
+      if (current.length === size) { results.push([...current]); return; }
+      for (let i = start; i < legs.length; i++) {
+        if (!current.map(l => l.matchId).includes(legs[i].matchId)) {
+          current.push(legs[i]); combine(i+1, current); current.pop();
+        }
+      }
+    }
+    combine(0, []);
+    return results;
+  }
+
+  const parlays = [];
+  for (const size of [2,3,4,5]) {
+    buildCombos(allLegs, size).forEach(combo => {
+      const jp = combo.reduce((acc,leg) => acc * leg.prob, 1);
+      parlays.push({ legs:combo, size, jointProb:jp, jointProbPct:(jp*100).toFixed(2) });
+    });
+  }
+  parlays.sort((a,b) => b.jointProb - a.jointProb);
+  return { legs: allLegs, parlays: parlays.slice(0,40) };
+}
+
+function WNBAParlayTab({ simData, games, betLogger }) {
+  const [filterSize, setFilterSize] = useState("all");
+  const simsReady = games.filter(g => simData[g.homeTeam+"|"+g.awayTeam]).length;
+
+  if (simsReady < 2) {
+    return (
+      <div style={{ textAlign:"center", padding:"48px 24px", color:T.muted, fontSize:11, lineHeight:2 }}>
+        <div style={{ fontSize:22, marginBottom:12 }}>⏳</div>
+        Parlay builder needs at least 2 games simulated for cross-game parlays.
+        <div style={{ marginTop:16, display:"flex", gap:8, justifyContent:"center", flexWrap:"wrap" }}>
+          {games.map(g => {
+            const ready = !!simData[g.homeTeam+"|"+g.awayTeam];
+            return (
+              <div key={g.id} style={{ background:ready?T.green+"22":T.card, border:"1px solid "+(ready?T.green:T.border), borderRadius:4, padding:"4px 10px", fontSize:10, color:ready?T.green:T.muted }}>
+                {ready?"✓":"○"} {TEAM_PARAMS[g.awayTeam]?.abbr||"?"} @ {TEAM_PARAMS[g.homeTeam]?.abbr||"?"}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  const { legs, parlays } = buildWNBAParlays(simData, games);
+  const filtered = filterSize==="all" ? parlays : parlays.filter(p=>p.size===parseInt(filterSize));
+
+  return (
+    <div style={{ maxWidth:920, margin:"0 auto", padding:"0 14px 48px" }}>
+      <div style={S.sec}>
+        <div style={{ ...S.card, background:"#0a1020", border:"1px solid "+T.accent+"33" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
+            <div>
+              <div style={{ fontSize:11, color:T.accent, fontWeight:700, letterSpacing:"1px" }}>WNBA PARLAY BUILDER</div>
+              <div style={{ fontSize:10, color:T.muted, marginTop:3 }}>
+                {legs.length} qualifying legs · {simsReady} games simulated · 2/3/4/5-leg cross-game combos · Sorted by joint probability
+              </div>
+            </div>
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+              <span style={{ background:T.red+"22", border:"1px solid "+T.red+"44", color:T.red, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>LOCK ≥70%</span>
+              <span style={{ background:T.green+"22", border:"1px solid "+T.green+"44", color:T.green, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>HIGH ≥60%</span>
+              <span style={{ background:T.gold+"22", border:"1px solid "+T.gold+"44", color:T.gold, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>LEAN &gt;52%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={S.sec}>
+        <div style={S.secLabel}>Signal Pool ({legs.length} legs)</div>
+        <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+          {legs.map((leg,i) => {
+            const tc = tierColor(leg.tier, T);
+            return (
+              <div key={i} style={{ background:T.card, border:"1px solid "+T.border, borderLeft:"3px solid "+tc, borderRadius:4, padding:"5px 10px", fontSize:10, display:"flex", alignItems:"center", gap:6 }}>
+                <span style={{ background:tc+"22", color:tc, fontSize:"8px", fontWeight:700, padding:"1px 5px", borderRadius:2 }}>{leg.tier}</span>
+                <span style={{ color:T.muted, fontSize:9 }}>{leg.match} ·</span>
+                <span style={{ color:T.text, fontWeight:700 }}>{leg.market}</span>
+                <span style={{ color:tc, marginLeft:2 }}>{leg.probPct}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{ ...S.sec, display:"flex", gap:6, flexWrap:"wrap" }}>
+        {["all","2","3","4","5"].map(v=>(
+          <button key={v} onClick={()=>setFilterSize(v)} style={{ padding:"6px 14px", fontSize:10, fontWeight:700, letterSpacing:"1px", background:filterSize===v?T.accent:T.card, color:filterSize===v?"#070b14":T.muted, border:"1px solid "+(filterSize===v?T.accent:T.border), borderRadius:4, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
+            {v==="all"?"ALL":v+"-LEG"}
+          </button>
+        ))}
+        <div style={{ marginLeft:"auto", fontSize:10, color:T.muted, alignSelf:"center" }}>Showing {filtered.length} parlays</div>
+      </div>
+
+      {filtered.length===0 && <div style={{ ...S.card, textAlign:"center", padding:32, color:T.muted, fontSize:11, marginTop:12 }}>Not enough cross-game signals for {filterSize}-leg parlays.</div>}
+
+      {filtered.map((parlay,pi) => {
+        const jp = parlay.jointProb;
+        const fairOdds = jp > 0 ? (jp < 0.5 ? "+" + Math.round((1/jp-1)*100) : "-" + Math.round((jp/(1-jp))*100)) : "—";
+        const rankColor = pi===0?T.gold:pi===1?"#94a3b8":pi===2?"#cd7f32":T.border;
+        const totalUnits = parlay.legs.reduce((a,l)=>a+l.units,0).toFixed(1);
+        const parlayBet = {
+          id: Date.now()+"_p"+pi,
+          sport:"WNBA", gameId:"parlay_"+pi,
+          homeTeam:"(parlay)", awayTeam:"("+parlay.size+"-leg)",
+          market: parlay.legs.map(l=>l.market).join(" + "),
+          simPct: parlay.jointProbPct+"%", bookOdds: fairOdds,
+          tier: parlay.legs[0].tier, units: Math.min(parseFloat(totalUnits), 2),
+          loggedAt: new Date().toISOString(), result:"pending",
+          resolvedAt:null, finalScore:null,
+          gameDate: new Date().toISOString().slice(0,10),
+        };
+        return (
+          <div key={pi} style={{ ...S.card, marginTop:10, borderLeft:"3px solid "+(pi<3?rankColor:T.border) }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10, flexWrap:"wrap", gap:6 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                <div style={{ background:pi<3?rankColor+"22":T.navy, border:"1px solid "+(pi<3?rankColor:T.border), color:pi<3?rankColor:T.muted, fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:3 }}>#{pi+1}</div>
+                <div style={{ background:T.purple+"1a", border:"1px solid "+T.purple+"33", color:T.purple, fontSize:9, padding:"2px 8px", borderRadius:3, letterSpacing:"1px" }}>{PARLAY_SIZE_LABELS[parlay.size]}</div>
+              </div>
+              <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                <div style={{ textAlign:"right" }}>
+                  <div style={{ fontSize:22, fontWeight:700, color:jp>0.4?T.green:jp>0.2?T.gold:T.red }}>{parlay.jointProbPct}%</div>
+                  <div style={{ fontSize:9, color:T.muted }}>joint probability</div>
+                </div>
+                <button onClick={()=>betLogger.logAllBets([parlayBet])} style={{ background:T.accent, color:"#070b14", border:"none", borderRadius:4, padding:"6px 12px", fontSize:9, fontWeight:700, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
+                  + LOG
+                </button>
+              </div>
+            </div>
+            <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+              {parlay.legs.map((leg,li) => {
+                const tc = tierColor(leg.tier, T);
+                return (
+                  <div key={li} style={{ display:"flex", alignItems:"center", gap:8, background:T.navy, borderRadius:4, padding:"7px 10px", borderLeft:"2px solid "+tc }}>
+                    <span style={{ background:tc+"22", color:tc, fontSize:"8px", fontWeight:700, padding:"1px 5px", borderRadius:2, minWidth:32, textAlign:"center" }}>{leg.tier}</span>
+                    <div style={{ fontSize:9, color:T.muted, minWidth:110 }}>{leg.match}</div>
+                    <div style={{ flex:1, fontSize:11, color:T.text, fontWeight:600 }}>{leg.market}</div>
+                    <div style={{ fontSize:9, color:T.purple }}>{leg.units}u</div>
+                    <div style={{ fontSize:11, color:tc, fontWeight:700, minWidth:44, textAlign:"right" }}>{leg.probPct}</div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ display:"flex", gap:16, marginTop:10, flexWrap:"wrap" }}>
+              <div><div style={{ fontSize:9, color:T.muted }}>JOINT PROB</div><div style={{ fontSize:13, fontWeight:700 }}>{parlay.jointProbPct}%</div></div>
+              <div><div style={{ fontSize:9, color:T.muted }}>FAIR ODDS (no vig)</div><div style={{ fontSize:13, fontWeight:700, color:T.gold }}>{fairOdds}</div></div>
+              <div><div style={{ fontSize:9, color:T.muted }}>LEGS</div><div style={{ fontSize:13, fontWeight:700, color:T.purple }}>{parlay.size}</div></div>
+              <div><div style={{ fontSize:9, color:T.muted }}>TOTAL UNITS</div><div style={{ fontSize:13, fontWeight:700, color:T.green }}>{totalUnits}u</div></div>
+            </div>
+          </div>
+        );
+      })}
+      <div style={S.disclaimer}>Parlay legs assumed independent across games. Fair odds before vig. Not professional betting advice. Gamble responsibly.</div>
+    </div>
+  );
+}
+
 // ── Main App ──────────────────────────────────────────────────────────────────
 function App() {
   const [games, setGames] = useState([]);
@@ -911,7 +1088,7 @@ function App() {
   }
 
   const activeGameIdx = activeTab.startsWith("game_") ? parseInt(activeTab.split("_")[1]) : 0;
-  const isSpecialTab = activeTab === "top_picks";
+  const isSpecialTab = activeTab === "top_picks" || activeTab === "parlays";
   const activeGame = isSpecialTab ? null : games[activeGameIdx];
   const gameKey = activeGame ? activeGame.homeTeam + "|" + activeGame.awayTeam : null;
   const topBetCount = (() => {
@@ -946,6 +1123,10 @@ function App() {
           </button>
         ))}
         <div style={{ flex:1 }}/>
+        <button style={{ ...S.tab(activeTab === "parlays"), color:activeTab==="parlays"?T.purple:T.muted, borderBottom:activeTab==="parlays"?"2px solid "+T.purple:"2px solid transparent", borderLeft:"1px solid "+T.border }}
+          onClick={() => setActiveTab("parlays")}>
+          🎲 PARLAYS
+        </button>
         <button style={{ ...S.tab(activeTab === "top_picks"), color:activeTab==="top_picks"?T.green:T.muted, borderBottom:activeTab==="top_picks"?"2px solid "+T.green:"2px solid transparent", borderLeft:"1px solid "+T.border }}
           onClick={() => setActiveTab("top_picks")}>
           ⭐ TOP PICKS {topBetCount > 0 ? "(" + topBetCount + ")" : ""}
@@ -967,6 +1148,7 @@ function App() {
       )}
 
       {activeTab === "top_picks" && <TopPicksTab simData={simData} games={games} betLogger={betLogger}/>}
+      {activeTab === "parlays" && <WNBAParlayTab simData={simData} games={games} betLogger={betLogger}/>}
       {!isSpecialTab && activeGame && (
         <GameSimView
           game={activeGame}
