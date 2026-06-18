@@ -270,13 +270,22 @@ const TIER_COLORS = { LOCK:"#ef4444", HIGH:"#22c55e", LEAN:"#e8c547", CONSIDER:"
 const RESOLVE_CACHE_KEY = "sharp_resolve_cache";
 const RESOLVE_TTL = 15 * 60 * 1000;
 
+function formatAge(ts) {
+  const mins = Math.floor((Date.now() - ts) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return mins + "m ago";
+  const hrs = Math.floor(mins / 60);
+  return hrs + "h " + (mins % 60) + "m ago";
+}
+
 async function loadStats() {
   try {
-    let bets;
+    let bets, fetchedAt;
     try {
       const cached = JSON.parse(localStorage.getItem(RESOLVE_CACHE_KEY) || "null");
       if (cached && Date.now() - cached.ts < RESOLVE_TTL) {
         bets = cached.bets;
+        fetchedAt = cached.ts;
       }
     } catch(e) {}
 
@@ -284,7 +293,8 @@ async function loadStats() {
       const res = await fetch("/api/resolve");
       if (!res.ok) return;
       bets = await res.json();
-      try { localStorage.setItem(RESOLVE_CACHE_KEY, JSON.stringify({ ts: Date.now(), bets })); } catch(e) {}
+      fetchedAt = Date.now();
+      try { localStorage.setItem(RESOLVE_CACHE_KEY, JSON.stringify({ ts: fetchedAt, bets })); } catch(e) {}
     }
 
     if (!bets.length) return;
@@ -335,6 +345,7 @@ async function loadStats() {
         html += '<span style="font-size:9px;color:'+tuc+'">'+(parseFloat(tu)>=0?"+":"")+tu+'u</span>';
         html += '</div>';
       });
+      html += '<div style="font-size:8px;color:#2a3a52;margin-top:5px;letter-spacing:0.5px">fetched '+formatAge(fetchedAt)+'</div>';
       html += '</div>';
       slot.innerHTML = html;
     });
