@@ -256,50 +256,94 @@ a{text-decoration:none;color:inherit}
 <div class="footer">SHARP SIM · MONTE CARLO SPORTS MODELING · NOT PROFESSIONAL BETTING ADVICE</div>
 
 <script>
-const GIST_ID = "8a76d2b09c709882e4364528a0152ccc";
 const GIST_FILE = "sharpsim_bets.json";
+const TIER_ORDER = ["LOCK","HIGH","LEAN","CONSIDER","OTHER"];
+const TIER_COLORS = { LOCK:"#ef4444", HIGH:"#22c55e", LEAN:"#e8c547", CONSIDER:"#a78bfa", OTHER:"#4b6280" };
 
 async function loadStats() {
-  const token = localStorage.getItem("sharp_gh_token");
-  if (!token) return;
   try {
-    const res = await fetch("https://api.github.com/gists/"+GIST_ID, { headers:{Authorization:"token "+token} });
+    const res = await fetch("/api/gist");
     if (!res.ok) return;
     const data = await res.json();
     const content = data.files[GIST_FILE] && data.files[GIST_FILE].content;
     const bets = JSON.parse(content||"[]");
-    const resolved = bets.filter(b=>b.result!=="pending");
-    if (bets.length===0) return;
-    const wins = resolved.filter(b=>b.result==="win").length;
-    const losses = resolved.filter(b=>b.result==="loss").length;
-    const pushes = resolved.filter(b=>b.result==="push").length;
+    if (!bets.length) return;
+
+    const resolved = bets.filter(b => b.result !== "pending");
+    const wins = resolved.filter(b => b.result === "win").length;
+    const losses = resolved.filter(b => b.result === "loss").length;
+    const pushes = resolved.filter(b => b.result === "push").length;
     const decidable = resolved.length - pushes;
     const winPct = decidable > 0 ? ((wins/decidable)*100).toFixed(1) : "—";
-    const units = resolved.reduce((a,b)=>a+(b.result==="win"?b.units:b.result==="loss"?-b.units:0),0).toFixed(1);
-    const pending = bets.filter(b=>b.result==="pending").length;
+    const units = resolved.reduce((a,b) => a+(b.result==="win"?b.units:b.result==="loss"?-b.units:0), 0).toFixed(1);
+    const pending = bets.filter(b => b.result === "pending").length;
+
+    // bySportTier: { sport: { tier: { wins, losses, pushes, units } } }
     const bySport = {};
-    resolved.forEach(b=>{
-      if(!bySport[b.sport]) bySport[b.sport]={wins:0,losses:0,units:0};
-      bySport[b.sport].units+=b.result==="win"?b.units:b.result==="loss"?-b.units:0;
-      if(b.result==="win") bySport[b.sport].wins++;
-      else if(b.result==="loss") bySport[b.sport].losses++;
+    const bySportTier = {};
+    resolved.forEach(b => {
+      const tier = b.tier || "OTHER";
+      if (!bySport[b.sport]) bySport[b.sport] = { wins:0, losses:0, pushes:0, units:0 };
+      bySport[b.sport].units += b.result==="win"?b.units:b.result==="loss"?-b.units:0;
+      if (b.result==="win") bySport[b.sport].wins++;
+      else if (b.result==="loss") bySport[b.sport].losses++;
+      else bySport[b.sport].pushes++;
+      if (!bySportTier[b.sport]) bySportTier[b.sport] = {};
+      if (!bySportTier[b.sport][tier]) bySportTier[b.sport][tier] = { wins:0, losses:0, pushes:0, units:0 };
+      bySportTier[b.sport][tier].units += b.result==="win"?b.units:b.result==="loss"?-b.units:0;
+      if (b.result==="win") bySportTier[b.sport][tier].wins++;
+      else if (b.result==="loss") bySportTier[b.sport][tier].losses++;
+      else bySportTier[b.sport][tier].pushes++;
     });
-    const unitColor = parseFloat(units)>=0?"#22c55e":"#ef4444";
-    const winPctDisplay = winPct === "—" ? "—" : winPct+"%";
-    let html = '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center">';
-    html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Overall Win %</div><div style="font-size:26px;font-weight:700;color:#22c55e">'+winPctDisplay+'</div></div>';
-    html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Record</div><div style="font-size:18px;font-weight:700"><span style="color:#22c55e">'+wins+'W</span>-<span style="color:#ef4444">'+losses+'L</span>-<span style="color:#4b6280">'+pushes+'P</span></div></div>';
-    html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Total Units</div><div style="font-size:26px;font-weight:700;color:'+unitColor+'">'+(parseFloat(units)>=0?"+":"")+units+'u</div></div>';
+
+    const uc = parseFloat(units)>=0?"#22c55e":"#ef4444";
+    const wpDisp = winPct==="—"?"—":winPct+"%";
+
+    let html = '';
+
+    // Overall row
+    html += '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid #1a2a3e">';
+    html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Overall Win %</div><div style="font-size:26px;font-weight:700;color:#22c55e">'+wpDisp+'</div></div>';
+    html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Record</div><div style="font-size:18px;font-weight:700"><span style="color:#22c55e">'+wins+'W</span>-<span style="color:#ef4444">'+losses+'L</span><span style="color:#4b6280;font-size:13px"> '+pushes+'P</span></div></div>';
+    html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Total Units</div><div style="font-size:26px;font-weight:700;color:'+uc+'">'+(parseFloat(units)>=0?"+":"")+units+'u</div></div>';
     html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Pending</div><div style="font-size:18px;font-weight:700;color:#fbbf24">'+pending+'</div></div>';
-    Object.entries(bySport).forEach(([sport,s])=>{
-      const su = s.units.toFixed(1);
-      const sc = parseFloat(su)>=0?"#22c55e":"#ef4444";
-      const wp = (s.wins+s.losses)>0?((s.wins/(s.wins+s.losses))*100).toFixed(0):0;
-      html += '<div style="border-left:1px solid #1a2a3e;padding-left:20px"><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">'+sport+'</div>';
-      html += '<div style="font-size:14px;font-weight:700"><span style="color:#22c55e">'+s.wins+'W</span>-<span style="color:#ef4444">'+s.losses+'L</span></div>';
-      html += '<div style="font-size:10px;color:'+sc+'">'+(parseFloat(su)>=0?"+":"")+su+'u · '+wp+'% W</div></div>';
-    });
     html += '</div>';
+
+    // Per-sport blocks
+    Object.entries(bySport).forEach(([sport, sp]) => {
+      const su = sp.units.toFixed(1);
+      const sc = parseFloat(su)>=0?"#22c55e":"#ef4444";
+      const swp = (sp.wins+sp.losses)>0?((sp.wins/(sp.wins+sp.losses))*100).toFixed(0)+"%" : "—";
+      const tiers = bySportTier[sport] || {};
+      const activeTiers = TIER_ORDER.filter(t => tiers[t]);
+
+      html += '<div style="margin-bottom:12px">';
+      // Sport header line
+      html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">';
+      html += '<div style="font-size:9px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;min-width:48px">'+sport+'</div>';
+      html += '<div style="font-size:14px;font-weight:700"><span style="color:#22c55e">'+sp.wins+'W</span>-<span style="color:#ef4444">'+sp.losses+'L</span>'+(sp.pushes>0?'<span style="color:#4b6280;font-size:11px"> '+sp.pushes+'P</span>':'')+'</div>';
+      html += '<div style="font-size:10px;color:'+sc+'">'+(parseFloat(su)>=0?"+":"")+su+'u</div>';
+      html += '<div style="font-size:9px;color:#4b6280">'+swp+'</div>';
+      html += '</div>';
+
+      // Tier rows
+      activeTiers.forEach(tier => {
+        const s = tiers[tier];
+        const tc = TIER_COLORS[tier];
+        const tu = s.units.toFixed(1);
+        const tuc = parseFloat(tu)>=0?"#22c55e":"#ef4444";
+        const twp = (s.wins+s.losses)>0?((s.wins/(s.wins+s.losses))*100).toFixed(0)+"%" : "—";
+        html += '<div style="display:flex;align-items:center;gap:10px;padding:3px 0 3px 16px;border-left:2px solid '+tc+'44">';
+        html += '<span style="background:'+tc+'22;border:1px solid '+tc+'44;color:'+tc+';font-size:7px;font-weight:700;padding:1px 5px;border-radius:2px;letter-spacing:1px;min-width:52px;text-align:center">'+tier+'</span>';
+        html += '<span style="font-size:12px;font-weight:700"><span style="color:#22c55e">'+s.wins+'W</span>-<span style="color:#ef4444">'+s.losses+'L</span>'+(s.pushes>0?'<span style="color:#4b6280"> '+s.pushes+'P</span>':'')+'</span>';
+        html += '<span style="font-size:9px;color:#4b6280">'+twp+'</span>';
+        html += '<span style="font-size:9px;color:'+tuc+'">'+(parseFloat(tu)>=0?"+":"")+tu+'u</span>';
+        html += '</div>';
+      });
+
+      html += '</div>';
+    });
+
     document.getElementById("stats-banner").innerHTML = html;
     document.getElementById("stats-banner").style.display = "block";
     document.getElementById("stats-label").style.display = "block";
