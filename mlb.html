@@ -1444,12 +1444,12 @@ function App() {
       <div style={{ background:T.navy, borderBottom:"1px solid "+T.border, padding:"8px 16px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
         <a href="index.html" style={{ fontSize:10, color:T.muted, letterSpacing:"1px" }}>← Sharp Sim</a>
         <div style={{ flex:1 }}/>
-        {betLogger.stats.total > 0 && (
+        {(() => { const sp = betLogger.stats.bySport && betLogger.stats.bySport["MLB"]; return sp && (sp.wins+sp.losses) > 0 && (
           <div style={{ fontSize:10, color:T.muted }}>
-            Record: <span style={{ color:T.green }}>{betLogger.stats.wins}W</span>-<span style={{ color:T.red }}>{betLogger.stats.losses}L</span>
-            <span style={{ color:parseFloat(betLogger.stats.totalUnits)>=0?T.green:T.red, marginLeft:6 }}>{parseFloat(betLogger.stats.totalUnits)>=0?"+":""}{betLogger.stats.totalUnits}u</span>
+            MLB: <span style={{ color:T.green }}>{sp.wins}W</span>-<span style={{ color:T.red }}>{sp.losses}L</span>
+            <span style={{ color:sp.units>=0?T.green:T.red, marginLeft:6 }}>{sp.units>=0?"+":""}{sp.units.toFixed(1)}u</span>
           </div>
-        )}
+        ); })()}
         <div style={{ fontSize:9, color:T.muted }}>{games.length > 0 ? games.length+" games" : loading?"Loading...":""}</div>
         {lastFetched && <div style={{ fontSize:8, color:T.muted, letterSpacing:"0.5px" }}>cached {formatAge(lastFetched)}</div>}
         <button onClick={()=>{ autoRanRef.current=false; loadGames({ force: true }); }} disabled={loading||!!runningId} style={{ background:"none", border:"1px solid "+T.border, color:(loading||!!runningId)?T.muted:T.green, padding:"4px 10px", borderRadius:4, fontSize:9, cursor:(loading||!!runningId)?"default":"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>

@@ -1105,6 +1105,13 @@ function App() {
       {/* Nav */}
       <div style={{ background:T.navy, borderBottom:"1px solid "+T.border, padding:"10px 16px", display:"flex", alignItems:"center", gap:12, justifyContent:"space-between" }}>
         <a href="index.html" style={{ fontSize:9, color:T.muted, letterSpacing:"1px" }}>← SHARP SIM</a>
+        <div style={{ flex:1 }}/>
+        {(() => { const sp = betLogger.stats.bySport && betLogger.stats.bySport["WNBA"]; return sp && (sp.wins+sp.losses) > 0 && (
+          <div style={{ fontSize:10, color:T.muted }}>
+            WNBA: <span style={{ color:T.green }}>{sp.wins}W</span>-<span style={{ color:T.red }}>{sp.losses}L</span>
+            <span style={{ color:sp.units>=0?T.green:T.red, marginLeft:6 }}>{sp.units>=0?"+":""}{sp.units.toFixed(1)}u</span>
+          </div>
+        ); })()}
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
           {lastFetched && <span style={{ fontSize:9, color:T.muted }}>fetched {formatAge(lastFetched)}</span>}
           <button style={{ background:"none", border:"1px solid "+T.border, color:T.muted, fontSize:9, padding:"4px 10px", borderRadius:3, cursor:"pointer", fontFamily:"inherit" }}
