@@ -159,38 +159,6 @@ a{text-decoration:none;color:inherit}
 
 <div class="body">
 
-  <div class="section-label" id="stats-label">Model Performance</div>
-  <div id="stats-banner" style="background:#101d30;border:1px solid #1a2a3e;border-radius:6px;padding:16px;margin-bottom:32px;">
-    <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid #1a2a3e">
-      <div><div class="skel" style="width:60px;height:8px;margin-bottom:6px"></div><div class="skel" style="width:72px;height:28px"></div></div>
-      <div><div class="skel" style="width:52px;height:8px;margin-bottom:6px"></div><div class="skel" style="width:96px;height:20px"></div></div>
-      <div><div class="skel" style="width:68px;height:8px;margin-bottom:6px"></div><div class="skel" style="width:72px;height:28px"></div></div>
-      <div><div class="skel" style="width:48px;height:8px;margin-bottom:6px"></div><div class="skel" style="width:32px;height:20px"></div></div>
-    </div>
-    <div style="margin-bottom:12px">
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
-        <div class="skel" style="width:36px;height:8px"></div>
-        <div class="skel" style="width:80px;height:16px"></div>
-        <div class="skel" style="width:40px;height:10px"></div>
-      </div>
-      <div style="padding-left:16px;display:flex;flex-direction:column;gap:5px">
-        <div class="skel" style="width:220px;height:12px"></div>
-        <div class="skel" style="width:180px;height:12px"></div>
-      </div>
-    </div>
-    <div>
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
-        <div class="skel" style="width:28px;height:8px"></div>
-        <div class="skel" style="width:80px;height:16px"></div>
-        <div class="skel" style="width:40px;height:10px"></div>
-      </div>
-      <div style="padding-left:16px;display:flex;flex-direction:column;gap:5px">
-        <div class="skel" style="width:200px;height:12px"></div>
-        <div class="skel" style="width:160px;height:12px"></div>
-      </div>
-    </div>
-  </div>
-
   <div class="section-label">Select Sport</div>
   <div class="cards">
 
@@ -199,6 +167,7 @@ a{text-decoration:none;color:inherit}
       <span class="card-icon">⚾</span>
       <div class="card-sport">MLB Baseball</div>
       <div class="card-title">MLB Sim</div>
+      <div id="perf-MLB"><div class="skel" style="width:130px;height:11px;margin:7px 0 10px"></div></div>
       <div class="card-desc">Markov Chain at-bat simulation driven by FIP/xFIP pitcher strength, team wRC+ offense, park-adjusted run expectancy, and live odds from The Odds API.</div>
       <div class="card-tags">
         <span class="card-tag">Markov Chain</span>
@@ -218,6 +187,7 @@ a{text-decoration:none;color:inherit}
       <span class="card-icon">🏀</span>
       <div class="card-sport">WNBA Basketball</div>
       <div class="card-title">WNBA Sim</div>
+      <div id="perf-WNBA"><div class="skel" style="width:130px;height:11px;margin:7px 0 10px"></div></div>
       <div class="card-desc">Possession-by-possession simulation using team offensive/defensive ratings and pace. Quarter-by-quarter model with home court adjustment across all markets.</div>
       <div class="card-tags">
         <span class="card-tag">Off/Def Rtg</span>
@@ -235,6 +205,7 @@ a{text-decoration:none;color:inherit}
       <span class="card-icon">⚽</span>
       <div class="card-sport">FIFA World Cup 2026</div>
       <div class="card-title">WC 2026 Sim</div>
+      <div id="perf-WC"><div class="skel" style="width:130px;height:11px;margin:7px 0 10px"></div></div>
       <div class="card-desc">Dixon-Coles team strength model with xG shot simulation, Negative Binomial card model, 1H splits, corner markets, and parlay builder across all June 14 matches.</div>
       <div class="card-tags">
         <span class="card-tag">Dixon-Coles</span>
@@ -304,15 +275,6 @@ async function loadStats() {
     if (!bets.length) return;
 
     const resolved = bets.filter(b => b.result !== "pending");
-    const wins = resolved.filter(b => b.result === "win").length;
-    const losses = resolved.filter(b => b.result === "loss").length;
-    const pushes = resolved.filter(b => b.result === "push").length;
-    const decidable = resolved.length - pushes;
-    const winPct = decidable > 0 ? ((wins/decidable)*100).toFixed(1) : "—";
-    const units = resolved.reduce((a,b) => a+(b.result==="win"?b.units:b.result==="loss"?-b.units:0), 0).toFixed(1);
-    const pending = bets.filter(b => b.result === "pending").length;
-
-    // bySportTier: { sport: { tier: { wins, losses, pushes, units } } }
     const bySport = {};
     const bySportTier = {};
     resolved.forEach(b => {
@@ -330,55 +292,37 @@ async function loadStats() {
       else bySportTier[b.sport][tier].pushes++;
     });
 
-    const uc = parseFloat(units)>=0?"#22c55e":"#ef4444";
-    const wpDisp = winPct==="—"?"—":winPct+"%";
-
-    let html = '';
-
-    // Overall row
-    html += '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid #1a2a3e">';
-    html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Overall Win %</div><div style="font-size:26px;font-weight:700;color:#22c55e">'+wpDisp+'</div></div>';
-    html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Record</div><div style="font-size:18px;font-weight:700"><span style="color:#22c55e">'+wins+'W</span>-<span style="color:#ef4444">'+losses+'L</span><span style="color:#4b6280;font-size:13px"> '+pushes+'P</span></div></div>';
-    html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Total Units</div><div style="font-size:26px;font-weight:700;color:'+uc+'">'+(parseFloat(units)>=0?"+":"")+units+'u</div></div>';
-    html += '<div><div style="font-size:8px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;margin-bottom:2px">Pending</div><div style="font-size:18px;font-weight:700;color:#fbbf24">'+pending+'</div></div>';
-    html += '</div>';
-
-    // Per-sport blocks
     Object.entries(bySport).forEach(([sport, sp]) => {
+      const slot = document.getElementById("perf-" + sport);
+      if (!slot) return;
       const su = sp.units.toFixed(1);
       const sc = parseFloat(su)>=0?"#22c55e":"#ef4444";
       const swp = (sp.wins+sp.losses)>0?((sp.wins/(sp.wins+sp.losses))*100).toFixed(0)+"%" : "—";
       const tiers = bySportTier[sport] || {};
       const activeTiers = TIER_ORDER.filter(t => tiers[t]);
 
-      html += '<div style="margin-bottom:12px">';
-      // Sport header line
-      html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">';
-      html += '<div style="font-size:9px;color:#4b6280;letter-spacing:2px;text-transform:uppercase;min-width:48px">'+sport+'</div>';
-      html += '<div style="font-size:14px;font-weight:700"><span style="color:#22c55e">'+sp.wins+'W</span>-<span style="color:#ef4444">'+sp.losses+'L</span>'+(sp.pushes>0?'<span style="color:#4b6280;font-size:11px"> '+sp.pushes+'P</span>':'')+'</div>';
-      html += '<div style="font-size:10px;color:'+sc+'">'+(parseFloat(su)>=0?"+":"")+su+'u</div>';
-      html += '<div style="font-size:9px;color:#4b6280">'+swp+'</div>';
+      let html = '<div style="margin:7px 0 10px">';
+      html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px">';
+      html += '<span style="font-size:12px;font-weight:700"><span style="color:#22c55e">'+sp.wins+'W</span>-<span style="color:#ef4444">'+sp.losses+'L</span>'+(sp.pushes>0?'<span style="color:#4b6280;font-size:10px"> '+sp.pushes+'P</span>':'')+'</span>';
+      html += '<span style="font-size:9px;color:'+sc+'">'+(parseFloat(su)>=0?"+":"")+su+'u</span>';
+      html += '<span style="font-size:9px;color:#4b6280">'+swp+'</span>';
       html += '</div>';
-
-      // Tier rows
       activeTiers.forEach(tier => {
         const s = tiers[tier];
         const tc = TIER_COLORS[tier];
         const tu = s.units.toFixed(1);
         const tuc = parseFloat(tu)>=0?"#22c55e":"#ef4444";
         const twp = (s.wins+s.losses)>0?((s.wins/(s.wins+s.losses))*100).toFixed(0)+"%" : "—";
-        html += '<div style="display:flex;align-items:center;gap:10px;padding:3px 0 3px 16px;border-left:2px solid '+tc+'44">';
-        html += '<span style="background:'+tc+'22;border:1px solid '+tc+'44;color:'+tc+';font-size:7px;font-weight:700;padding:1px 5px;border-radius:2px;letter-spacing:1px;min-width:52px;text-align:center">'+tier+'</span>';
-        html += '<span style="font-size:12px;font-weight:700"><span style="color:#22c55e">'+s.wins+'W</span>-<span style="color:#ef4444">'+s.losses+'L</span>'+(s.pushes>0?'<span style="color:#4b6280"> '+s.pushes+'P</span>':'')+'</span>';
+        html += '<div style="display:flex;align-items:center;gap:8px;padding:2px 0 2px 10px;border-left:2px solid '+tc+'44">';
+        html += '<span style="background:'+tc+'22;border:1px solid '+tc+'44;color:'+tc+';font-size:7px;font-weight:700;padding:1px 4px;border-radius:2px;letter-spacing:1px;min-width:48px;text-align:center">'+tier+'</span>';
+        html += '<span style="font-size:11px;font-weight:700"><span style="color:#22c55e">'+s.wins+'W</span>-<span style="color:#ef4444">'+s.losses+'L</span></span>';
         html += '<span style="font-size:9px;color:#4b6280">'+twp+'</span>';
         html += '<span style="font-size:9px;color:'+tuc+'">'+(parseFloat(tu)>=0?"+":"")+tu+'u</span>';
         html += '</div>';
       });
-
       html += '</div>';
+      slot.innerHTML = html;
     });
-
-    document.getElementById("stats-banner").innerHTML = html;
   } catch(e) { console.error("Stats load error:", e); }
 }
 loadStats();
