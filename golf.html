@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sharp Sim — US Open 2026</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100vh;background:#070b14;font-family:'IBM Plex Mono','Courier New',monospace;color:#dde5f0}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:#0c1526}
+::-webkit-scrollbar-thumb{background:#1a2a3e;border-radius:3px}
+a{text-decoration:none;color:inherit}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef } = React;
+
+const T = {
+  bg:"#070b14", navy:"#0c1526", card:"#101d30", border:"#1a2a3e",
+  text:"#dde5f0", muted:"#4b6280", green:"#22c55e", red:"#ef4444",
+  gold:"#e8c547", blue:"#3b82f6", purple:"#a78bfa", yellow:"#fbbf24",
+  accent:"#4ade80",
+};
+
+const S = {
+  wrap:{ minHeight:"100vh", background:T.bg, fontFamily:"'IBM Plex Mono','Courier New',monospace", color:T.text },
+  header:{ background:"linear-gradient(160deg,#0c1526 0%,#070b14 100%)", borderBottom:"1px solid "+T.border, padding:"28px 20px", textAlign:"center", position:"relative", overflow:"hidden" },
+  glow:{ position:"absolute", top:0, left:0, right:0, bottom:0, background:"radial-gradient(ellipse at 50% -10%,rgba(74,222,128,0.07) 0%,transparent 65%)", pointerEvents:"none" },
+  body:{ maxWidth:1100, margin:"0 auto", padding:"0 14px 60px" },
+  sec:{ marginTop:20 },
+  secLabel:{ fontSize:"9px", letterSpacing:"3px", color:T.muted, textTransform:"uppercase", marginBottom:10, paddingBottom:6, borderBottom:"1px solid "+T.border },
+  card:{ background:T.card, border:"1px solid "+T.border, borderRadius:6, padding:"12px 14px" },
+  table:{ width:"100%", borderCollapse:"collapse", fontSize:10 },
+  th:{ padding:"7px 8px", textAlign:"left", color:T.muted, fontSize:"8px", letterSpacing:"1px", textTransform:"uppercase", borderBottom:"1px solid "+T.border, whiteSpace:"nowrap", cursor:"pointer", userSelect:"none" },
+  thR:{ padding:"7px 8px", textAlign:"right", color:T.muted, fontSize:"8px", letterSpacing:"1px", textTransform:"uppercase", borderBottom:"1px solid "+T.border, whiteSpace:"nowrap", cursor:"pointer", userSelect:"none" },
+  td:{ padding:"8px 8px", borderBottom:"1px solid "+T.border+"44", verticalAlign:"middle" },
+  tdR:{ padding:"8px 8px", borderBottom:"1px solid "+T.border+"44", textAlign:"right", verticalAlign:"middle" },
+  btn:(active)=>({ background:active?"none":"none", border:"1px solid "+(active?T.accent:T.border), color:active?T.accent:T.muted, padding:"4px 12px", borderRadius:4, fontSize:9, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }),
+  disclaimer:{ fontSize:"9px", color:T.muted, marginTop:16, padding:10, borderTop:"1px solid "+T.border, lineHeight:1.7 },
+  select:{ background:T.navy, border:"1px solid "+T.border, color:T.text, fontSize:10, padding:"6px 10px", borderRadius:4, fontFamily:"'IBM Plex Mono','Courier New',monospace", cursor:"pointer" },
+};
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+const TOURNAMENT = "2026 U.S. Open";
+const COURSE     = "Shinnecock Hills Golf Club";
+const COURSE_LOC = "Southampton, NY · Par 70";
+const PAR        = 70;
+const FIELD_AVG  = 73.5;  // expected field avg per round, US Open setup
+const CUT_SPOTS  = 60;    // top 60 + ties make cut
+const SIM_N      = 100000;
+const GIST_ID    = "8a76d2b09c709882e4364528a0152ccc";
+const GIST_FILE  = "sharpsim_bets.json";
+const ODDS_CACHE_KEY = "sharp_golf_odds_cache";
+const CACHE_TTL  = 30 * 60 * 1000;
+
+// ── Player Params ─────────────────────────────────────────────────────────────
+// sg: SG:Total from 2026 PGA Tour YTD (through RBC Canadian Open, Jun 14)
+// est:true = LIV/DP World Tour estimate (no PGA Tour tracked rounds)
+const PLAYER_PARAMS = {
+  "Scottie Scheffler":          { sg: 2.162, sigma: 2.55, abbr:"SCH" },
+  "Rory McIlroy":               { sg: 1.90,  sigma: 2.70, abbr:"MCI", est:true },
+  "Ludvig Åberg":               { sg: 1.486, sigma: 2.65, abbr:"ABE" },
+  "Matt Fitzpatrick":           { sg: 1.472, sigma: 2.70, abbr:"FIT" },
+  "Jon Rahm":                   { sg: 1.70,  sigma: 2.75, abbr:"RAH", est:true },
+  "Cameron Young":              { sg: 1.377, sigma: 2.75, abbr:"YOU" },
+  "Tommy Fleetwood":            { sg: 1.339, sigma: 2.70, abbr:"FLE" },
+  "Xander Schauffele":          { sg: 1.138, sigma: 2.65, abbr:"XSC" },
+  "Chris Gotterup":             { sg: 1.137, sigma: 2.80, abbr:"GOT" },
+  "Collin Morikawa":            { sg: 1.077, sigma: 2.65, abbr:"MOR" },
+  "Russell Henley":             { sg: 1.050, sigma: 2.70, abbr:"HEN" },
+  "Bryson DeChambeau":          { sg: 1.30,  sigma: 3.00, abbr:"DCH", est:true },
+  "Patrick Cantlay":            { sg: 1.021, sigma: 2.65, abbr:"CAN" },
+  "Nicolai Højgaard":           { sg: 1.013, sigma: 2.80, abbr:"NHJ" },
+  "Adam Scott":                 { sg: 0.990, sigma: 2.70, abbr:"SCO" },
+  "Brooks Koepka":              { sg: 0.964, sigma: 2.90, abbr:"KOE" },
+  "Maverick McNealy":           { sg: 0.935, sigma: 2.75, abbr:"MCN" },
+  "Wyndham Clark":              { sg: 0.916, sigma: 2.80, abbr:"CLA" },
+  "Akshay Bhatia":              { sg: 0.913, sigma: 2.80, abbr:"BHA" },
+  "Joaquin Niemann":            { sg: 1.00,  sigma: 2.80, abbr:"NIE", est:true },
+  "Sam Burns":                  { sg: 0.832, sigma: 2.75, abbr:"BUR" },
+  "Shane Lowry":                { sg: 0.810, sigma: 2.80, abbr:"LOW" },
+  "Robert MacIntyre":           { sg: 0.783, sigma: 2.80, abbr:"MAC" },
+  "Kurt Kitayama":              { sg: 0.783, sigma: 2.80, abbr:"KIT" },
+  "Harris English":             { sg: 0.763, sigma: 2.80, abbr:"ENG" },
+  "Gary Woodland":              { sg: 0.691, sigma: 2.80, abbr:"WOO" },
+  "Tyrrell Hatton":             { sg: 0.90,  sigma: 2.85, abbr:"HAT", est:true },
+  "Beau Hossler":               { sg: 0.623, sigma: 2.80, abbr:"HOS" },
+  "Alex Noren":                 { sg: 0.604, sigma: 2.80, abbr:"NOR" },
+  "Justin Thomas":              { sg: 0.589, sigma: 2.80, abbr:"THO" },
+  "Hideki Matsuyama":           { sg: 0.587, sigma: 2.80, abbr:"MAT" },
+  "Jordan Spieth":              { sg: 0.578, sigma: 3.00, abbr:"SPI" },
+  "Ryan Fox":                   { sg: 0.552, sigma: 2.80, abbr:"FOX" },
+  "Viktor Hovland":             { sg: 0.543, sigma: 2.90, abbr:"HOV" },
+  "Dustin Johnson":             { sg: 0.70,  sigma: 2.90, abbr:"DJO", est:true },
+  "Cameron Smith":              { sg: 0.80,  sigma: 2.80, abbr:"SMI", est:true },
+  "Rickie Fowler":              { sg: 0.449, sigma: 2.85, abbr:"FOW" },
+  "Sahith Theegala":            { sg: 0.436, sigma: 2.80, abbr:"THE" },
+  "Ryo Hisatsune":              { sg: 0.421, sigma: 2.80, abbr:"HIS" },
+  "Sepp Straka":                { sg: 0.420, sigma: 2.80, abbr:"STR" },
+  "Andrew Putnam":              { sg: 0.406, sigma: 2.85, abbr:"PUT" },
+  "Angel Hidalgo":              { sg: 0.40,  sigma: 2.85, abbr:"HID", est:true },
+  "Rasmus Højgaard":            { sg: 0.394, sigma: 2.80, abbr:"RHJ" },
+  "Nick Taylor":                { sg: 0.386, sigma: 2.80, abbr:"TAY" },
+  "Kristoffer Reitan":          { sg: 0.374, sigma: 2.80, abbr:"REI" },
+  "Justin Rose":                { sg: 0.359, sigma: 2.90, abbr:"ROS" },
+  "Tom Kim":                    { sg: 0.327, sigma: 2.80, abbr:"KIM" },
+  "Adrien Dumont de Chassart":  { sg: 0.275, sigma: 2.90, abbr:"DDC" },
+  "Patrick Reed":               { sg: 0.30,  sigma: 2.90, abbr:"REE", est:true },
+  "Daniel Berger":              { sg: 0.250, sigma: 2.90, abbr:"BER" },
+  "Max Greyserman":             { sg: 0.20,  sigma: 2.90, abbr:"GRE" },
+  "Max McGreevy":               { sg: 0.163, sigma: 2.90, abbr:"MGY" },
+  "Sungjae Im":                 { sg: 0.162, sigma: 2.85, abbr:"IM"  },
+  "Keegan Bradley":             { sg: 0.136, sigma: 2.85, abbr:"BRA" },
+  "Brian Harman":               { sg: 0.15,  sigma: 2.90, abbr:"HAR" },
+  "Neal Shipley":               { sg: 0.15,  sigma: 3.00, abbr:"SHI" },
+  "Keith Mitchell":             { sg: 0.580, sigma: 2.80, abbr:"MIT" },
+  "Sam Stevens":                { sg:-0.003, sigma: 2.90, abbr:"STE" },
+  "Corey Conners":              { sg: 0.08,  sigma: 2.90, abbr:"CON" },
+  "Emiliano Grillo":            { sg: 0.10,  sigma: 2.90, abbr:"GRI" },
+  "Michael Brennan":            { sg: 0.10,  sigma: 3.00, abbr:"MBR" },
+};
+
+// US Open 2026 Field
+const FIELD = [
+  "Scottie Scheffler","Rory McIlroy","Ludvig Åberg","Matt Fitzpatrick",
+  "Jon Rahm","Cameron Young","Tommy Fleetwood","Xander Schauffele",
+  "Collin Morikawa","Russell Henley","Bryson DeChambeau","Patrick Cantlay",
+  "Nicolai Højgaard","Adam Scott","Brooks Koepka","Wyndham Clark",
+  "Akshay Bhatia","Maverick McNealy","Viktor Hovland","Jordan Spieth",
+  "Justin Thomas","Hideki Matsuyama","Sam Burns","Shane Lowry",
+  "Tyrrell Hatton","Joaquin Niemann","Dustin Johnson","Cameron Smith",
+  "Robert MacIntyre","Harris English","Gary Woodland","Chris Gotterup",
+  "Rickie Fowler","Justin Rose","Sahith Theegala","Sepp Straka",
+  "Nick Taylor","Tom Kim","Daniel Berger","Sungjae Im",
+  "Keegan Bradley","Sam Stevens","Corey Conners","Brian Harman",
+  "Emiliano Grillo","Max McGreevy","Ryan Fox","Ryo Hisatsune",
+  "Kurt Kitayama","Kristoffer Reitan","Andrew Putnam","Alex Noren",
+  "Adrien Dumont de Chassart","Patrick Reed","Max Greyserman","Neal Shipley",
+  "Michael Brennan","Angel Hidalgo","Keith Mitchell","Dustin Johnson",
+  "Beau Hossler","Patrick Cantlay","Rasmus Højgaard","Justin Rose",
+];
+// dedupe
+const UNIQUE_FIELD = [...new Set(FIELD)];
+
+// ── Gist helpers ──────────────────────────────────────────────────────────────
+async function gistRead() {
+  const r = await fetch("/api/gist"); if (!r.ok) return [];
+  const d = await r.json();
+  try { return JSON.parse(d.files[GIST_FILE].content || "[]"); } catch(e) { return []; }
+}
+async function gistWrite(bets) {
+  await fetch("/api/gist", { method:"PATCH", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ files:{ [GIST_FILE]:{ content: JSON.stringify(bets,null,2) } } }) });
+}
+
+// ── Bet logger ────────────────────────────────────────────────────────────────
+function calcStats(bets) {
+  const resolved = bets.filter(b => b.result !== "pending");
+  const wins = resolved.filter(b => b.result === "win");
+  const losses = resolved.filter(b => b.result === "loss");
+  const pushes = resolved.filter(b => b.result === "push");
+  const units = resolved.reduce((a,b) => a+(b.result==="win"?b.units:b.result==="loss"?-b.units:0), 0);
+  const bySport = {};
+  resolved.forEach(b => {
+    if (!bySport[b.sport]) bySport[b.sport] = { wins:0, losses:0, pushes:0, units:0 };
+    bySport[b.sport].units += b.result==="win"?b.units:b.result==="loss"?-b.units:0;
+    if (b.result==="win") bySport[b.sport].wins++;
+    else if (b.result==="loss") bySport[b.sport].losses++;
+    else bySport[b.sport].pushes++;
+  });
+  return { total:bets.length, wins:wins.length, losses:losses.length, pushes:pushes.length,
+    pending:bets.filter(b=>b.result==="pending").length,
+    winPct: (wins.length+losses.length)>0?((wins.length/(wins.length+losses.length))*100).toFixed(1):"—",
+    totalUnits: units.toFixed(1), bySport };
+}
+
+function useBetLogger() {
+  const [bets, setBets] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    gistRead().then(data => { setBets(data); setLoaded(true); }).catch(() => setLoaded(true));
+  }, []);
+  async function logBet(bet) {
+    const today = new Date().toLocaleDateString("en-CA");
+    if (bets.some(b => b.gameId === bet.gameId && b.market === bet.market && b.gameDate === today)) return;
+    const updated = [...bets, bet];
+    setBets(updated);
+    setSaving(true);
+    try { await gistWrite(updated); } catch(e) { console.error(e); }
+    setSaving(false);
+  }
+  const today = new Date().toLocaleDateString("en-CA");
+  const isLogged = (gameId, market) => bets.some(b => b.gameId === gameId && b.market === market && b.gameDate === today);
+  return { bets, stats: calcStats(bets), logBet, saving, loaded, isLogged };
+}
+
+// ── Simulation ────────────────────────────────────────────────────────────────
+function randNormal(mean, std) {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return mean + std * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function simulateRound(playerName) {
+  const p = PLAYER_PARAMS[playerName] || { sg: 0, sigma: 2.90 };
+  const expected = FIELD_AVG - p.sg;
+  return Math.round(randNormal(expected, p.sigma));
+}
+
+function runTournamentSim(field, liveScores) {
+  const n = SIM_N;
+  const stats = {};
+  field.forEach(p => { stats[p] = { win:0, top5:0, top10:0, top25:0, cut:0 }; });
+
+  const currentRound = liveScores?.currentRound || 1;
+  const cutIsKnown = currentRound >= 3; // actual cut results are in
+  const known = {};
+  field.forEach(p => { known[p] = getKnownRounds(p, liveScores); });
+
+  for (let i = 0; i < n; i++) {
+    const r12 = {};
+    field.forEach(p => {
+      const k = known[p];
+      const r1 = k.r[0] !== null ? k.r[0] : simulateRound(p);
+      const r2 = k.r[1] !== null ? k.r[1] : simulateRound(p);
+      r12[p] = r1 + r2;
+    });
+
+    let survivors;
+    if (cutIsKnown) {
+      survivors = field.filter(p => known[p].madecut !== false && !known[p].withdrew);
+    } else {
+      const scores = field.map(p => r12[p]).sort((a,b) => a-b);
+      const cutLine = scores[Math.min(CUT_SPOTS - 1, scores.length - 1)];
+      survivors = field.filter(p => r12[p] <= cutLine);
+    }
+    survivors.forEach(p => stats[p].cut++);
+
+    const totals = {};
+    survivors.forEach(p => {
+      const k = known[p];
+      const r3 = k.r[2] !== null ? k.r[2] : simulateRound(p);
+      const r4 = k.r[3] !== null ? k.r[3] : simulateRound(p);
+      totals[p] = r12[p] + r3 + r4;
+    });
+    survivors.sort((a,b) => totals[a] - totals[b]);
+
+    survivors.forEach((p, idx) => {
+      if (idx === 0) stats[p].win++;
+      if (idx < 5)  stats[p].top5++;
+      if (idx < 10) stats[p].top10++;
+      if (idx < 25) stats[p].top25++;
+    });
+  }
+
+  return field.map(p => {
+    const s = stats[p];
+    const params = PLAYER_PARAMS[p] || { sg:0, sigma:2.9, abbr:"???" };
+    const k = known[p];
+    return {
+      player: p,
+      abbr: params.abbr,
+      sg: params.sg || 0,
+      est: !!params.est,
+      r1: k.r[0], r2: k.r[1], r3: k.r[2], r4: k.r[3],
+      toPar: k.toPar ?? null,
+      position: k.position || "",
+      madecut: k.madecut,
+      withdrew: k.withdrew,
+      winPct:  (s.win  / n * 100).toFixed(2),
+      top5Pct: (s.top5 / n * 100).toFixed(1),
+      top10Pct:(s.top10/ n * 100).toFixed(1),
+      top25Pct:(s.top25/ n * 100).toFixed(1),
+      cutPct:  (s.cut  / n * 100).toFixed(1),
+    };
+  }).sort((a,b) => parseFloat(b.winPct) - parseFloat(a.winPct));
+}
+
+function runH2HSim(playerA, playerB, liveScores) {
+  const kA = getKnownRounds(playerA, liveScores);
+  const kB = getKnownRounds(playerB, liveScores);
+  const currentRound = liveScores?.currentRound || 1;
+  const cutIsKnown = currentRound >= 3;
+
+  // If cut is settled and one player's fate is known, resolve immediately
+  if (cutIsKnown) {
+    const aCut = kA.madecut !== false && !kA.withdrew;
+    const bCut = kB.madecut !== false && !kB.withdrew;
+    if (!aCut && bCut) return { aWinPct:"0.0", bWinPct:"100.0", tiePct:"0.0" };
+    if (aCut && !bCut) return { aWinPct:"100.0", bWinPct:"0.0", tiePct:"0.0" };
+    if (!aCut && !bCut) {
+      // Both missed — compare 36-hole totals
+      const aT = (kA.r[0]||0)+(kA.r[1]||0), bT = (kB.r[0]||0)+(kB.r[1]||0);
+      return aT < bT
+        ? { aWinPct:"100.0", bWinPct:"0.0", tiePct:"0.0" }
+        : aT > bT
+          ? { aWinPct:"0.0", bWinPct:"100.0", tiePct:"0.0" }
+          : { aWinPct:"0.0", bWinPct:"0.0", tiePct:"100.0" };
+    }
+  }
+
+  // If all 4 rounds are final for both, result is deterministic
+  if (kA.r[3] !== null && kB.r[3] !== null) {
+    const aT = kA.r[0]+kA.r[1]+kA.r[2]+kA.r[3];
+    const bT = kB.r[0]+kB.r[1]+kB.r[2]+kB.r[3];
+    if (aT < bT) return { aWinPct:"100.0", bWinPct:"0.0", tiePct:"0.0" };
+    if (bT < aT) return { aWinPct:"0.0", bWinPct:"100.0", tiePct:"0.0" };
+    return { aWinPct:"0.0", bWinPct:"0.0", tiePct:"100.0" };
+  }
+
+  const n = 100000;
+  let aWins = 0, bWins = 0, ties = 0;
+
+  for (let i = 0; i < n; i++) {
+    const aR1 = kA.r[0] !== null ? kA.r[0] : simulateRound(playerA);
+    const aR2 = kA.r[1] !== null ? kA.r[1] : simulateRound(playerA);
+    const bR1 = kB.r[0] !== null ? kB.r[0] : simulateRound(playerB);
+    const bR2 = kB.r[1] !== null ? kB.r[1] : simulateRound(playerB);
+    const aR12 = aR1 + aR2, bR12 = bR1 + bR2;
+
+    let aMakesCut, bMakesCut;
+    if (cutIsKnown) {
+      aMakesCut = kA.madecut !== false && !kA.withdrew;
+      bMakesCut = kB.madecut !== false && !kB.withdrew;
+    } else {
+      // Sample cut line: US Open 36-hole cut ~ N(148, 3)
+      const cutLine = Math.round(randNormal(148, 3));
+      aMakesCut = aR12 <= cutLine;
+      bMakesCut = bR12 <= cutLine;
+    }
+
+    let aTotal = aR12, bTotal = bR12;
+    if (aMakesCut) {
+      aTotal += (kA.r[2] !== null ? kA.r[2] : simulateRound(playerA));
+      aTotal += (kA.r[3] !== null ? kA.r[3] : simulateRound(playerA));
+    }
+    if (bMakesCut) {
+      bTotal += (kB.r[2] !== null ? kB.r[2] : simulateRound(playerB));
+      bTotal += (kB.r[3] !== null ? kB.r[3] : simulateRound(playerB));
+    }
+
+    if (aMakesCut && bMakesCut) {
+      if (aTotal < bTotal) aWins++;
+      else if (bTotal < aTotal) bWins++;
+      else ties++;
+    } else if (aMakesCut) {
+      aWins++;
+    } else if (bMakesCut) {
+      bWins++;
+    } else {
+      if (aR12 < bR12) aWins++;
+      else if (bR12 < aR12) bWins++;
+      else ties++;
+    }
+  }
+  return {
+    aWinPct: (aWins/n*100).toFixed(1),
+    bWinPct: (bWins/n*100).toFixed(1),
+    tiePct:  (ties /n*100).toFixed(1),
+  };
+}
+
+// ── Name normalization for ESPN→PLAYER_PARAMS matching ───────────────────────
+function normStr(s) {
+  return s.toLowerCase()
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z\s]/g, "").trim();
+}
+// ESPN aliases for players whose names differ from our keys
+const ESPN_NAME_MAP = {
+  "Adrien Dumont De Chassart": "Adrien Dumont de Chassart",
+  "Nicolai Hoejgaard": "Nicolai Højgaard",
+  "Rasmus Hoejgaard": "Rasmus Højgaard",
+};
+function findInLiveScores(ourName, espnPlayers) {
+  if (!espnPlayers) return null;
+  if (espnPlayers[ourName]) return espnPlayers[ourName];
+  const norm = normStr(ourName);
+  for (const [k, v] of Object.entries(espnPlayers)) {
+    const mapped = ESPN_NAME_MAP[k] || k;
+    if (normStr(mapped) === norm) return v;
+  }
+  // Last-name fallback (only if unambiguous)
+  const lastName = normStr(ourName).split(" ").pop();
+  const hits = Object.entries(espnPlayers).filter(([k]) => normStr(k).split(" ").pop() === lastName);
+  return hits.length === 1 ? hits[0][1] : null;
+}
+function getKnownRounds(playerName, liveScores) {
+  const blank = { r:[null,null,null,null], madecut:null, withdrew:false, roundsComplete:0 };
+  if (!liveScores) return blank;
+  const d = findInLiveScores(playerName, liveScores.players);
+  if (!d) return blank;
+  return {
+    r: [d.r1, d.r2, d.r3, d.r4],
+    madecut: d.made_cut,
+    withdrew: d.withdrew,
+    roundsComplete: d.roundsComplete,
+    toPar: d.toPar,
+    position: d.position,
+  };
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function formatAge(ts) {
+  const mins = Math.floor((Date.now()-ts)/60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return mins+"m ago";
+  return Math.floor(mins/60)+"h "+( mins%60)+"m ago";
+}
+function fmtOdds(v) {
+  if (!v && v !== 0) return "—";
+  return v > 0 ? "+"+v : ""+v;
+}
+function impliedProb(odds) {
+  if (!odds) return 0;
+  return odds > 0 ? 100/(odds+100) : Math.abs(odds)/(Math.abs(odds)+100);
+}
+
+// Build player→odds map from Odds API outright response
+function buildOddsMap(data) {
+  const map = {};
+  if (!data || !data.length) return map;
+  const game = data[0];
+  (game.bookmakers || []).forEach(bm => {
+    (bm.markets || []).forEach(mkt => {
+      if (mkt.key !== "outrights") return;
+      mkt.outcomes.forEach(o => {
+        // normalize name: "Scottie Scheffler" matches itself
+        const name = o.name.trim();
+        if (!map[name] || Math.abs(o.price) < Math.abs(map[name])) {
+          map[name] = o.price; // keep best (lowest American odds = most favorable)
+        }
+      });
+    });
+  });
+  return map;
+}
+
+// ── Components ────────────────────────────────────────────────────────────────
+function SortTh({ label, col, sortKey, setSortKey, right }) {
+  const active = sortKey === col;
+  const st = right ? S.thR : S.th;
+  return (
+    <th style={{ ...st, color: active ? T.accent : T.muted }} onClick={() => setSortKey(col)}>
+      {label}{active ? " ↓" : ""}
+    </th>
+  );
+}
+
+function TournamentTable({ results, oddsMap, betLogger, liveScores }) {
+  const [sortKey, setSortKey] = useState("winPct");
+  const hasLive = !!(liveScores?.players && Object.keys(liveScores.players).length > 0);
+  const currentRound = liveScores?.currentRound || 1;
+  // When live, default sort to toPar (leaderboard order); fallback to winPct
+  const [sortInit, setSortInit] = React.useState(false);
+  useEffect(() => {
+    if (hasLive && !sortInit) { setSortKey("toPar_asc"); setSortInit(true); }
+  }, [hasLive]);
+
+  const sorted = [...results].sort((a,b) => {
+    if (sortKey === "toPar_asc") {
+      // Nulls (no score yet) go to bottom
+      if (a.toPar === null && b.toPar === null) return 0;
+      if (a.toPar === null) return 1;
+      if (b.toPar === null) return -1;
+      return a.toPar - b.toPar;
+    }
+    return parseFloat(b[sortKey]) - parseFloat(a[sortKey]);
+  });
+  const { logBet, isLogged } = betLogger;
+  const today = new Date().toLocaleDateString("en-CA");
+
+  function makeBet(player, market, simPct, bookOdds) {
+    const odds = bookOdds && bookOdds !== "—" ? parseFloat(bookOdds) : null;
+    const b = odds > 0 ? odds/100 : odds ? 100/Math.abs(odds) : null;
+    const p = parseFloat(simPct)/100;
+    let units = 1.0;
+    if (b && p > 0) {
+      const kelly = (b*p-(1-p))/b;
+      units = kelly > 0 ? parseFloat(Math.min(3, Math.max(0.5, kelly*15)).toFixed(1)) : 0;
+    }
+    return {
+      id: Date.now()+"_"+Math.random().toString(36).slice(2,6),
+      sport:"GOLF", gameId:"usopen2026",
+      homeTeam: player, awayTeam:"US Open",
+      market, simPct: simPct+"%", bookOdds: bookOdds||"—",
+      tier: parseFloat(simPct) >= 30 ? "LOCK" : parseFloat(simPct) >= 15 ? "HIGH" : "LEAN",
+      units, loggedAt: new Date().toISOString(),
+      result:"pending", resolvedAt:null, finalScore:null,
+      gameDate: today,
+    };
+  }
+
+  return (
+    <div style={{ overflowX:"auto" }}>
+      <table style={S.table}>
+        <thead>
+          <tr>
+            <th style={S.th}>#</th>
+            <th style={S.th}>Player</th>
+            <th style={{ ...S.thR, color:T.muted }}>SG</th>
+            {hasLive && <th style={{ ...S.thR, cursor:"pointer", color:sortKey==="toPar_asc"?T.accent:T.muted }} onClick={()=>setSortKey("toPar_asc")}>Score{sortKey==="toPar_asc"?" ↑":""}</th>}
+            {hasLive && currentRound >= 1 && <th style={S.thR}>R1</th>}
+            {hasLive && currentRound >= 2 && <th style={S.thR}>R2</th>}
+            {hasLive && currentRound >= 3 && <th style={S.thR}>R3</th>}
+            {hasLive && currentRound >= 4 && <th style={S.thR}>R4</th>}
+            <SortTh label="Win %" col="winPct" sortKey={sortKey} setSortKey={setSortKey} right/>
+            <SortTh label="Top 10" col="top10Pct" sortKey={sortKey} setSortKey={setSortKey} right/>
+            <SortTh label="Top 25" col="top25Pct" sortKey={sortKey} setSortKey={setSortKey} right/>
+            {!hasLive && <SortTh label="Cut %" col="cutPct" sortKey={sortKey} setSortKey={setSortKey} right/>}
+            <th style={S.thR}>Odds</th>
+            <th style={S.thR}>Edge</th>
+            <th style={S.th}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((r, idx) => {
+            const bookOdds = oddsMap[r.player];
+            const bookFmt = fmtOdds(bookOdds);
+            const implPct = bookOdds ? (impliedProb(bookOdds)*100).toFixed(1) : null;
+            const modelWin = parseFloat(r.winPct);
+            const edge = implPct ? (modelWin - parseFloat(implPct)).toFixed(1) : null;
+            const edgeColor = edge && parseFloat(edge) > 0 ? T.green : edge && parseFloat(edge) < -1 ? T.red : T.muted;
+            const logged = isLogged("usopen2026", r.player+" Win");
+            const toParStr = r.toPar === null ? "—" : r.toPar === 0 ? "E" : (r.toPar > 0 ? "+"+r.toPar : ""+r.toPar);
+            const toParColor = r.toPar === null ? T.muted : r.toPar < 0 ? T.accent : r.toPar > 0 ? T.red : T.text;
+            const isCut = r.madecut === false;
+            const rowBg = isCut ? "rgba(239,68,68,0.04)" : idx%2===0 ? "transparent" : T.navy+"44";
+            return (
+              <tr key={r.player} style={{ background: rowBg, opacity: isCut ? 0.55 : 1 }}>
+                <td style={{ ...S.td, color:T.muted, fontSize:9 }}>
+                  {hasLive && r.position ? r.position : idx+1}
+                </td>
+                <td style={S.td}>
+                  <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                    <span style={{ fontWeight:700 }}>{r.player}</span>
+                    {r.est && <span style={{ fontSize:"7px", color:T.muted, background:T.border, borderRadius:2, padding:"1px 4px" }}>est</span>}
+                    {isCut && <span style={{ fontSize:"7px", color:T.red, background:"rgba(239,68,68,0.12)", border:"1px solid rgba(239,68,68,0.25)", borderRadius:2, padding:"1px 4px" }}>CUT</span>}
+                    {r.withdrew && <span style={{ fontSize:"7px", color:T.muted, background:T.border, borderRadius:2, padding:"1px 4px" }}>WD</span>}
+                  </div>
+                </td>
+                <td style={{ ...S.tdR, color:parseFloat(r.sg)>=1?T.green:parseFloat(r.sg)>=0?T.text:T.muted, fontSize:9 }}>
+                  {parseFloat(r.sg)>0?"+":""}{parseFloat(r.sg).toFixed(2)}
+                </td>
+                {hasLive && <td style={{ ...S.tdR, color:toParColor, fontWeight:700 }}>{toParStr}</td>}
+                {hasLive && currentRound >= 1 && <td style={{ ...S.tdR, color:T.muted, fontSize:9 }}>{r.r1 ?? "—"}</td>}
+                {hasLive && currentRound >= 2 && <td style={{ ...S.tdR, color:T.muted, fontSize:9 }}>{r.r2 ?? "—"}</td>}
+                {hasLive && currentRound >= 3 && <td style={{ ...S.tdR, color:T.muted, fontSize:9 }}>{r.r3 ?? "—"}</td>}
+                {hasLive && currentRound >= 4 && <td style={{ ...S.tdR, color:T.muted, fontSize:9 }}>{r.r4 ?? "—"}</td>}
+                <td style={{ ...S.tdR, color:T.accent, fontWeight:700 }}>{r.winPct}%</td>
+                <td style={{ ...S.tdR, color:T.text }}>{r.top10Pct}%</td>
+                <td style={{ ...S.tdR, color:T.muted }}>{r.top25Pct}%</td>
+                {!hasLive && <td style={{ ...S.tdR, color:T.muted }}>{r.cutPct}%</td>}
+                <td style={{ ...S.tdR, color:T.gold }}>{bookFmt}</td>
+                <td style={{ ...S.tdR, color:edgeColor, fontWeight: edge && parseFloat(edge)>1?"700":"400" }}>
+                  {edge ? (parseFloat(edge)>0?"+":"")+edge+"%" : "—"}
+                </td>
+                <td style={S.td}>
+                  {bookOdds && parseFloat(edge) > 0 && !isCut && !r.withdrew && (
+                    <button onClick={() => logBet(makeBet(r.player, r.player+" Win", r.winPct, bookFmt))}
+                      style={{ background:logged?T.green+"22":T.accent, color:logged?T.green:"#070b14", border:"1px solid "+(logged?T.green:T.accent), borderRadius:3, padding:"3px 8px", fontSize:"8px", fontWeight:700, cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap" }}>
+                      {logged?"✓ LOGGED":"+ LOG"}
+                    </button>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PlayerScoreLine({ name, liveScores }) {
+  const p = PLAYER_PARAMS[name];
+  const k = getKnownRounds(name, liveScores);
+  const rounds = [k.r[0], k.r[1], k.r[2], k.r[3]];
+  const hasLive = rounds.some(r => r !== null);
+  const toParStr = k.toPar === null ? null : k.toPar === 0 ? "E" : (k.toPar > 0 ? "+"+k.toPar : ""+k.toPar);
+  const toParColor = k.toPar === null ? T.muted : k.toPar < 0 ? T.accent : k.toPar > 0 ? T.red : T.text;
+  return (
+    <div style={{ fontSize:9, color:T.muted, display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
+      <span>SG {p ? ((p.sg>=0?"+":"")+p.sg.toFixed(3)+(p.est?" est":"")) : "—"}</span>
+      {hasLive && (
+        <>
+          <span style={{ color:T.border }}>|</span>
+          {rounds.map((r, i) => r !== null && (
+            <span key={i} style={{ color:T.text }}>R{i+1}: <span style={{ color:T.gold }}>{r}</span></span>
+          ))}
+          {toParStr && <span style={{ color:toParColor, fontWeight:700 }}>{toParStr}</span>}
+          {k.madecut === false && <span style={{ color:T.red, fontSize:"8px" }}>CUT</span>}
+        </>
+      )}
+    </div>
+  );
+}
+
+function H2HMatchup({ liveScores }) {
+  const [playerA, setPlayerA] = useState(UNIQUE_FIELD[0]);
+  const [playerB, setPlayerB] = useState(UNIQUE_FIELD[1]);
+  const [result, setResult] = useState(null);
+  const [running, setRunning] = useState(false);
+  const currentRound = liveScores?.currentRound || 1;
+  const hasLive = !!(liveScores?.players && Object.keys(liveScores.players).length > 0);
+
+  function run() {
+    if (playerA === playerB) return;
+    setRunning(true);
+    setTimeout(() => {
+      setResult(runH2HSim(playerA, playerB, liveScores));
+      setRunning(false);
+    }, 20);
+  }
+
+  // Auto-run when players change if we already had a result
+  const prevResult = React.useRef(null);
+
+  const favored = result ? (parseFloat(result.aWinPct) >= parseFloat(result.bWinPct) ? playerA : playerB) : null;
+  const favPct  = result ? Math.max(parseFloat(result.aWinPct), parseFloat(result.bWinPct)) : 0;
+  const fairML  = favPct > 0 ? (favPct < 50 ? "+"+(Math.round((100/favPct-1)*100)) : "-"+(Math.round(favPct/(100-favPct)*100))) : "—";
+
+  return (
+    <div style={S.card}>
+      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
+        <div style={{ fontSize:10, color:T.accent, fontWeight:700, letterSpacing:"1px" }}>HEAD-TO-HEAD MATCHUP</div>
+        {hasLive && (
+          <span style={{ fontSize:"7px", background:"rgba(74,222,128,0.12)", border:"1px solid rgba(74,222,128,0.3)", color:T.accent, padding:"2px 6px", borderRadius:2, letterSpacing:"1px" }}>
+            LIVE R{currentRound}
+          </span>
+        )}
+      </div>
+
+      <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"center", marginBottom:10 }}>
+        <select value={playerA} onChange={e => { setPlayerA(e.target.value); setResult(null); }} style={S.select}>
+          {UNIQUE_FIELD.map(p => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <span style={{ color:T.muted, fontSize:11 }}>vs</span>
+        <select value={playerB} onChange={e => { setPlayerB(e.target.value); setResult(null); }} style={S.select}>
+          {UNIQUE_FIELD.map(p => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <button onClick={run} disabled={running || playerA===playerB}
+          style={{ background:"none", border:"1px solid "+T.accent, color:T.accent, padding:"6px 14px", borderRadius:4, fontSize:9, cursor:"pointer", fontFamily:"inherit" }}>
+          {running ? "Running..." : "↻ Run H2H"}
+        </button>
+      </div>
+
+      <div style={{ display:"flex", gap:24, marginBottom:12, flexWrap:"wrap" }}>
+        <div>
+          <div style={{ fontSize:10, color:T.blue, fontWeight:700, marginBottom:3 }}>{playerA}</div>
+          <PlayerScoreLine name={playerA} liveScores={liveScores}/>
+        </div>
+        <div>
+          <div style={{ fontSize:10, color:T.green, fontWeight:700, marginBottom:3 }}>{playerB}</div>
+          <PlayerScoreLine name={playerB} liveScores={liveScores}/>
+        </div>
+      </div>
+
+      {result && (
+        <div>
+          <div style={{ display:"flex", gap:4, height:32, borderRadius:4, overflow:"hidden", marginBottom:8 }}>
+            <div style={{ width:result.aWinPct+"%", background:"linear-gradient(90deg,#1d4ed8,#3b82f6)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700 }}>
+              {parseFloat(result.aWinPct)>12 ? result.aWinPct+"%" : ""}
+            </div>
+            {parseFloat(result.tiePct)>0 && (
+              <div style={{ width:result.tiePct+"%", background:T.border, display:"flex", alignItems:"center", justifyContent:"center", fontSize:8, color:T.muted }}>
+                {parseFloat(result.tiePct)>3 ? "TIE" : ""}
+              </div>
+            )}
+            <div style={{ width:result.bWinPct+"%", background:"linear-gradient(90deg,#16a34a,#22c55e)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700, color:"#070b14" }}>
+              {parseFloat(result.bWinPct)>12 ? result.bWinPct+"%" : ""}
+            </div>
+          </div>
+          <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, marginBottom:6 }}>
+            <div><span style={{ color:T.blue, fontWeight:700 }}>{playerA}</span> <span style={{ color:T.muted }}>{result.aWinPct}%</span></div>
+            <div><span style={{ color:T.green, fontWeight:700 }}>{playerB}</span> <span style={{ color:T.muted }}>{result.bWinPct}%</span></div>
+          </div>
+          <div style={{ fontSize:9, color:T.muted }}>
+            {favored} favored · fair ML: <span style={{ color:T.gold }}>{fairML}</span>
+            {hasLive && <span style={{ marginLeft:8, color:T.accent }}>· conditioned on R{Math.min(currentRound-1, 4)} known scores</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const SCORES_CACHE_KEY = "sharp_golf_scores_cache";
+const SCORES_TTL = 3 * 60 * 1000; // 3-min client cache (edge cache is 2 min)
+
+// ── App ───────────────────────────────────────────────────────────────────────
+function App() {
+  const [results, setResults] = useState(null);
+  const [running, setRunning] = useState(false);
+  const [oddsMap, setOddsMap] = useState({});
+  const [lastOddsFetch, setLastOddsFetch] = useState(null);
+  const [liveScores, setLiveScores] = useState(null);
+  const [scoresStatus, setScoresStatus] = useState("loading"); // loading | live | error | pretournament
+  const [lastScoresFetch, setLastScoresFetch] = useState(null);
+  const betLogger = useBetLogger();
+
+  useEffect(() => {
+    loadOdds();
+    loadScores();
+    const interval = setInterval(loadScores, SCORES_TTL);
+    return () => clearInterval(interval);
+  }, []);
+
+  async function loadScores(force) {
+    if (!force) {
+      try {
+        const cached = JSON.parse(localStorage.getItem(SCORES_CACHE_KEY)||"null");
+        if (cached && Date.now()-cached.ts < SCORES_TTL) {
+          setLiveScores(cached.data);
+          setScoresStatus(cached.data?.eventStatus === "scheduled" ? "pretournament" : "live");
+          setLastScoresFetch(cached.ts);
+          return;
+        }
+      } catch(e) {}
+    }
+    try {
+      const res = await fetch("/api/golf-scores");
+      if (!res.ok) { setScoresStatus("error"); return; }
+      const data = await res.json();
+      if (data.error) { setScoresStatus("error"); return; }
+      const ts = Date.now();
+      try { localStorage.setItem(SCORES_CACHE_KEY, JSON.stringify({ ts, data })); } catch(e) {}
+      setLiveScores(data);
+      setLastScoresFetch(ts);
+      setScoresStatus(data.eventStatus === "scheduled" ? "pretournament" : "live");
+    } catch(e) { setScoresStatus("error"); }
+  }
+
+  async function loadOdds(force) {
+    if (!force) {
+      try {
+        const cached = JSON.parse(localStorage.getItem(ODDS_CACHE_KEY)||"null");
+        if (cached && Date.now()-cached.ts < CACHE_TTL) {
+          setOddsMap(buildOddsMap(cached.data));
+          setLastOddsFetch(cached.ts);
+          return;
+        }
+      } catch(e) {}
+    }
+    try {
+      const res = await fetch("/api/odds?sport=golf_us_open_winner&markets=outrights");
+      if (!res.ok) return;
+      const data = await res.json();
+      const ts = Date.now();
+      localStorage.setItem(ODDS_CACHE_KEY, JSON.stringify({ ts, data }));
+      setOddsMap(buildOddsMap(data));
+      setLastOddsFetch(ts);
+    } catch(e) { console.error(e); }
+  }
+
+  function runSim() {
+    setRunning(true);
+    setTimeout(() => {
+      setResults(runTournamentSim(UNIQUE_FIELD, liveScores));
+      setRunning(false);
+    }, 20);
+  }
+
+  const sp = betLogger.stats.bySport && betLogger.stats.bySport["GOLF"];
+  const currentRound = liveScores?.currentRound || 1;
+  const roundsConditioned = scoresStatus === "live" ? Math.max(0, currentRound - 1) : 0;
+
+  return (
+    <div style={S.wrap}>
+      {/* Topbar */}
+      <div style={{ background:T.navy, borderBottom:"1px solid "+T.border, padding:"8px 16px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+        <a href="index.html" style={{ fontSize:9, color:T.muted, letterSpacing:"1px" }}>← Sharp Sim</a>
+        <div style={{ flex:1 }}/>
+        {sp && (sp.wins+sp.losses) > 0 && (
+          <div style={{ fontSize:10, color:T.muted }}>
+            Golf: <span style={{ color:T.green }}>{sp.wins}W</span>-<span style={{ color:T.red }}>{sp.losses}L</span>
+            <span style={{ color:sp.units>=0?T.green:T.red, marginLeft:6 }}>{sp.units>=0?"+":""}{sp.units.toFixed(1)}u</span>
+          </div>
+        )}
+        {scoresStatus === "live" && lastScoresFetch && (
+          <span style={{ fontSize:8, color:T.accent }}>
+            ● LIVE R{currentRound} · {formatAge(lastScoresFetch)}
+          </span>
+        )}
+        {scoresStatus === "loading" && <span style={{ fontSize:8, color:T.muted }}>loading scores...</span>}
+        {scoresStatus === "error" && <span style={{ fontSize:8, color:T.red }}>scores unavailable</span>}
+        {lastOddsFetch && <span style={{ fontSize:8, color:T.muted }}>odds {formatAge(lastOddsFetch)}</span>}
+        <button onClick={() => { loadScores(true); loadOdds(true); }}
+          style={{ background:"none", border:"1px solid "+T.border, color:T.muted, fontSize:9, padding:"4px 10px", borderRadius:3, cursor:"pointer", fontFamily:"inherit" }}>
+          ⟳ Refresh
+        </button>
+      </div>
+
+      {/* Header */}
+      <div style={S.header}>
+        <div style={S.glow}/>
+        <div style={{ display:"inline-block", background:"rgba(74,222,128,0.1)", border:"1px solid rgba(74,222,128,0.25)", color:T.accent, fontSize:"9px", letterSpacing:"3px", padding:"3px 12px", borderRadius:2, marginBottom:14 }}>
+          ⛳ US OPEN · SHINNECOCK HILLS
+        </div>
+        <div style={{ fontSize:"clamp(22px,4vw,36px)", fontWeight:700, letterSpacing:"-1px", background:"linear-gradient(135deg,#4ade80 0%,#dde5f0 60%)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", backgroundClip:"text", marginBottom:6 }}>
+          {TOURNAMENT}
+        </div>
+        <div style={{ fontSize:10, color:T.muted, letterSpacing:"1px", marginBottom:6 }}>{COURSE}</div>
+        <div style={{ fontSize:9, color:T.muted, letterSpacing:"1px", marginBottom:16 }}>{COURSE_LOC}</div>
+        <div style={{ display:"inline-block", background:"rgba(167,139,250,0.08)", border:"1px solid rgba(167,139,250,0.2)", color:T.purple, fontSize:"8px", letterSpacing:"2px", padding:"2px 10px", borderRadius:2 }}>
+          SG-BASED MONTE CARLO · {SIM_N.toLocaleString()} ITERATIONS · CUT TOP {CUT_SPOTS}+TIES
+          {roundsConditioned > 0 && ` · CONDITIONED ON R${roundsConditioned} SCORES`}
+        </div>
+        <div style={{ marginTop:20 }}>
+          <button onClick={runSim} disabled={running}
+            style={{ background:running?"none":T.accent, color:running?T.muted:"#070b14", border:"1px solid "+(running?T.border:T.accent), borderRadius:4, padding:"10px 28px", fontSize:11, fontWeight:700, cursor:running?"default":"pointer", fontFamily:"inherit", letterSpacing:"1px" }}>
+            {running ? "⟳ Running Tournament Sim..." : results ? "↻ Re-Run Simulation" : "▶ Run Tournament Simulation"}
+          </button>
+        </div>
+      </div>
+
+      <div style={S.body}>
+        {!results && !running && (
+          <div style={{ textAlign:"center", padding:"48px 24px", color:T.muted, fontSize:11, lineHeight:2 }}>
+            <div style={{ fontSize:28, marginBottom:12 }}>⛳</div>
+            Click "Run Tournament Simulation" to generate win probabilities, top finish %, and make cut % for the {UNIQUE_FIELD.length}-player field.
+            <div style={{ marginTop:12, fontSize:9, color:T.muted }}>
+              Player params: 2026 PGA Tour SG:Total (through Jun 14) · LIV/DP World Tour players estimated
+            </div>
+          </div>
+        )}
+
+        {results && (
+          <>
+            <div style={S.sec}>
+              <div style={S.secLabel}>Tournament Probabilities — {UNIQUE_FIELD.length} Players · {SIM_N.toLocaleString()} Simulations · Click column to sort</div>
+              <div style={S.card}>
+                <TournamentTable results={results} oddsMap={oddsMap} betLogger={betLogger} liveScores={liveScores}/>
+              </div>
+            </div>
+
+            <div style={{ ...S.sec, background:"#0a0f1a", border:"1px solid "+T.purple+"33", borderRadius:6, padding:"11px 14px", fontSize:"10px", color:T.muted, marginTop:24, lineHeight:1.8 }}>
+              <div style={{ color:T.purple, fontWeight:700, fontSize:"9px", letterSpacing:"2px", marginBottom:7 }}>MODEL METHODOLOGY</div>
+              <div><span style={{ color:T.text }}>Strokes Gained Model:</span> Each player's expected round score = field average ({FIELD_AVG}) − SG:Total. Field average calibrated for US Open difficulty at Shinnecock Hills (par {PAR}).</div>
+              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Round Variance:</span> Per-round scores drawn from N(expected, sigma), where sigma reflects individual player consistency (range: 2.55–3.00).</div>
+              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Cut Rule:</span> Top {CUT_SPOTS} + ties advance after 36 holes. {SIM_N.toLocaleString()} iterations per run.</div>
+              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Data:</span> SG:Total from pgatour.com (2026 season YTD through Jun 14). LIV/DP World Tour players marked "est" — estimated based on world ranking and recent form.</div>
+              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Odds:</span> Outright winner odds from The Odds API. Edge = model win% − book implied%. Positive edge = model sees more value than book.</div>
+            </div>
+            <div style={S.disclaimer}>
+              Simulation parameters from publicly available 2026 PGA Tour statistics. LIV and DP World Tour player ratings are estimates. Not professional betting advice. Gamble responsibly.
+            </div>
+          </>
+        )}
+
+        <div style={{ marginTop: results ? 20 : 32 }}>
+          <div style={S.secLabel}>Head-to-Head Matchup Calculator</div>
+          <H2HMatchup liveScores={liveScores}/>
+        </div>
+
+        {betLogger.bets.filter(b=>b.sport==="GOLF").length > 0 && (
+          <div style={S.sec}>
+            <div style={S.secLabel}>Bet Log — Golf ({betLogger.bets.filter(b=>b.sport==="GOLF").length} bets)</div>
+            <div style={S.card}>
+              {betLogger.bets.filter(b=>b.sport==="GOLF").slice().reverse().map(b => {
+                const rc = b.result==="win"?T.green:b.result==="loss"?T.red:T.muted;
+                return (
+                  <div key={b.id} style={{ display:"flex", gap:10, padding:"7px 0", borderBottom:"1px solid "+T.border+"44", flexWrap:"wrap", fontSize:10 }}>
+                    <div style={{ fontSize:9, color:T.muted, minWidth:90 }}>{b.gameDate}</div>
+                    <div style={{ flex:2, color:T.text }}>{b.homeTeam}</div>
+                    <div style={{ color:T.muted, fontSize:9 }}>{b.market}</div>
+                    <div style={{ fontSize:9, color:T.gold }}>{b.bookOdds}</div>
+                    <div style={{ fontSize:9, color:T.muted }}>{b.simPct}</div>
+                    <span style={{ background:rc+"22", border:"1px solid "+rc+"44", color:rc, fontSize:"8px", fontWeight:700, padding:"1px 6px", borderRadius:2 }}>
+                      {b.result==="pending"?"PENDING":b.result.toUpperCase()}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
