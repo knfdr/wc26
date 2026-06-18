@@ -752,20 +752,18 @@ function tierColor(tier, T) {
 }
 
 // ── Gist read/write ──────────────────────────────────────────────────────────
-async function gistRead(ghToken) {
-  const res = await fetch("https://api.github.com/gists/" + GIST_ID, {
-    headers: { Authorization: "token " + ghToken, Accept: "application/vnd.github.v3+json" }
-  });
+async function gistRead() {
+  const res = await fetch("/api/gist");
   if (!res.ok) throw new Error("Gist read failed: " + res.status);
   const data = await res.json();
   const content = data.files[GIST_FILENAME] && data.files[GIST_FILENAME].content;
   try { return JSON.parse(content || "[]"); } catch { return []; }
 }
 
-async function gistWrite(ghToken, bets) {
-  const res = await fetch("https://api.github.com/gists/" + GIST_ID, {
+async function gistWrite(bets) {
+  const res = await fetch("/api/gist", {
     method: "PATCH",
-    headers: { Authorization: "token " + ghToken, Accept: "application/vnd.github.v3+json", "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ files: { [GIST_FILENAME]: { content: JSON.stringify(bets, null, 2) } } })
   });
   if (!res.ok) throw new Error("Gist write failed: " + res.status);
@@ -1121,38 +1119,36 @@ function StatsBanner({ stats, T, S }) {
 }
 
 // Bet Logger Hook — manages gist read/write and local state
-function useBetLogger(ghToken) {
+function useBetLogger() {
   const [bets, setBets] = useState([]);
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (!ghToken) return;
-    gistRead(ghToken).then(data => {
+    gistRead().then(data => {
       autoResolveBets(data).then(resolved => {
         setBets(resolved);
         setLoaded(true);
         if (resolved.some((b,i) => b.result !== data[i]?.result)) {
-          gistWrite(ghToken, resolved).catch(console.error);
+          gistWrite(resolved).catch(console.error);
         }
       });
     }).catch(e => {
       console.error("Gist read error:", e);
       setLoaded(true);
     });
-  }, [ghToken]);
+  }, []);
 
   async function logBet(bet) {
-    if (!ghToken) return;
     setSaving(true);
     const updated = [...bets, bet];
     setBets(updated);
-    try { await gistWrite(ghToken, updated); } catch(e) { console.error(e); }
+    try { await gistWrite(updated); } catch(e) { console.error(e); }
     setSaving(false);
   }
 
   async function logAllBets(newBets) {
-    if (!ghToken || !newBets.length) return;
+    if (!newBets.length) return;
     setSaving(true);
     const today = new Date().toISOString().slice(0,10);
     const existingKeys = new Set(
@@ -1164,15 +1160,14 @@ function useBetLogger(ghToken) {
     if (!toAdd.length) { setSaving(false); return; }
     const updated = [...bets, ...toAdd];
     setBets(updated);
-    try { await gistWrite(ghToken, updated); } catch(e) { console.error(e); }
+    try { await gistWrite(updated); } catch(e) { console.error(e); }
     setSaving(false);
   }
 
   async function removeBet(id) {
-    if (!ghToken) return;
     const updated = bets.filter(b => b.id !== id);
     setBets(updated);
-    try { await gistWrite(ghToken, updated); } catch(e) { console.error(e); }
+    try { await gistWrite(updated); } catch(e) { console.error(e); }
   }
 
   const stats = calcStats(bets);
@@ -1652,45 +1647,6 @@ function WCTopPicksTab({ simData, betLogger }) {
   );
 }
 
-// ── WC Key Gate ──────────────────────────────────────────────────────────────
-function WCKeyGate({ onToken }) {
-  const [val, setVal] = useState("");
-  const [err, setErr] = useState("");
-  const [testing, setTesting] = useState(false);
-
-  useEffect(() => {
-    const stored = localStorage.getItem("sharp_gh_token");
-    if (stored) onToken(stored);
-  }, []);
-
-  async function connect() {
-    if (!val.trim()) { setErr("Enter your GitHub token"); return; }
-    setTesting(true); setErr("");
-    try {
-      const r = await fetch("https://api.github.com/gists/"+GIST_ID, { headers:{Authorization:"token "+val.trim()} });
-      if (!r.ok) throw new Error("GitHub token invalid or Gist not accessible");
-      localStorage.setItem("sharp_gh_token", val.trim());
-      onToken(val.trim());
-    } catch(e) { setErr(e.message); }
-    setTesting(false);
-  }
-
-  return (
-    <div style={{ position:"fixed", top:0, left:0, right:0, background:T.navy, borderBottom:"1px solid "+T.border, padding:"10px 16px", display:"flex", gap:10, alignItems:"center", zIndex:100, flexWrap:"wrap" }}>
-      <div style={{ fontSize:10, color:T.gold, fontWeight:700 }}>SHARP SIM</div>
-      <div style={{ fontSize:9, color:T.muted }}>GitHub token for bet tracking (optional):</div>
-      <input style={{ background:T.card, border:"1px solid "+T.border, borderRadius:4, color:T.text, fontFamily:"'IBM Plex Mono','Courier New',monospace", outline:"none", width:240, padding:"5px 10px", fontSize:10 }} type="password" placeholder="ghp_..." value={val} onChange={e=>setVal(e.target.value)} onKeyDown={e=>e.key==="Enter"&&connect()} />
-      {err && <span style={{ fontSize:9, color:T.red }}>{err}</span>}
-      <button onClick={connect} disabled={testing} style={{ background:testing?"#1a2a3e":T.gold, color:"#070b14", border:"none", borderRadius:4, fontWeight:700, letterSpacing:"1px", cursor:testing?"default":"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace", width:"auto", padding:"5px 12px", marginTop:0, fontSize:9 }}>
-        {testing?"Connecting...":"Connect"}
-      </button>
-      <button onClick={()=>onToken(null)} style={{ background:"none", border:"1px solid "+T.border, color:T.muted, padding:"5px 10px", borderRadius:4, fontSize:9, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
-        Skip
-      </button>
-    </div>
-  );
-}
-
 function App() {
   const [activeId, setActiveId] = useState(MATCHES[0].id);
   const SIM_CACHE_KEY = "sharp_sim_cache_wc_" + new Date().toLocaleDateString("en-CA");
@@ -1699,11 +1655,9 @@ function App() {
   });
   const [runningId, setRunningId] = useState(null);
   const [runCounts, setRunCounts] = useState({});
-  const [ghToken, setGhToken] = useState(localStorage.getItem("sharp_gh_token") || null);
-  const [showKeyGate, setShowKeyGate] = useState(!localStorage.getItem("sharp_gh_token"));
   const autoRanRef = useRef(false);
 
-  const betLogger = useBetLogger(ghToken);
+  const betLogger = useBetLogger();
 
   const runMatch = useCallback((matchId) => {
     const match = MATCHES.find(m => m.id === matchId);
@@ -1745,12 +1699,6 @@ function App() {
     setTimeout(runNext, 200);
   }, []);
 
-  function handleToken(token) {
-    setGhToken(token);
-    setShowKeyGate(false);
-    if (token) localStorage.setItem("sharp_gh_token", token);
-  }
-
   const isParlayTab = activeId === "parlays";
   const isTopPicksTab = activeId === "top_picks";
   const allSimsReady = MATCHES.every(m => !!simData[m.id]);
@@ -1780,9 +1728,7 @@ function App() {
   },0);
 
   return (
-    <div style={{ ...S.wrap, paddingTop: showKeyGate ? 58 : 0 }}>
-      {showKeyGate && <WCKeyGate onToken={handleToken}/>}
-
+    <div style={S.wrap}>
       {/* TOPBAR */}
       <div style={{ background:T.navy, borderBottom:"1px solid "+T.border, padding:"8px 16px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
         <a href="index.html" style={{ fontSize:10, color:T.muted, letterSpacing:"1px" }}>← Sharp Sim</a>
@@ -1793,8 +1739,6 @@ function App() {
             <span style={{ color:parseFloat(betLogger.stats.totalUnits)>=0?T.green:T.red, marginLeft:6 }}>{parseFloat(betLogger.stats.totalUnits)>=0?"+":""}{betLogger.stats.totalUnits}u</span>
           </div>
         )}
-        {!ghToken && <button onClick={()=>setShowKeyGate(true)} style={{ background:"none", border:"1px solid "+T.gold+"44", color:T.gold, padding:"4px 10px", borderRadius:4, fontSize:9, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>Connect Bet Tracker</button>}
-        {ghToken && <button onClick={()=>{ localStorage.removeItem("sharp_gh_token"); setGhToken(null); setShowKeyGate(true); }} style={{ background:"none", border:"1px solid "+T.border, color:T.muted, padding:"4px 10px", borderRadius:4, fontSize:9, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>✕ Tracker</button>}
       </div>
 
       {/* LOADING BAR */}

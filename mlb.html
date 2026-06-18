@@ -529,20 +529,18 @@ function tierColor(tier, T) {
 }
 
 // ── Gist read/write ──────────────────────────────────────────────────────────
-async function gistRead(ghToken) {
-  const res = await fetch("https://api.github.com/gists/" + GIST_ID, {
-    headers: { Authorization: "token " + ghToken, Accept: "application/vnd.github.v3+json" }
-  });
+async function gistRead() {
+  const res = await fetch("/api/gist");
   if (!res.ok) throw new Error("Gist read failed: " + res.status);
   const data = await res.json();
   const content = data.files[GIST_FILENAME] && data.files[GIST_FILENAME].content;
   try { return JSON.parse(content || "[]"); } catch { return []; }
 }
 
-async function gistWrite(ghToken, bets) {
-  const res = await fetch("https://api.github.com/gists/" + GIST_ID, {
+async function gistWrite(bets) {
+  const res = await fetch("/api/gist", {
     method: "PATCH",
-    headers: { Authorization: "token " + ghToken, Accept: "application/vnd.github.v3+json", "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ files: { [GIST_FILENAME]: { content: JSON.stringify(bets, null, 2) } } })
   });
   if (!res.ok) throw new Error("Gist write failed: " + res.status);
@@ -820,39 +818,37 @@ function StatsBanner({ stats, T, S }) {
 }
 
 // Bet Logger Hook — manages gist read/write and local state
-function useBetLogger(ghToken) {
+function useBetLogger() {
   const [bets, setBets] = useState([]);
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (!ghToken) return;
-    gistRead(ghToken).then(data => {
+    gistRead().then(data => {
       autoResolveBets(data).then(resolved => {
         setBets(resolved);
         setLoaded(true);
         if (resolved.some((b,i) => b.result !== data[i]?.result)) {
-          gistWrite(ghToken, resolved).catch(console.error);
+          gistWrite(resolved).catch(console.error);
         }
       });
     }).catch(e => {
       console.error("Gist read error:", e);
       setLoaded(true);
     });
-  }, [ghToken]);
+  }, []);
 
   async function logBet(bet) {
-    if (!ghToken) return;
     setSaving(true);
     const updated = [...bets, bet];
     setBets(updated);
-    try { await gistWrite(ghToken, updated); } catch(e) { console.error(e); }
+    try { await gistWrite(updated); } catch(e) { console.error(e); }
     setSaving(false);
   }
 
   // Log multiple bets at once, deduping by gameDate+gameId+market (any result status)
   async function logAllBets(newBets) {
-    if (!ghToken || !newBets.length) return;
+    if (!newBets.length) return;
     setSaving(true);
     const today = new Date().toISOString().slice(0,10);
     const existingKeys = new Set(
@@ -864,15 +860,14 @@ function useBetLogger(ghToken) {
     if (!toAdd.length) { setSaving(false); return; }
     const updated = [...bets, ...toAdd];
     setBets(updated);
-    try { await gistWrite(ghToken, updated); } catch(e) { console.error(e); }
+    try { await gistWrite(updated); } catch(e) { console.error(e); }
     setSaving(false);
   }
 
   async function removeBet(id) {
-    if (!ghToken) return;
     const updated = bets.filter(b => b.id !== id);
     setBets(updated);
-    try { await gistWrite(ghToken, updated); } catch(e) { console.error(e); }
+    try { await gistWrite(updated); } catch(e) { console.error(e); }
   }
 
   const stats = calcStats(bets);
@@ -1392,58 +1387,9 @@ function MLBParlayTab({ simData, games, betLogger }) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
-// API KEY GATE (updated: collects Odds key + GH token)
-// ════════════════════════════════════════════════════════════════════════════════
-function ApiKeyGate({ onToken }) {
-  const [ghToken, setGhToken] = useState("");
-  const [err, setErr] = useState("");
-  const [testing, setTesting] = useState(false);
-
-  useEffect(() => {
-    const gt = localStorage.getItem("sharp_gh_token");
-    if (gt) onToken(gt);
-  }, []);
-
-  async function connect() {
-    if (!ghToken.trim()) { setErr("Enter your GitHub token"); return; }
-    setTesting(true); setErr("");
-    try {
-      const r = await fetch("https://api.github.com/gists/"+GIST_ID, { headers:{Authorization:"token "+ghToken.trim()} });
-      if (!r.ok) throw new Error("GitHub token invalid or Gist not accessible");
-      localStorage.setItem("sharp_gh_token", ghToken.trim());
-      onToken(ghToken.trim());
-    } catch(e) { setErr(e.message); }
-    setTesting(false);
-  }
-
-  return (
-    <div style={{ maxWidth:540, margin:"80px auto", padding:"0 20px" }}>
-      <div style={{ ...S.card, border:"1px solid "+T.green+"44" }}>
-        <div style={S.badge(T.green)}>⚾ MLB SIM · CONNECT</div>
-        <div style={{ fontSize:13, fontWeight:700, marginBottom:8, marginTop:8 }}>Connect GitHub token</div>
-        <div style={{ fontSize:10, color:T.muted, lineHeight:1.7, marginBottom:16 }}>
-          Token stored in browser localStorage only. Required once per browser.
-        </div>
-        <div style={{ fontSize:9, color:T.muted, marginBottom:6, letterSpacing:"1px" }}>GITHUB TOKEN (gist scope)</div>
-        <input style={S.input} type="password" placeholder="ghp_..." value={ghToken} onChange={e=>setGhToken(e.target.value)} onKeyDown={e=>e.key==="Enter"&&connect()} />
-        {err && <div style={{ fontSize:10, color:T.red, marginTop:8 }}>{err}</div>}
-        <button style={S.btn(testing, T.green)} onClick={connect} disabled={testing}>
-          {testing ? "Verifying..." : "Connect & Load Today's Games"}
-        </button>
-        <div style={{ fontSize:9, color:T.muted, marginTop:10, lineHeight:1.6 }}>
-          <span style={{ color:T.red, cursor:"pointer" }} onClick={()=>{ localStorage.removeItem("sharp_gh_token"); setGhToken(""); }}>Reset token</span>
-          {" "}· Bets logged to GitHub Gist (8a76d2b...)
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════════════
 // MAIN APP
 // ════════════════════════════════════════════════════════════════════════════════
 function App() {
-  const [ghToken, setGhToken] = useState(null);
   const [games, setGames]   = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError]   = useState("");
@@ -1463,7 +1409,9 @@ function App() {
   const [runCounts, setRunCounts] = useState({});
   const autoRanRef = useRef(false);
 
-  const betLogger = useBetLogger(ghToken);
+  const betLogger = useBetLogger();
+
+  useEffect(() => { loadGames(); }, []);
 
   // Auto-sim all games sequentially once games are loaded; skip cached results
   useEffect(() => {
@@ -1515,11 +1463,6 @@ function App() {
     setLoading(false);
   }
 
-  function handleToken(gt) {
-    setGhToken(gt);
-    loadGames();
-  }
-
   const isSpecialTab = activeTab === "top_picks" || activeTab === "parlays";
   const activeGameIdx = activeTab.startsWith("game_") ? parseInt(activeTab.split("_")[1]) : 0;
   const activeGame = isSpecialTab ? null : games[activeGameIdx];
@@ -1565,8 +1508,6 @@ function App() {
     betLogger.logAllBets(allBets);
   }, [allSimsReady, betLogger.loaded]);
 
-  if (!ghToken) return <div style={S.wrap}><ApiKeyGate onToken={handleToken}/></div>;
-
   const topBetCount = games.reduce((acc,g) => {
     const agg = simData[g.homeTeam+"|"+g.awayTeam];
     if (!agg) return acc;
@@ -1589,10 +1530,6 @@ function App() {
         {lastFetched && <div style={{ fontSize:8, color:T.muted, letterSpacing:"0.5px" }}>cached {formatAge(lastFetched)}</div>}
         <button onClick={()=>{ autoRanRef.current=false; loadGames({ force: true }); }} disabled={loading||!!runningId} style={{ ...S.btn((loading||!!runningId),T.green), width:"auto", padding:"6px 14px", marginTop:0, fontSize:9 }}>
           {loading?"Loading...":"↻ Refresh"}
-        </button>
-        <button onClick={()=>{ localStorage.removeItem("sharp_gh_token"); setGhToken(null); }}
-          style={{ background:"none", border:"1px solid "+T.border, color:T.muted, padding:"6px 10px", borderRadius:4, fontSize:9, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
-          ✕ Token
         </button>
       </div>
 

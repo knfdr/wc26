@@ -266,16 +266,16 @@ function parseOddsGame(game) {
 }
 
 // ── Gist helpers ──────────────────────────────────────────────────────────────
-async function gistRead(token) {
-  const res = await fetch("https://api.github.com/gists/" + GIST_ID, { headers: { Authorization: "token " + token } });
+async function gistRead() {
+  const res = await fetch("/api/gist");
   if (!res.ok) throw new Error("Gist read failed");
   const data = await res.json();
   return JSON.parse((data.files[GIST_FILE] || {}).content || "[]");
 }
-async function gistWrite(token, bets) {
-  await fetch("https://api.github.com/gists/" + GIST_ID, {
+async function gistWrite(bets) {
+  await fetch("/api/gist", {
     method: "PATCH",
-    headers: { Authorization: "token " + token, "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ files: { [GIST_FILE]: { content: JSON.stringify(bets, null, 2) } } }),
   });
 }
@@ -457,26 +457,25 @@ function extractTopBets(agg, game) {
 }
 
 // ── Bet Logger ────────────────────────────────────────────────────────────────
-function useBetLogger(ghToken) {
+function useBetLogger() {
   const [bets, setBets] = useState([]);
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (!ghToken) return;
-    gistRead(ghToken).then(data => {
+    gistRead().then(data => {
       autoResolveBets(data).then(resolved => {
         setBets(resolved);
         setLoaded(true);
         if (resolved.some((b, i) => b.result !== data[i]?.result)) {
-          gistWrite(ghToken, resolved).catch(console.error);
+          gistWrite(resolved).catch(console.error);
         }
       });
     }).catch(e => { console.error(e); setLoaded(true); });
-  }, [ghToken]);
+  }, []);
 
   async function logAllBets(newBets) {
-    if (!ghToken || !newBets.length) return;
+    if (!newBets.length) return;
     setSaving(true);
     const today = new Date().toLocaleDateString("en-CA");
     const existingKeys = new Set(bets.filter(b => b.gameDate === today).map(b => b.gameId + "|" + b.market));
@@ -484,15 +483,14 @@ function useBetLogger(ghToken) {
     if (!toAdd.length) { setSaving(false); return; }
     const updated = [...bets, ...toAdd];
     setBets(updated);
-    try { await gistWrite(ghToken, updated); } catch(e) { console.error(e); }
+    try { await gistWrite(updated); } catch(e) { console.error(e); }
     setSaving(false);
   }
 
   async function removeBet(id) {
-    if (!ghToken) return;
     const updated = bets.filter(b => b.id !== id);
     setBets(updated);
-    try { await gistWrite(ghToken, updated); } catch(e) { console.error(e); }
+    try { await gistWrite(updated); } catch(e) { console.error(e); }
   }
 
   const stats = calcStats(bets);
@@ -616,41 +614,6 @@ function StatsBanner({ stats }) {
           </div>
         );
       })}
-    </div>
-  );
-}
-
-// ── API Key Gate ──────────────────────────────────────────────────────────────
-function ApiKeyGate({ onToken }) {
-  const [gt, setGt] = useState(localStorage.getItem("sharp_gh_token") || "");
-  const [err, setErr] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  async function handleSubmit() {
-    if (!gt.trim()) { setErr("GitHub token required."); return; }
-    setLoading(true); setErr("");
-    try {
-      const r = await fetch("https://api.github.com/gists/" + GIST_ID, { headers: { Authorization: "token " + gt.trim() } });
-      if (!r.ok) throw new Error("GitHub token invalid");
-      localStorage.setItem("sharp_gh_token", gt.trim());
-      onToken(gt.trim());
-    } catch(e) { setErr(e.message); }
-    setLoading(false);
-  }
-
-  return (
-    <div style={{ maxWidth:480, margin:"60px auto", padding:"0 20px" }}>
-      <div style={{ background:T.navy, border:"1px solid "+T.border, borderRadius:8, padding:24 }}>
-        <div style={{ fontSize:"8px", letterSpacing:"2px", color:T.accent, marginBottom:16 }}>SHARP SIM · WNBA · API SETUP</div>
-        <div style={{ marginBottom:16 }}>
-          <label style={{ fontSize:10, color:T.muted, display:"block", marginBottom:4 }}>GITHUB TOKEN</label>
-          <input style={S.input} type="password" value={gt} onChange={e => setGt(e.target.value)} placeholder="Enter GitHub token..." />
-        </div>
-        {err && <div style={{ color:T.red, fontSize:10, marginBottom:10 }}>{err}</div>}
-        <button style={{ ...S.btn(true, T.accent), marginBottom:0 }} onClick={handleSubmit} disabled={loading}>
-          {loading ? "Connecting..." : "Connect →"}
-        </button>
-      </div>
     </div>
   );
 }
@@ -933,7 +896,6 @@ function TopPicksTab({ simData, games, betLogger }) {
 
 // ── Main App ──────────────────────────────────────────────────────────────────
 function App() {
-  const [ghToken, setGhToken] = useState(localStorage.getItem("sharp_gh_token") || "");
   const [games, setGames] = useState([]);
   const [activeTab, setActiveTab] = useState("top_picks");
   const [simData, setSimData] = useState(() => {
@@ -947,7 +909,7 @@ function App() {
   const [loadingGames, setLoadingGames] = useState(false);
   const [gamesError, setGamesError] = useState("");
 
-  const betLogger = useBetLogger(ghToken);
+  const betLogger = useBetLogger();
 
   // App-level auto-log
   const appAutoLoggedRef = useRef(false);
@@ -964,19 +926,6 @@ function App() {
     appAutoLoggedRef.current = true;
     betLogger.logAllBets(allBets);
   }, [allSimsReady, betLogger.loaded]);
-
-  // Gate: require GitHub token
-  if (!ghToken) {
-    return (
-      <div style={S.wrap}>
-        <div style={{ ...S.header, padding:"20px 20px 16px" }}>
-          <div style={S.glow}/>
-          <a href="index.html" style={{ fontSize:9, color:T.muted, letterSpacing:"1px" }}>← SHARP SIM</a>
-        </div>
-        <ApiKeyGate onToken={(gt) => { setGhToken(gt); loadGames(); }}/>
-      </div>
-    );
-  }
 
   async function loadGames(opts = {}) {
     setLoadingGames(true); setGamesError("");
