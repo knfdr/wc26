@@ -774,15 +774,13 @@ async function gistWrite(ghToken, bets) {
 
 // ── Auto-resolve via Odds API scores ─────────────────────────────────────────
 const SCORES_CACHE_TTL = 30 * 60 * 1000;
-async function fetchScores(sportKey, oddsKey) {
+async function fetchScores(sportKey) {
   const cacheKey = "sharp_scores_cache_" + sportKey;
   try {
     const cached = JSON.parse(localStorage.getItem(cacheKey) || "null");
     if (cached && Date.now() - cached.ts < SCORES_CACHE_TTL) return cached.data;
   } catch(e) {}
-  const res = await fetch(
-    "https://api.the-odds-api.com/v4/sports/" + sportKey + "/scores/?daysFrom=4&apiKey=" + oddsKey
-  );
+  const res = await fetch("/api/scores?sport=" + sportKey + "&daysFrom=4");
   if (!res.ok) throw new Error("scores API error: " + res.status);
   const data = await res.json();
   localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data }));
@@ -809,9 +807,9 @@ const FALLBACK_GAMES = {
     scores:[{name:"Uzbekistan",score:"1"},{name:"Colombia",score:"3"}], h1Home:0, h1Away:1 },
 };
 
-async function autoResolveBets(bets, oddsKey) {
+async function autoResolveBets(bets) {
   const pending = bets.filter(b => b.result === "pending");
-  if (!pending.length || !oddsKey) return bets;
+  if (!pending.length) return bets;
 
   const sports = [...new Set(pending.map(b => b.sport))];
   const scoreMap = {};
@@ -819,7 +817,7 @@ async function autoResolveBets(bets, oddsKey) {
   for (const sport of sports) {
     const sportKey = sport === "MLB" ? "baseball_mlb" : "soccer_fifa_world_cup";
     try {
-      const scores = await fetchScores(sportKey, oddsKey);
+      const scores = await fetchScores(sportKey);
       console.log("[resolve] sport=" + sport + " raw scores count=" + scores.length);
       scores.forEach(g => {
         if (g.completed !== true || !g.scores || !g.scores.length) return;
@@ -1123,7 +1121,7 @@ function StatsBanner({ stats, T, S }) {
 }
 
 // Bet Logger Hook — manages gist read/write and local state
-function useBetLogger(ghToken, oddsKey) {
+function useBetLogger(ghToken) {
   const [bets, setBets] = useState([]);
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -1131,18 +1129,13 @@ function useBetLogger(ghToken, oddsKey) {
   useEffect(() => {
     if (!ghToken) return;
     gistRead(ghToken).then(data => {
-      if (oddsKey) {
-        autoResolveBets(data, oddsKey).then(resolved => {
-          setBets(resolved);
-          setLoaded(true);
-          if (resolved.some((b,i) => b.result !== data[i]?.result)) {
-            gistWrite(ghToken, resolved).catch(console.error);
-          }
-        });
-      } else {
-        setBets(data);
+      autoResolveBets(data).then(resolved => {
+        setBets(resolved);
         setLoaded(true);
-      }
+        if (resolved.some((b,i) => b.result !== data[i]?.result)) {
+          gistWrite(ghToken, resolved).catch(console.error);
+        }
+      });
     }).catch(e => {
       console.error("Gist read error:", e);
       setLoaded(true);
@@ -1707,11 +1700,10 @@ function App() {
   const [runningId, setRunningId] = useState(null);
   const [runCounts, setRunCounts] = useState({});
   const [ghToken, setGhToken] = useState(localStorage.getItem("sharp_gh_token") || null);
-  const [oddsKey] = useState(localStorage.getItem("sharp_odds_key") || null);
   const [showKeyGate, setShowKeyGate] = useState(!localStorage.getItem("sharp_gh_token"));
   const autoRanRef = useRef(false);
 
-  const betLogger = useBetLogger(ghToken, oddsKey);
+  const betLogger = useBetLogger(ghToken);
 
   const runMatch = useCallback((matchId) => {
     const match = MATCHES.find(m => m.id === matchId);
