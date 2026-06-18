@@ -994,7 +994,7 @@ function WNBAParlayTab({ simData, games, betLogger }) {
 // ── Main App ──────────────────────────────────────────────────────────────────
 function App() {
   const [games, setGames] = useState([]);
-  const [activeTab, setActiveTab] = useState("top_picks");
+  const [activeTab, setActiveTab] = useState("game_0");
   const [simData, setSimData] = useState(() => {
     try { return JSON.parse(localStorage.getItem(SIM_CACHE_KEY) || "{}"); } catch(e) { return {}; }
   });
@@ -1123,13 +1123,13 @@ function App() {
           </button>
         ))}
         <div style={{ flex:1 }}/>
-        <button style={{ ...S.tab(activeTab === "parlays"), color:activeTab==="parlays"?T.purple:T.muted, borderBottom:activeTab==="parlays"?"2px solid "+T.purple:"2px solid transparent", borderLeft:"1px solid "+T.border }}
-          onClick={() => setActiveTab("parlays")}>
-          🎲 PARLAYS
-        </button>
         <button style={{ ...S.tab(activeTab === "top_picks"), color:activeTab==="top_picks"?T.green:T.muted, borderBottom:activeTab==="top_picks"?"2px solid "+T.green:"2px solid transparent", borderLeft:"1px solid "+T.border }}
           onClick={() => setActiveTab("top_picks")}>
           ⭐ TOP PICKS {topBetCount > 0 ? "(" + topBetCount + ")" : ""}
+        </button>
+        <button style={{ ...S.tab(activeTab === "parlays"), color:activeTab==="parlays"?T.purple:T.muted, borderBottom:activeTab==="parlays"?"2px solid "+T.purple:"2px solid transparent", borderLeft:"1px solid "+T.border }}
+          onClick={() => setActiveTab("parlays")}>
+          🎲 PARLAYS
         </button>
       </div>
 
