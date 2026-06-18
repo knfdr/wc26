@@ -1443,7 +1443,7 @@ function App() {
         )}
         <div style={{ fontSize:9, color:T.muted }}>{games.length > 0 ? games.length+" games" : loading?"Loading...":""}</div>
         {lastFetched && <div style={{ fontSize:8, color:T.muted, letterSpacing:"0.5px" }}>cached {formatAge(lastFetched)}</div>}
-        <button onClick={()=>{ autoRanRef.current=false; loadGames({ force: true }); }} disabled={loading||!!runningId} style={{ ...S.btn((loading||!!runningId),T.green), width:"auto", padding:"6px 14px", marginTop:0, fontSize:9 }}>
+        <button onClick={()=>{ autoRanRef.current=false; loadGames({ force: true }); }} disabled={loading||!!runningId} style={{ background:"none", border:"1px solid "+T.border, color:(loading||!!runningId)?T.muted:T.green, padding:"4px 10px", borderRadius:4, fontSize:9, cursor:(loading||!!runningId)?"default":"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
           {loading?"Loading...":"↻ Refresh"}
         </button>
       </div>

@@ -138,6 +138,14 @@ a{text-decoration:none;color:inherit}
   border-top:1px solid #1a2a3e;
   font-size:9px;color:#2a3a52;letter-spacing:1px;
 }
+
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.skel{
+  background:linear-gradient(90deg,#1a2a3e 25%,#243347 50%,#1a2a3e 75%);
+  background-size:200% 100%;
+  animation:shimmer 1.6s infinite;
+  border-radius:3px;
+}
 </style>
 </head>
 <body>
@@ -151,8 +159,37 @@ a{text-decoration:none;color:inherit}
 
 <div class="body">
 
-  <div class="section-label" id="stats-label" style="display:none">Model Performance</div>
-  <div id="stats-banner" style="display:none;background:#101d30;border:1px solid #1a2a3e;border-radius:6px;padding:16px;margin-bottom:32px;"></div>
+  <div class="section-label" id="stats-label">Model Performance</div>
+  <div id="stats-banner" style="background:#101d30;border:1px solid #1a2a3e;border-radius:6px;padding:16px;margin-bottom:32px;">
+    <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid #1a2a3e">
+      <div><div class="skel" style="width:60px;height:8px;margin-bottom:6px"></div><div class="skel" style="width:72px;height:28px"></div></div>
+      <div><div class="skel" style="width:52px;height:8px;margin-bottom:6px"></div><div class="skel" style="width:96px;height:20px"></div></div>
+      <div><div class="skel" style="width:68px;height:8px;margin-bottom:6px"></div><div class="skel" style="width:72px;height:28px"></div></div>
+      <div><div class="skel" style="width:48px;height:8px;margin-bottom:6px"></div><div class="skel" style="width:32px;height:20px"></div></div>
+    </div>
+    <div style="margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+        <div class="skel" style="width:36px;height:8px"></div>
+        <div class="skel" style="width:80px;height:16px"></div>
+        <div class="skel" style="width:40px;height:10px"></div>
+      </div>
+      <div style="padding-left:16px;display:flex;flex-direction:column;gap:5px">
+        <div class="skel" style="width:220px;height:12px"></div>
+        <div class="skel" style="width:180px;height:12px"></div>
+      </div>
+    </div>
+    <div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+        <div class="skel" style="width:28px;height:8px"></div>
+        <div class="skel" style="width:80px;height:16px"></div>
+        <div class="skel" style="width:40px;height:10px"></div>
+      </div>
+      <div style="padding-left:16px;display:flex;flex-direction:column;gap:5px">
+        <div class="skel" style="width:200px;height:12px"></div>
+        <div class="skel" style="width:160px;height:12px"></div>
+      </div>
+    </div>
+  </div>
 
   <div class="section-label">Select Sport</div>
   <div class="cards">
@@ -342,8 +379,6 @@ async function loadStats() {
     });
 
     document.getElementById("stats-banner").innerHTML = html;
-    document.getElementById("stats-banner").style.display = "block";
-    document.getElementById("stats-label").style.display = "block";
   } catch(e) { console.error("Stats load error:", e); }
 }
 loadStats();
