@@ -221,7 +221,7 @@ async function fetchWNBAGames({ force = false } = {}) {
       if (cached && Date.now() - cached.ts < CACHE_TTL) return cached;
     } catch(e) {}
   }
-  const url = "/api/odds?sport=" + SPORT_KEY + "&markets=h2h,spreads,totals&bookmakers=fanduel,draftkings";
+  const url = "/api/odds?sport=" + SPORT_KEY + "&markets=h2h,spreads,totals";
   const res = await fetch(url);
   if (!res.ok) throw new Error("API error: " + res.status);
   const data = await res.json();
