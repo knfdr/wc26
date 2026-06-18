@@ -27,7 +27,6 @@ const GIST_ID   = "8a76d2b09c709882e4364528a0152ccc";
 const GIST_FILE = "sharpsim_bets.json";
 const SPORT_KEY = "basketball_wnba";
 const ODDS_CACHE_KEY  = "sharp_odds_cache_wnba";
-const SCORES_CACHE_KEY = "sharp_scores_cache_wnba";
 const CACHE_TTL = 30 * 60 * 1000;
 const SIM_CACHE_KEY = "sharp_sim_cache_wnba_" + new Date().toLocaleDateString("en-CA");
 const LEAGUE_AVG = 103;
@@ -292,79 +291,6 @@ function impliedProb(odds) {
 function tierToUnits(t) { return t==="LOCK"?2:t==="HIGH"?1.5:1; }
 function tierColor(t, T) { return t==="LOCK"?T.red:t==="HIGH"?T.green:t==="LEAN"?T.gold:T.muted; }
 
-// ── Auto-resolve ──────────────────────────────────────────────────────────────
-async function fetchScores() {
-  try {
-    const cached = JSON.parse(localStorage.getItem(SCORES_CACHE_KEY) || "null");
-    if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data;
-  } catch(e) {}
-  const res = await fetch("/api/scores?sport=" + SPORT_KEY + "&daysFrom=3");
-  if (!res.ok) throw new Error("scores API error: " + res.status);
-  const data = await res.json();
-  localStorage.setItem(SCORES_CACHE_KEY, JSON.stringify({ ts: Date.now(), data }));
-  return data;
-}
-
-async function autoResolveBets(bets) {
-  const pending = bets.filter(b => b.result === "pending" && b.sport === "WNBA");
-  if (!pending.length) return bets;
-
-  const scoreMap = {};
-  try {
-    const scores = await fetchScores();
-    const today = new Date().toLocaleDateString("en-CA");
-    scores.forEach(g => {
-      if (g.completed !== true || !g.scores || !g.scores.length) return;
-      const commenceTime = new Date(g.commence_time).getTime();
-      if (Date.now() - commenceTime < 3 * 60 * 60 * 1000) return;
-      if (new Date(g.commence_time).toLocaleDateString("en-CA") !== today) return;
-      scoreMap[g.id] = g;
-      scoreMap[g.home_team + "|" + g.away_team] = g;
-      scoreMap[g.away_team + "|" + g.home_team] = g;
-    });
-  } catch(e) {}
-
-  return bets.map(bet => {
-    if (bet.result !== "pending" || bet.sport !== "WNBA") return bet;
-    const game = scoreMap[bet.gameId] || scoreMap[bet.homeTeam + "|" + bet.awayTeam];
-    if (!game || game.completed !== true) return bet;
-
-    const homeScore = parseInt((game.scores.find(s => s.name === game.home_team) || {}).score || "0");
-    const awayScore = parseInt((game.scores.find(s => s.name !== game.home_team) || {}).score || "0");
-
-    let result = "loss";
-    const market = bet.market.toLowerCase();
-
-    if (market.includes(" ml")) {
-      const pickedHome = bet.market.includes(game.home_team);
-      if (pickedHome && homeScore > awayScore) result = "win";
-      else if (!pickedHome && awayScore > homeScore) result = "win";
-      else if (homeScore === awayScore) result = "push";
-    } else if (market.startsWith("over")) {
-      const line = parseFloat(bet.market.match(/[\d.]+/) || [0]);
-      if (homeScore + awayScore > line) result = "win";
-      else if (homeScore + awayScore === line) result = "push";
-    } else if (market.startsWith("under")) {
-      const line = parseFloat(bet.market.match(/[\d.]+/) || [0]);
-      if (homeScore + awayScore < line) result = "win";
-      else if (homeScore + awayScore === line) result = "push";
-    } else {
-      // Spread: "{team} -X.5" or "{team} +X.5"
-      const pointMatch = bet.market.match(/([+-][\d.]+)$/);
-      if (pointMatch) {
-        const point = parseFloat(pointMatch[1]);
-        const pickedHome = bet.market.includes(game.home_team);
-        const margin = homeScore - awayScore;
-        if (pickedHome && margin + point > 0) result = "win";
-        else if (!pickedHome && -margin + (-point) > 0) result = "win";
-        else if ((pickedHome ? margin + point : -margin + (-point)) === 0) result = "push";
-      }
-    }
-
-    return { ...bet, result, resolvedAt: new Date().toISOString(), finalScore: homeScore + "-" + awayScore };
-  });
-}
-
 // ── Stats ─────────────────────────────────────────────────────────────────────
 function calcStats(bets) {
   const resolved = bets.filter(b => b.result !== "pending");
@@ -464,13 +390,8 @@ function useBetLogger() {
 
   useEffect(() => {
     gistRead().then(data => {
-      autoResolveBets(data).then(resolved => {
-        setBets(resolved);
-        setLoaded(true);
-        if (resolved.some((b, i) => b.result !== data[i]?.result)) {
-          gistWrite(resolved).catch(console.error);
-        }
-      });
+      setBets(data);
+      setLoaded(true);
     }).catch(e => { console.error(e); setLoaded(true); });
   }, []);
 

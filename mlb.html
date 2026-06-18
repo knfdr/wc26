@@ -547,85 +547,6 @@ async function gistWrite(bets) {
   return true;
 }
 
-// ── Auto-resolve via Odds API scores ─────────────────────────────────────────
-const SCORES_CACHE_TTL = 30 * 60 * 1000;
-async function fetchScores(sportKey) {
-  const cacheKey = "sharp_scores_cache_" + sportKey;
-  try {
-    const cached = JSON.parse(localStorage.getItem(cacheKey) || "null");
-    if (cached && Date.now() - cached.ts < SCORES_CACHE_TTL) return cached.data;
-  } catch(e) {}
-  const res = await fetch("/api/scores?sport=" + sportKey + "&daysFrom=3");
-  if (!res.ok) throw new Error("scores API error: " + res.status);
-  const data = await res.json();
-  localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data }));
-  return data;
-}
-
-async function autoResolveBets(bets) {
-  const pending = bets.filter(b => b.result === "pending");
-  if (!pending.length) return bets;
-
-  const sports = [...new Set(pending.map(b => b.sport))];
-  const scoreMap = {};
-
-  for (const sport of sports) {
-    const sportKey = sport === "MLB" ? "baseball_mlb" : "soccer_fifa_world_cup";
-    try {
-      const scores = await fetchScores(sportKey);
-      const today = new Date().toLocaleDateString("en-CA");
-      scores.forEach(g => {
-        if (g.completed !== true || !g.scores || !g.scores.length) return;
-        const commenceTime = new Date(g.commence_time).getTime();
-        const threeHoursMs = 3 * 60 * 60 * 1000;
-        if (Date.now() - commenceTime < threeHoursMs) return;
-        if (new Date(g.commence_time).toLocaleDateString("en-CA") !== today) return;
-        scoreMap[g.id] = g;
-        scoreMap[g.home_team + "|" + g.away_team] = g;
-        scoreMap[g.away_team + "|" + g.home_team] = g;
-      });
-    } catch(e) {}
-  }
-
-  return bets.map(bet => {
-    if (bet.result !== "pending") return bet;
-    const game = scoreMap[bet.gameId] || scoreMap[bet.homeTeam + "|" + bet.awayTeam];
-    // Double-check completed flag on the matched game too
-    if (!game || game.completed !== true) return bet;
-
-    const homeScore = parseInt((game.scores.find(s => s.name === game.home_team) || {}).score || "0");
-    const awayScore = parseInt((game.scores.find(s => s.name !== game.home_team) || {}).score || "0");
-
-    let result = "loss";
-    const market = bet.market.toLowerCase();
-
-    if (market.includes("ml") || market.includes("win")) {
-      const pickedHome = bet.market.includes(game.home_team);
-      if (pickedHome && homeScore > awayScore) result = "win";
-      else if (!pickedHome && awayScore > homeScore) result = "win";
-      else if (homeScore === awayScore) result = "push";
-    } else if (market.includes("over")) {
-      const line = parseFloat(bet.market.match(/[\d.]+/) || [0]);
-      if (homeScore + awayScore > line) result = "win";
-      else if (homeScore + awayScore === line) result = "push";
-    } else if (market.includes("under")) {
-      const line = parseFloat(bet.market.match(/[\d.]+/) || [0]);
-      if (homeScore + awayScore < line) result = "win";
-      else if (homeScore + awayScore === line) result = "push";
-    } else if (market.includes("nrfi")) {
-      if (homeScore === 0 && awayScore === 0) result = "win";
-    } else if (market.includes("yrfi")) {
-      if (homeScore > 0 || awayScore > 0) result = "win";
-    } else if (market.includes("-1.5") || market.includes("run line")) {
-      const pickedHome = bet.market.includes(game.home_team);
-      if (pickedHome && (homeScore - awayScore) >= 2) result = "win";
-      else if (!pickedHome && (awayScore - homeScore) >= 2) result = "win";
-    }
-
-    return { ...bet, result, resolvedAt: new Date().toISOString(), finalScore: homeScore + "-" + awayScore };
-  });
-}
-
 // ── Stats calculator ──────────────────────────────────────────────────────────
 function calcStats(bets) {
   const resolved = bets.filter(b => b.result !== "pending");
@@ -825,13 +746,8 @@ function useBetLogger() {
 
   useEffect(() => {
     gistRead().then(data => {
-      autoResolveBets(data).then(resolved => {
-        setBets(resolved);
-        setLoaded(true);
-        if (resolved.some((b,i) => b.result !== data[i]?.result)) {
-          gistWrite(resolved).catch(console.error);
-        }
-      });
+      setBets(data);
+      setLoaded(true);
     }).catch(e => {
       console.error("Gist read error:", e);
       setLoaded(true);

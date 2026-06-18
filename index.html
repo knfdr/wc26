@@ -256,17 +256,14 @@ a{text-decoration:none;color:inherit}
 <div class="footer">SHARP SIM · MONTE CARLO SPORTS MODELING · NOT PROFESSIONAL BETTING ADVICE</div>
 
 <script>
-const GIST_FILE = "sharpsim_bets.json";
 const TIER_ORDER = ["LOCK","HIGH","LEAN","CONSIDER","OTHER"];
 const TIER_COLORS = { LOCK:"#ef4444", HIGH:"#22c55e", LEAN:"#e8c547", CONSIDER:"#a78bfa", OTHER:"#4b6280" };
 
 async function loadStats() {
   try {
-    const res = await fetch("/api/gist");
+    const res = await fetch("/api/resolve");
     if (!res.ok) return;
-    const data = await res.json();
-    const content = data.files[GIST_FILE] && data.files[GIST_FILE].content;
-    const bets = JSON.parse(content||"[]");
+    const bets = await res.json();
     if (!bets.length) return;
 
     const resolved = bets.filter(b => b.result !== "pending");
