@@ -1182,7 +1182,7 @@ function ParlayTab({ simData, betLogger }) {
 // ════════════════════════════════════════════════════════════════════════════════
 // MATCH VIEW COMPONENT
 // ════════════════════════════════════════════════════════════════════════════════
-function MatchView({ match, agg, running, onRun, runCount }) {
+function MatchView({ match, agg, running, onRun, runCount, betLogger }) {
   const h = TEAMS[match.homeTeam];
   const a = TEAMS[match.awayTeam];
   return (
@@ -1414,6 +1414,20 @@ function MatchView({ match, agg, running, onRun, runCount }) {
                 </div>
               </div>
             </div>
+
+            {(() => {
+              if (!agg || !match) return null;
+              const gameObj = { id: match.id, homeTeam: match.homeTeam, awayTeam: match.awayTeam, overUnderLine: match.overUnderLine, overOdds: match.overOdds, underOdds: match.underOdds };
+              const topBets = extractTopBets({ ...agg, overUnderLine: match.overUnderLine, overOdds: match.overOdds, underOdds: match.underOdds }, gameObj, "WC");
+              return topBets.length > 0 && (
+                <div style={S.sec}>
+                  <div style={S.secLabel}>Top Signals This Game</div>
+                  {topBets.map((bet,i) => (
+                    <TopBetCard key={i} bet={bet} T={T} S={S} logged={betLogger ? betLogger.isLogged(bet.gameId, bet.market) : false}/>
+                  ))}
+                </div>
+              );
+            })()}
 
             <div style={S.methodBox}>
               <div style={{ color:T.purple, fontWeight:700, fontSize:"9px", letterSpacing:"2px", marginBottom:7 }}>MODEL METHODOLOGY</div>
