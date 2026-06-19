@@ -1017,7 +1017,7 @@ function useBetLogger() {
   async function logAllBets(newBets) {
     if (!newBets.length) return;
     setSaving(true);
-    const today = new Date().toISOString().slice(0,10);
+    const today = new Date().toLocaleDateString("en-CA");
     const existingKeys = new Set(
       bets
         .filter(b => b.gameDate === today)
