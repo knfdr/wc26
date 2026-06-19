@@ -104,7 +104,15 @@ function resolveBet(bet, game, cornersTotal = null) {
     }
   }
 
-  return { ...bet, result, resolvedAt: new Date().toISOString(), finalScore: homeScore + "-" + awayScore };
+  // Compute a market-relevant resolved display value
+  let resolvedValue = homeScore + "-" + awayScore;
+  if (market.includes("corners") && cornersTotal !== null) {
+    resolvedValue = cornersTotal + " corners";
+  } else if ((market.includes("over") || market.includes("under")) && !market.includes("corners")) {
+    resolvedValue = (homeScore + awayScore) + " total · " + homeScore + "-" + awayScore;
+  }
+
+  return { ...bet, result, resolvedAt: new Date().toISOString(), finalScore: homeScore + "-" + awayScore, resolvedValue };
 }
 
 export async function onRequest(context) {

@@ -698,7 +698,7 @@ function BetHistoryRow({ bet, T, S }) {
           {bet.result === "pending" ? "PENDING" : bet.result === "win" ? "WIN" : bet.result === "loss" ? "LOSS" : "PUSH"}
         </span>
       </div>
-      {bet.finalScore && <div style={{ fontSize:9, color:T.muted, width:"100%", marginTop:3 }}>Final: {bet.finalScore}</div>}
+      {(bet.resolvedValue || bet.finalScore) && <div style={{ fontSize:9, color:T.muted, width:"100%", marginTop:3 }}>{bet.resolvedValue || ("Final: " + bet.finalScore)}</div>}
     </div>
   );
 }
