@@ -410,6 +410,115 @@ function getKnownRounds(playerName, liveScores) {
   };
 }
 
+// ── H2H matrix: one shared sim covers all pairs for top-N players ─────────────
+function runH2HMatrix(players, liveScores) {
+  const n = 50000;
+  const currentRound = liveScores?.currentRound || 1;
+  const cutIsKnown = currentRound >= 3;
+  const known = {};
+  players.forEach(p => { known[p] = getKnownRounds(p, liveScores); });
+
+  // wins[a][b] = number of times a finished ahead of b
+  const wins = {};
+  players.forEach(a => { wins[a] = {}; players.forEach(b => { wins[a][b] = 0; }); });
+
+  for (let i = 0; i < n; i++) {
+    const r12 = {}, totals = {}, madecut = {};
+    players.forEach(p => {
+      const k = known[p];
+      const r1 = k.r[0] !== null ? k.r[0] : simulateRound(p);
+      const r2 = k.r[1] !== null ? k.r[1] : simulateRound(p);
+      r12[p] = r1 + r2;
+      if (cutIsKnown) {
+        madecut[p] = k.madecut !== false && !k.withdrew;
+      } else {
+        const cutLine = Math.round(randNormal(148, 3));
+        madecut[p] = r12[p] <= cutLine;
+      }
+      if (madecut[p]) {
+        const r3 = k.r[2] !== null ? k.r[2] : simulateRound(p);
+        const r4 = k.r[3] !== null ? k.r[3] : simulateRound(p);
+        totals[p] = r12[p] + r3 + r4;
+      } else {
+        totals[p] = 9999; // missed cut = worst possible
+      }
+    });
+
+    for (let ai = 0; ai < players.length; ai++) {
+      for (let bi = ai + 1; bi < players.length; bi++) {
+        const a = players[ai], b = players[bi];
+        if (totals[a] < totals[b]) wins[a][b]++;
+        else if (totals[b] < totals[a]) wins[b][a]++;
+        // ties: neither gets a win (ties rare but possible)
+      }
+    }
+  }
+
+  // Convert to { [a]: { [b]: winPct } }
+  const matrix = {};
+  players.forEach(a => {
+    matrix[a] = {};
+    players.forEach(b => {
+      if (a === b) { matrix[a][b] = 50; return; }
+      const aW = wins[a][b], bW = wins[b][a];
+      const total = aW + bW || 1;
+      matrix[a][b] = parseFloat((aW / total * 100).toFixed(1));
+    });
+  });
+  return matrix;
+}
+
+// ── Golf signals extraction ───────────────────────────────────────────────────
+function extractGolfSignals(results, oddsMap, currentRound) {
+  const signals = [];
+  const cutSettled = currentRound >= 3;
+
+  results.forEach(r => {
+    if (r.withdrew) return;
+
+    // Winner outright — compare against book
+    const odds = oddsMap[r.player];
+    if (odds) {
+      const impl = impliedProb(odds) * 100;
+      const edge = parseFloat(r.winPct) - impl;
+      if (edge > 0) {
+        const tier = edge >= 5 ? "LOCK" : edge >= 2 ? "HIGH" : "LEAN";
+        signals.push({ player:r.player, market:"Win Outright", simPct:r.winPct, bookOdds:odds, edge:parseFloat(edge.toFixed(1)), tier, mkt:"win" });
+      }
+    }
+
+    // Top 10 — model-only threshold
+    if (!r.madecut !== true) { // not already cut
+      const t10 = parseFloat(r.top10Pct);
+      if (t10 >= 25) {
+        const tier = t10 >= 40 ? "HIGH" : "LEAN";
+        signals.push({ player:r.player, market:"Top 10 Finish", simPct:r.top10Pct, bookOdds:null, edge:null, tier, mkt:"top10" });
+      }
+    }
+
+    // Make Cut — only meaningful pre-cut
+    if (!cutSettled && r.madecut === null) {
+      const cp = parseFloat(r.cutPct);
+      if (cp >= 80) {
+        const tier = cp >= 90 ? "HIGH" : "LEAN";
+        signals.push({ player:r.player, market:"Make Cut", simPct:r.cutPct, bookOdds:null, edge:null, tier, mkt:"cut" });
+      }
+    }
+  });
+
+  const tierRank = { LOCK:0, HIGH:1, LEAN:2 };
+  return signals.sort((a, b) => {
+    if (tierRank[a.tier] !== tierRank[b.tier]) return tierRank[a.tier] - tierRank[b.tier];
+    return (b.edge || parseFloat(b.simPct)) - (a.edge || parseFloat(a.simPct));
+  });
+}
+
+// Derive playing groups from liveScores (ESPN includes teeTime per competitor)
+function extractGroups(liveScores) {
+  if (!liveScores?.groups) return [];
+  return liveScores.groups; // array of string[] player name arrays
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function formatAge(ts) {
   const mins = Math.floor((Date.now()-ts)/60000);
@@ -446,7 +555,260 @@ function buildOddsMap(data) {
   return map;
 }
 
+function fairML(pct) {
+  if (pct <= 0 || pct >= 100) return "—";
+  return pct < 50
+    ? "+" + Math.round((100 / pct - 1) * 100)
+    : "-" + Math.round(pct / (100 - pct) * 100);
+}
+
 // ── Components ────────────────────────────────────────────────────────────────
+
+function GolfSignalCard({ sig, betLogger }) {
+  const { logBet, isLogged } = betLogger;
+  const today = new Date().toLocaleDateString("en-CA");
+  const logged = isLogged("usopen2026", sig.player + " " + sig.market);
+  const TIER_COLORS = { LOCK:"#ef4444", HIGH:"#22c55e", LEAN:"#e8c547" };
+  const tc = TIER_COLORS[sig.tier] || T.muted;
+
+  function log() {
+    const odds = sig.bookOdds;
+    const b = odds ? (odds > 0 ? odds/100 : 100/Math.abs(odds)) : null;
+    const p = parseFloat(sig.simPct)/100;
+    let units = 0.5;
+    if (b && p > 0) {
+      const kelly = (b*p-(1-p))/b;
+      units = kelly > 0 ? parseFloat(Math.min(3, Math.max(0.5, kelly*15)).toFixed(1)) : 0.5;
+    }
+    logBet({
+      id: Date.now()+"_"+Math.random().toString(36).slice(2,6),
+      sport:"GOLF", gameId:"usopen2026",
+      homeTeam: sig.player, awayTeam:"US Open",
+      market: sig.player+" "+sig.market,
+      simPct: sig.simPct+"%", bookOdds: sig.bookOdds ? fmtOdds(sig.bookOdds) : "—",
+      tier: sig.tier, units,
+      loggedAt: new Date().toISOString(),
+      result:"pending", resolvedAt:null, finalScore:null,
+      gameDate: today,
+    });
+  }
+
+  return (
+    <div style={{ background:T.navy, border:"1px solid "+T.border, borderLeft:"3px solid "+tc, borderRadius:4, padding:"10px 12px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+      <span style={{ background:tc+"22", border:"1px solid "+tc+"44", color:tc, fontSize:"7px", fontWeight:700, padding:"2px 6px", borderRadius:2, letterSpacing:"1px", minWidth:44, textAlign:"center" }}>
+        {sig.tier}
+      </span>
+      <div style={{ flex:1, minWidth:120 }}>
+        <div style={{ fontWeight:700, fontSize:11 }}>{sig.player}</div>
+        <div style={{ fontSize:9, color:T.muted, marginTop:2 }}>{sig.market}</div>
+      </div>
+      <div style={{ textAlign:"right" }}>
+        <div style={{ fontSize:11, color:T.accent, fontWeight:700 }}>{sig.simPct}%</div>
+        <div style={{ fontSize:8, color:T.muted }}>model</div>
+      </div>
+      {sig.bookOdds && (
+        <div style={{ textAlign:"right" }}>
+          <div style={{ fontSize:11, color:T.gold, fontWeight:700 }}>{fmtOdds(sig.bookOdds)}</div>
+          <div style={{ fontSize:8, color:T.muted }}>book</div>
+        </div>
+      )}
+      {sig.edge !== null && (
+        <div style={{ textAlign:"right" }}>
+          <div style={{ fontSize:11, color:T.green, fontWeight:700 }}>+{sig.edge}%</div>
+          <div style={{ fontSize:8, color:T.muted }}>edge</div>
+        </div>
+      )}
+      {!sig.bookOdds && (
+        <div style={{ textAlign:"right" }}>
+          <div style={{ fontSize:10, color:T.muted }}>{fairML(parseFloat(sig.simPct))}</div>
+          <div style={{ fontSize:8, color:T.muted }}>fair ML</div>
+        </div>
+      )}
+      <button onClick={log} disabled={logged}
+        style={{ background:logged?T.green+"22":tc, color:logged?T.green:"#070b14", border:"1px solid "+(logged?T.green:tc), borderRadius:3, padding:"4px 10px", fontSize:"8px", fontWeight:700, cursor:logged?"default":"pointer", fontFamily:"inherit", whiteSpace:"nowrap" }}>
+        {logged ? "✓ LOGGED" : "+ LOG"}
+      </button>
+    </div>
+  );
+}
+
+function GolfTopSignals({ results, oddsMap, liveScores, betLogger }) {
+  const currentRound = liveScores?.currentRound || 1;
+  const signals = extractGolfSignals(results, oddsMap, currentRound);
+  if (!signals.length) return (
+    <div style={{ ...S.card, color:T.muted, fontSize:10, textAlign:"center", padding:20 }}>
+      No signals above threshold yet. Run the simulation first.
+    </div>
+  );
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+      {signals.map((s, i) => <GolfSignalCard key={i} sig={s} betLogger={betLogger}/>)}
+      <div style={{ fontSize:8, color:T.muted, marginTop:6, lineHeight:1.7 }}>
+        Win Outright: edge vs book implied%. Top 10: model ≥25% threshold. Make Cut: model ≥80% (pre-cut only). No book odds = model-only signal.
+      </div>
+    </div>
+  );
+}
+
+function H2HMatrixView({ results, liveScores }) {
+  const [matrix, setMatrix] = useState(null);
+  const [running, setRunning] = useState(false);
+  const [players, setPlayers] = useState(null);
+
+  function run() {
+    // Take top 15 by win%
+    const top = results.filter(r => !r.withdrew).slice(0, 15).map(r => r.player);
+    setPlayers(top);
+    setRunning(true);
+    setTimeout(() => {
+      setMatrix(runH2HMatrix(top, liveScores));
+      setRunning(false);
+    }, 20);
+  }
+
+  const currentRound = liveScores?.currentRound || 1;
+  const hasLive = !!(liveScores?.players && Object.keys(liveScores.players).length > 0);
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:12, flexWrap:"wrap" }}>
+        <button onClick={run} disabled={running}
+          style={{ background:running?"none":T.accent, color:running?T.muted:"#070b14", border:"1px solid "+(running?T.border:T.accent), borderRadius:4, padding:"7px 18px", fontSize:9, fontWeight:700, cursor:running?"default":"pointer", fontFamily:"inherit" }}>
+          {running ? "⟳ Computing..." : matrix ? "↻ Re-Run Matrix" : "▶ Run H2H Matrix (Top 15)"}
+        </button>
+        {hasLive && <span style={{ fontSize:8, color:T.accent }}>conditioned on R{Math.min(currentRound-1,4)} live scores</span>}
+        <span style={{ fontSize:8, color:T.muted }}>· 50k iterations · one shared sim for all pairs</span>
+      </div>
+
+      {matrix && players && (
+        <>
+          <div style={{ overflowX:"auto", fontSize:9 }}>
+            <table style={{ borderCollapse:"collapse", minWidth:600 }}>
+              <thead>
+                <tr>
+                  <th style={{ ...S.th, minWidth:120, position:"sticky", left:0, background:T.card, zIndex:1 }}>vs →</th>
+                  {players.map(p => (
+                    <th key={p} style={{ ...S.th, textAlign:"center", minWidth:64, fontSize:"7px", whiteSpace:"nowrap", maxWidth:80, overflow:"hidden", textOverflow:"ellipsis" }}>
+                      {p.split(" ").pop()}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {players.map(rowP => (
+                  <tr key={rowP}>
+                    <td style={{ ...S.td, fontWeight:700, fontSize:9, position:"sticky", left:0, background:T.card, zIndex:1, whiteSpace:"nowrap" }}>
+                      {rowP.split(" ").slice(-1)[0]}, {rowP.split(" ")[0][0]}.
+                    </td>
+                    {players.map(colP => {
+                      if (rowP === colP) return <td key={colP} style={{ ...S.td, textAlign:"center", background:T.border+"88", color:T.muted }}>—</td>;
+                      const pct = matrix[rowP][colP];
+                      const bg = pct >= 65 ? "rgba(74,222,128,0.18)"
+                               : pct >= 55 ? "rgba(74,222,128,0.08)"
+                               : pct <= 35 ? "rgba(239,68,68,0.15)"
+                               : pct <= 45 ? "rgba(239,68,68,0.06)"
+                               : "transparent";
+                      const color = pct >= 55 ? T.accent : pct <= 45 ? T.red : T.muted;
+                      return (
+                        <td key={colP} style={{ ...S.td, textAlign:"center", background:bg, color, fontWeight: Math.abs(pct-50) > 10 ? 700 : 400 }}>
+                          {pct.toFixed(0)}%
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize:8, color:T.muted, marginTop:8, lineHeight:1.7 }}>
+            Read as: row player wins against column player X% of the time (4-round total). Green = row favored, red = column favored. Cut logic applied — a player who misses cut loses to any cut-maker.
+          </div>
+
+          {/* Surface lopsided matchups as signals */}
+          <div style={{ marginTop:14 }}>
+            <div style={{ fontSize:"9px", letterSpacing:"2px", color:T.muted, marginBottom:8 }}>STRONGEST MODEL H2H EDGES</div>
+            <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+              {(() => {
+                const edges = [];
+                for (let ai = 0; ai < players.length; ai++) {
+                  for (let bi = ai+1; bi < players.length; bi++) {
+                    const a = players[ai], b = players[bi];
+                    const pct = matrix[a][b];
+                    const favored = pct >= 50 ? a : b;
+                    const favPct = pct >= 50 ? pct : matrix[b][a];
+                    if (favPct >= 60) edges.push({ a, b, favored, favPct, fairML: fairML(favPct) });
+                  }
+                }
+                return edges.sort((x,y) => y.favPct - x.favPct).slice(0, 8).map((e, i) => (
+                  <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"6px 10px", background:T.navy, border:"1px solid "+T.border, borderRadius:4, flexWrap:"wrap", fontSize:10 }}>
+                    <span style={{ color:T.accent, fontWeight:700, minWidth:36 }}>{e.favPct.toFixed(0)}%</span>
+                    <span style={{ fontWeight:700, color:T.text }}>{e.favored}</span>
+                    <span style={{ color:T.muted, fontSize:9 }}>over {e.favored === e.a ? e.b : e.a}</span>
+                    <span style={{ marginLeft:"auto", color:T.gold, fontSize:9 }}>fair ML {e.fairML}</span>
+                  </div>
+                ));
+              })()}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function DailyGroupsView({ liveScores, results }) {
+  const groups = extractGroups(liveScores);
+  if (!groups.length) return (
+    <div style={{ color:T.muted, fontSize:10, padding:"12px 0" }}>
+      No group/pairing data in live feed yet. Groups are typically available once the tee sheet is posted.
+    </div>
+  );
+
+  const winMap = {};
+  results.forEach(r => { winMap[r.player] = parseFloat(r.winPct); });
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+      {groups.map((group, gi) => {
+        const sorted = [...group].sort((a, b) => (winMap[b] || 0) - (winMap[a] || 0));
+        return (
+          <div key={gi} style={{ background:T.navy, border:"1px solid "+T.border, borderRadius:4, padding:"10px 12px" }}>
+            <div style={{ fontSize:"8px", color:T.muted, letterSpacing:"1px", marginBottom:8 }}>GROUP {gi+1}</div>
+            <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+              {sorted.map(p => (
+                <div key={p} style={{ flex:1, minWidth:100, textAlign:"center", padding:"6px 8px", background:T.card, borderRadius:4 }}>
+                  <div style={{ fontWeight:700, fontSize:10 }}>{p.split(" ").pop()}</div>
+                  <div style={{ fontSize:8, color:T.muted }}>{p.split(" ")[0]}</div>
+                  <div style={{ fontSize:9, color:T.accent, marginTop:4 }}>{winMap[p] ? winMap[p]+"% win" : "—"}</div>
+                </div>
+              ))}
+            </div>
+            {sorted.length >= 2 && (
+              <div style={{ marginTop:8, display:"flex", gap:6, flexWrap:"wrap" }}>
+                {sorted.map((a, ai) => sorted.slice(ai+1).map(b => {
+                  const aWin = winMap[a] || 0, bWin = winMap[b] || 0;
+                  const total = aWin + bWin || 1;
+                  const aPct = (aWin / total * 100).toFixed(0);
+                  return (
+                    <div key={a+b} style={{ fontSize:9, color:T.muted, background:T.card, border:"1px solid "+T.border, borderRadius:3, padding:"3px 8px" }}>
+                      <span style={{ color:T.text }}>{a.split(" ").pop()}</span>
+                      <span style={{ color:T.accent, fontWeight:700, margin:"0 4px" }}>{aPct}%</span>
+                      <span style={{ color:T.muted }}>vs {b.split(" ").pop()}</span>
+                    </div>
+                  );
+                }))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <div style={{ fontSize:8, color:T.muted }}>
+        H2H % within each group uses relative win probability as a fast approximation. Use the full H2H Matrix above for precise simulation-based matchup odds.
+      </div>
+    </div>
+  );
+}
+
 function SortTh({ label, col, sortKey, setSortKey, right }) {
   const active = sortKey === col;
   const st = right ? S.thR : S.th;
@@ -494,7 +856,7 @@ function TournamentTable({ results, oddsMap, betLogger, liveScores }) {
       sport:"GOLF", gameId:"usopen2026",
       homeTeam: player, awayTeam:"US Open",
       market, simPct: simPct+"%", bookOdds: bookOdds||"—",
-      tier: parseFloat(simPct) >= 30 ? "LOCK" : parseFloat(simPct) >= 15 ? "HIGH" : "LEAN",
+      tier: (() => { const b2 = odds > 0 ? odds/100 : odds ? 100/Math.abs(odds) : null; const impl = b2 ? 100/(b2+1) : null; const edge = impl ? parseFloat(simPct) - impl : null; return edge !== null ? (edge >= 5 ? "LOCK" : edge >= 2 ? "HIGH" : "LEAN") : "LEAN"; })(),
       units, loggedAt: new Date().toISOString(),
       result:"pending", resolvedAt:null, finalScore:null,
       gameDate: today,
@@ -838,19 +1200,38 @@ function App() {
         {results && (
           <>
             <div style={S.sec}>
+              <div style={S.secLabel}>Top Signals — {liveScores?.currentRound ? "Round "+liveScores.currentRound : "Pre-Tournament"}</div>
+              <GolfTopSignals results={results} oddsMap={oddsMap} liveScores={liveScores} betLogger={betLogger}/>
+            </div>
+
+            <div style={S.sec}>
               <div style={S.secLabel}>Tournament Probabilities — {UNIQUE_FIELD.length} Players · {SIM_N.toLocaleString()} Simulations · Click column to sort</div>
               <div style={S.card}>
                 <TournamentTable results={results} oddsMap={oddsMap} betLogger={betLogger} liveScores={liveScores}/>
               </div>
             </div>
 
+            <div style={S.sec}>
+              <div style={S.secLabel}>H2H Matrix — Top 15 Players</div>
+              <div style={S.card}>
+                <H2HMatrixView results={results} liveScores={liveScores}/>
+              </div>
+            </div>
+
+            {extractGroups(liveScores).length > 0 && (
+              <div style={S.sec}>
+                <div style={S.secLabel}>Today's Playing Groups</div>
+                <DailyGroupsView liveScores={liveScores} results={results}/>
+              </div>
+            )}
+
             <div style={{ ...S.sec, background:"#0a0f1a", border:"1px solid "+T.purple+"33", borderRadius:6, padding:"11px 14px", fontSize:"10px", color:T.muted, marginTop:24, lineHeight:1.8 }}>
               <div style={{ color:T.purple, fontWeight:700, fontSize:"9px", letterSpacing:"2px", marginBottom:7 }}>MODEL METHODOLOGY</div>
               <div><span style={{ color:T.text }}>Strokes Gained Model:</span> Each player's expected round score = field average ({FIELD_AVG}) − SG:Total. Field average calibrated for US Open difficulty at Shinnecock Hills (par {PAR}).</div>
               <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Round Variance:</span> Per-round scores drawn from N(expected, sigma), where sigma reflects individual player consistency (range: 2.55–3.00).</div>
               <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Cut Rule:</span> Top {CUT_SPOTS} + ties advance after 36 holes. {SIM_N.toLocaleString()} iterations per run.</div>
-              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Data:</span> SG:Total from pgatour.com (2026 season YTD through Jun 14). LIV/DP World Tour players marked "est" — estimated based on world ranking and recent form.</div>
-              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Odds:</span> Outright winner odds from The Odds API. Edge = model win% − book implied%. Positive edge = model sees more value than book.</div>
+              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Tiers:</span> Win Outright: edge vs book implied (≥5% = LOCK, ≥2% = HIGH). Top 10 / Make Cut: model threshold (no book comparison).</div>
+              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>H2H Matrix:</span> Single shared 50k sim computes all pairings simultaneously. Cut logic applied — missed-cut players lose to all cut-makers.</div>
             </div>
             <div style={S.disclaimer}>
               Simulation parameters from publicly available 2026 PGA Tour statistics. LIV and DP World Tour player ratings are estimates. Not professional betting advice. Gamble responsibly.

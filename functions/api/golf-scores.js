@@ -75,7 +75,24 @@ export async function onRequest(context) {
 
       const position = comp.status?.position?.displayValue || comp.status?.displayValue || "";
 
-      players[name] = { r1: r[0], r2: r[1], r3: r[2], r4: r[3], toPar, position, made_cut, withdrew, roundsComplete };
+      // teeTime is used to reconstruct playing groups
+      const teeTime = comp.teeTime || comp.athlete?.teeTime || null;
+
+      players[name] = { r1: r[0], r2: r[1], r3: r[2], r4: r[3], toPar, position, made_cut, withdrew, roundsComplete, teeTime };
+    }
+
+    // Build playing groups: bucket competitors by teeTime, keep groups of 2-4
+    const groups = [];
+    const byTeeTime = {};
+    for (const [name, d] of Object.entries(players)) {
+      if (!d.teeTime) continue;
+      // Normalize teeTime to minute precision to group together
+      const key = d.teeTime.slice(0, 16); // "2026-06-18T08:00"
+      if (!byTeeTime[key]) byTeeTime[key] = [];
+      byTeeTime[key].push(name);
+    }
+    for (const [, grp] of Object.entries(byTeeTime).sort(([a],[b]) => a.localeCompare(b))) {
+      if (grp.length >= 2) groups.push(grp);
     }
 
     const result = {
@@ -85,6 +102,7 @@ export async function onRequest(context) {
       eventStatus,
       fetchedAt: Date.now(),
       players,
+      groups, // array of string[] — each inner array is one playing group
     };
 
     return new Response(JSON.stringify(result), {
