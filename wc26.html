@@ -800,6 +800,110 @@ const SIZE_LABELS = { 2:"2-Leg", 3:"3-Leg", 4:"4-Leg", 5:"5-Leg" };
 const GIST_ID = "8a76d2b09c709882e4364528a0152ccc";
 const GIST_FILENAME = "sharpsim_bets.json";
 
+// ── Kalshi market mapping ─────────────────────────────────────────────────────
+const KALSHI_TEAM_CODE = {
+  "USA": "USA", "Australia": "AUS", "Scotland": "SCO", "Morocco": "MAR",
+  "Brazil": "BRA", "Haiti": "HTI", "Turkey": "TUR", "Paraguay": "PAR",
+  "Czechia": "CZE", "South Africa": "RSA", "Switzerland": "SUI",
+  "Bosnia-Herzegovina": "BIH", "Canada": "CAN", "Qatar": "QAT",
+  "Mexico": "MEX", "South Korea": "KOR", "DR Congo": "COD",
+  "Uzbekistan": "UZB", "Senegal": "SEN", "Iraq": "IRQ", "Japan": "JPN",
+  "Sweden": "SWE", "Colombia": "COL", "Portugal": "POR", "France": "FRA",
+  "Argentina": "ARG", "Jordan": "JOR", "Algeria": "DZA", "Croatia": "CRO",
+  "Ghana": "GHA", "Egypt": "EGY", "Iran": "IRI", "New Zealand": "NZL",
+  "Belgium": "BEL", "Cape Verde": "CPV", "Saudi Arabia": "KSA",
+  "Norway": "NOR", "Uruguay": "URU", "Spain": "ESP", "Netherlands": "NED",
+  "England": "ENG", "Panama": "PAN", "Austria": "AUT", "Germany": "GER",
+  "Curaçao": "CUW", "Ecuador": "ECU", "Tunisia": "TUN", "Ivory Coast": "CIV",
+};
+const KALSHI_MONTHS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+
+function betToKalshi(bet) {
+  const { homeTeam, awayTeam, market, gameDate } = bet;
+  const hCode = KALSHI_TEAM_CODE[homeTeam];
+  const aCode = KALSHI_TEAM_CODE[awayTeam];
+  if (!hCode || !aCode) return null;
+  const [yr, mon, dy] = gameDate.split("-");
+  const dateKey = yr.slice(2) + KALSHI_MONTHS[parseInt(mon)-1] + dy;
+  const eventKey = `${dateKey}${hCode}${aCode}`;
+
+  if (market === homeTeam + " Win") return { ticker: `KXWCGAME-${eventKey}-${hCode}`, side: "yes" };
+  if (market === awayTeam + " Win") return { ticker: `KXWCGAME-${eventKey}-${aCode}`, side: "yes" };
+  if (market === "Both Teams Score") return { ticker: `KXWCBTTS-${eventKey}-BTTS`, side: "yes" };
+  if (market === homeTeam + " HT Win") return { ticker: `KXWC1H-${eventKey}-${hCode}`, side: "yes" };
+
+  const overGoals = market.match(/^Over ([\d.]+) Goals?/);
+  if (overGoals) return { ticker: `KXWCTOTAL-${eventKey}-${Math.ceil(parseFloat(overGoals[1]))}`, side: "yes" };
+
+  const underGoals = market.match(/^Under ([\d.]+) Goals?/);
+  if (underGoals) return { ticker: `KXWCTOTAL-${eventKey}-${Math.ceil(parseFloat(underGoals[1]))}`, side: "no" };
+
+  const overCorners = market.match(/^Over ([\d.]+) Corners?/);
+  if (overCorners) return { ticker: `KXWCCORNERS-${eventKey}-${Math.ceil(parseFloat(overCorners[1]))}`, side: "yes" };
+
+  return null;
+}
+
+function KalshiButton({ bet, onLog, logged }) {
+  const [market, setMarket] = useState(null);
+  const [placing, setPlacing] = useState(false);
+  const [placed, setPlaced] = useState(false);
+  const [error, setError] = useState(null);
+  const kalshi = betToKalshi(bet);
+
+  useEffect(() => {
+    if (!kalshi) return;
+    fetch(`/api/kalshi?ticker=${kalshi.ticker}`)
+      .then(r => r.json())
+      .then(d => d.market ? setMarket(d.market) : setError("not found"))
+      .catch(() => setError("fetch error"));
+  }, [bet.gameId, bet.market]);
+
+  if (!kalshi) return null;
+  if (error) return null;
+  if (!market) return <span style={{ fontSize:8, color:"#4b6280" }}>…</span>;
+
+  const priceField = kalshi.side === "yes" ? "yes_ask_dollars" : "no_ask_dollars";
+  const priceDollars = parseFloat(market[priceField] || 0.5);
+  const priceInt = Math.round(priceDollars * 100);
+  const riskDollars = parseFloat(bet.units) * 10;
+  const contracts = Math.max(1, Math.round(riskDollars / priceDollars));
+  const label = market.title || market.yes_sub_title || kalshi.ticker;
+
+  async function place() {
+    if (!confirm(`Place on Kalshi?\n\n"${label}"\n\nSide: ${kalshi.side.toUpperCase()}\nContracts: ${contracts}\nPrice: ${priceInt}¢\nRisk: $${riskDollars.toFixed(2)}`)) return;
+    setPlacing(true);
+    try {
+      const r = await fetch("/api/kalshi", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticker: kalshi.ticker, side: kalshi.side, count: contracts, price: priceInt }),
+      });
+      const d = await r.json();
+      if (r.ok && d.order) {
+        setPlaced(true);
+        if (onLog && !logged) onLog(bet);
+      } else {
+        setError(d.error || "order failed");
+      }
+    } catch(e) { setError("network error"); }
+    setPlacing(false);
+  }
+
+  if (placed) return <span style={{ fontSize:8, color:"#22c55e", fontWeight:700 }}>✓ PLACED</span>;
+
+  return (
+    <button onClick={place} disabled={placing || placed} style={{
+      background:"#1a2e1a", border:"1px solid #22c55e55", color:"#22c55e",
+      borderRadius:4, padding:"5px 10px", fontSize:8, fontWeight:700,
+      cursor:"pointer", fontFamily:"inherit", letterSpacing:"1px",
+      maxWidth:200, textAlign:"left", lineHeight:1.3,
+    }}>
+      {placing ? "PLACING…" : `KALSHI: ${label}`}
+    </button>
+  );
+}
+
 // Unit sizing: LOCK=2u, HIGH=1.5u, LEAN=1u, CONSIDER=0.5u
 function tierToUnits(tier) {
   if (tier === "LOCK") return 2.0;
@@ -976,13 +1080,16 @@ function TopBetCard({ bet, onLog, logged, T, S }) {
             <span style={{ background:T.purple+"1a", border:"1px solid "+T.purple+"33", color:T.purple, fontSize:"8px", padding:"1px 6px", borderRadius:2 }}>{bet.units}u</span>
           </div>
         </div>
-        <button
-          onClick={() => onLog(bet)}
-          disabled={logged}
-          style={{ background: logged?"#1a2a3e":tc, color: logged?T.muted:"#070b14", border:"none", borderRadius:4, padding:"6px 12px", fontSize:9, fontWeight:700, cursor:logged?"default":"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace", letterSpacing:"1px", whiteSpace:"nowrap" }}
-        >
-          {logged ? "✓ LOGGED" : "+ LOG BET"}
-        </button>
+        <div style={{ display:"flex", flexDirection:"column", gap:6, alignItems:"flex-end" }}>
+          <button
+            onClick={() => onLog(bet)}
+            disabled={logged}
+            style={{ background: logged?"#1a2a3e":tc, color: logged?T.muted:"#070b14", border:"none", borderRadius:4, padding:"6px 12px", fontSize:9, fontWeight:700, cursor:logged?"default":"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace", letterSpacing:"1px", whiteSpace:"nowrap" }}
+          >
+            {logged ? "✓ LOGGED" : "+ LOG BET"}
+          </button>
+          {bet.sport === "WC" && <KalshiButton bet={bet} onLog={onLog} logged={logged} />}
+        </div>
       </div>
     </div>
   );
