@@ -80,6 +80,54 @@ const TEAMS = {
     injuryFactor: 0.98,
     notes: ["Son Heung-min (34) — still world-class, captain and talisman", "Lee Kang-in (PSG) creative spark behind Son", "Cho Gue-sung physical striker; set piece threat", "Lost opener to Czechia — must get result vs Mexico to advance"],
   },
+  USA: {
+    alpha: 1.52,   // Pulisic (AC Milan) elite; McKennie, Reyna add depth; host energy
+    beta:  1.02,   // Turner solid; organized defensive block under Berhalter
+    injuryFactor: 0.99,
+    notes: ["Christian Pulisic leads attack — world-class club form", "Gio Reyna and Weston McKennie creative depth in midfield", "Host nation advantage at SoFi — massive home crowd", "Won opener — confident and well-organized"],
+  },
+  Australia: {
+    alpha: 0.98,   // Leckie and Hrustic provide pace; limited depth
+    beta:  1.20,   // conceded in opener; vulnerable to quick transitions
+    injuryFactor: 0.97,
+    notes: ["Harry Souttar anchors center-back pairing", "Mathew Leckie veteran wide threat; pace on the counter", "Lost opener — must win; will push forward and be open", "Limited quality to break down organized USA midfield block"],
+  },
+  Scotland: {
+    alpha: 1.18,   // McTominay goals from midfield; Robertson delivery; limited attack
+    beta:  1.28,   // historically poor defensively in major tournaments
+    injuryFactor: 0.98,
+    notes: ["Andy Robertson (Liverpool) elite at left back", "Scott McTominay (Napoli) midfield goal threat", "Scotland historically underperform in major tournaments", "Lost opener — must win; high line suits Morocco counter"],
+  },
+  Morocco: {
+    alpha: 1.38,   // Ziyech orchestrates; Hakimi overlaps; African elite
+    beta:  0.95,   // elite defensive structure; Amrabat breaks up play
+    injuryFactor: 0.99,
+    notes: ["Hakim Ziyech (Galatasaray) veteran orchestrator and set piece specialist", "Achraf Hakimi (PSG) world-class at right back; overlap threat", "Sofyan Amrabat midfield enforcer; breaks up play relentlessly", "Won opener — confident and well-drilled; pace to exploit Scotland"],
+  },
+  Brazil: {
+    alpha: 1.82,   // Vinicius/Rodrygo elite; Endrick emerging; generational attack
+    beta:  0.82,   // disciplined defensive unit; Militão anchors
+    injuryFactor: 0.99,
+    notes: ["Vinícius Jr (Real Madrid) — arguably best player on the planet", "Rodrygo and Endrick add elite depth; Raphinha creative threat", "Brazil carry South American champion pedigree", "Militão and Marquinhos form world-class CB pairing"],
+  },
+  Haiti: {
+    alpha: 0.55,   // limited quality at WC level; CONCACAF qualifier
+    beta:  1.60,   // porous defensively; will struggle to contain Brazil's attack
+    injuryFactor: 1.0,
+    notes: ["First WC appearance; unlikely to trouble Brazil", "Frantzdy Pierrot lone recognizable attacking threat", "Will set up deep and try to limit damage", "Limited ability to create vs Brazil's defensive solidity"],
+  },
+  Turkey: {
+    alpha: 1.32,   // Calhanoglu and Yildiz provide quality; organized
+    beta:  1.10,   // decent defensive shape; vulnerable to pace wide
+    injuryFactor: 0.98,
+    notes: ["Hakan Çalhanoğlu (Inter Milan) elite midfielder; controls tempo", "Arda Güler (Real Madrid) emerging star; set piece threat", "Kenan Yıldız adds pace and flair to attack", "Disciplined and hard to beat; strong tournament pedigree"],
+  },
+  Paraguay: {
+    alpha: 1.10,   // Sanabria leads; physical and direct; CONMEBOL experience
+    beta:  1.18,   // defensive but vulnerable to quality; set piece concessions
+    injuryFactor: 1.0,
+    notes: ["Antonio Sanabria (Torino) physical striker; aerial threat", "Miguel Almirón (Newcastle) creative midfielder; pace on counter", "Physical and direct; set pieces a threat", "CONMEBOL experience; dangerous if Turkey play open"],
+  },
 };
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -312,6 +360,60 @@ const MATCHES = [
       "Elite pressing and counter-attacking unit; punish high lines",
       "Achraf Hakimi (PSG) world-class at right back; overlap threat",
       "Morocco have pace and quality to exploit Scotland's defensive gaps",
+    ],
+  },
+  {
+    id: "bra-hai", group: "D",
+    time: "8:30 PM ET · Hard Rock Stadium, Miami FL",
+    homeTeam: "Brazil", awayTeam: "Haiti",
+    homeIsSeeded: true,
+    venue: "Hard Rock Stadium, Miami FL — Open air, 65,000 capacity",
+    weather: "Miami summer evening — warm and humid, possible showers",
+    overUnderLine: 3.5, overOdds: "-118", underOdds: "-102",
+    homeOdds: "-900", awayOdds: "+2200", drawOdds: "+950",
+    homeImplied: 90.0, awayImplied: 4.3,
+    homeIntel: [
+      "Vinícius Jr (Real Madrid) — arguably best player in the world right now",
+      "Rodrygo and Endrick add generational depth behind Vinicius",
+      "Raphinha (Barcelona) creative from right; clinical finisher",
+      "Militão and Marquinhos elite CB pairing; hardest defense in CONMEBOL",
+      "Brazil won South American qualifiers with ease — peak form",
+      "No injury concerns; full first-choice squad available",
+    ],
+    awayIntel: [
+      "Haiti's first World Cup appearance — historic but severely outmatched",
+      "Frantzdy Pierrot lone recognizable attacking threat",
+      "Will set up in deep 5-4-1 block; unlikely to hold Brazil for 90",
+      "Limited ability to create chances against Brazil's defensive shape",
+      "Can only realistically hope to minimize scoreline",
+      "Full squad available but massive quality gap at every position",
+    ],
+  },
+  {
+    id: "tur-par", group: "D",
+    time: "11:00 PM ET · Levi's Stadium, Santa Clara CA",
+    homeTeam: "Turkey", awayTeam: "Paraguay",
+    homeIsSeeded: true,
+    venue: "Levi's Stadium, Santa Clara CA — Open air, 68,500 capacity",
+    weather: "Bay Area summer night — mild temperatures, low wind",
+    overUnderLine: 2.5, overOdds: "-122", underOdds: "+102",
+    homeOdds: "+105", awayOdds: "+285", drawOdds: "+240",
+    homeImplied: 48.8, awayImplied: 26.0,
+    homeIntel: [
+      "Hakan Çalhanoğlu (Inter Milan) elite midfielder; controls tempo and set pieces",
+      "Arda Güler (Real Madrid) emerging star; creative and dangerous in space",
+      "Kenan Yıldız adds pace and flair to the Turkish attack",
+      "Disciplined and well-organized; hard to break down defensively",
+      "Strong tournament pedigree — semi-final 2002, deep runs in Euro",
+      "No major injury concerns; full squad available",
+    ],
+    awayIntel: [
+      "Antonio Sanabria (Torino) physical striker; aerial threat at set pieces",
+      "Miguel Almirón (Newcastle) creative midfielder; dangerous on the counter",
+      "Paraguay physical and direct; set pieces a consistent threat",
+      "CONMEBOL experience at WC level; not to be underestimated",
+      "Will likely sit deep and look to hit Turkey on the break",
+      "Full squad available; desperate for points after opener",
     ],
   },
 ];
