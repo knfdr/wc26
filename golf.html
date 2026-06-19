@@ -739,7 +739,98 @@ function H2HMatrixView({ results, liveScores }) {
   );
 }
 
-function DailyGroupsView({ liveScores, results }) {
+// Find a player's outright odds from oddsMap using normalized name matching
+function findPlayerOdds(name, oddsMap) {
+  if (oddsMap[name]) return oddsMap[name];
+  const norm = normStr(name);
+  for (const [k, v] of Object.entries(oddsMap)) {
+    if (normStr(k) === norm) return v;
+  }
+  return null;
+}
+
+function PairingCard({ playerA, playerB, winMap, oddsMap, groupLabel }) {
+  const wA = winMap[playerA] || 0;
+  const wB = winMap[playerB] || 0;
+  const total = wA + wB || 1;
+  const modelA = wA / total * 100;
+  const modelB = 100 - modelA;
+
+  const oddsA = findPlayerOdds(playerA, oddsMap);
+  const oddsB = findPlayerOdds(playerB, oddsMap);
+  let bookA = null;
+  if (oddsA && oddsB) {
+    const impA = impliedProb(oddsA);
+    const impB = impliedProb(oddsB);
+    const impTotal = impA + impB || 1;
+    bookA = impA / impTotal * 100;
+  }
+
+  // Determine which player model favors and compute edge
+  const aIsFav = modelA >= modelB;
+  const favPlayer = aIsFav ? playerA : playerB;
+  const undPlayer = aIsFav ? playerB : playerA;
+  const modelFav = aIsFav ? modelA : modelB;
+  const bookFav  = bookA !== null ? (aIsFav ? bookA : 100 - bookA) : null;
+  const edge = bookFav !== null ? parseFloat((modelFav - bookFav).toFixed(1)) : null;
+
+  const TIER_COLORS = { LOCK:"#ef4444", HIGH:"#22c55e", LEAN:"#e8c547" };
+  const tier = edge !== null ? (edge >= 5 ? "LOCK" : edge >= 2 ? "HIGH" : edge > 0 ? "LEAN" : null) : null;
+  const tc = tier ? TIER_COLORS[tier] : T.border;
+
+  const favOdds = aIsFav ? oddsA : oddsB;
+  const undOdds = aIsFav ? oddsB : oddsA;
+
+  return (
+    <div style={{ background:T.navy, border:"1px solid "+(tier ? tc : T.border), borderLeft:"3px solid "+tc, borderRadius:4, padding:"10px 12px" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+        <span style={{ fontSize:"8px", color:T.muted, letterSpacing:"1px" }}>{groupLabel} · 3-BALL H2H</span>
+        {tier && <span style={{ background:tc+"22", border:"1px solid "+tc+"44", color:tc, fontSize:"7px", fontWeight:700, padding:"2px 6px", borderRadius:2, letterSpacing:"1px" }}>{tier}</span>}
+      </div>
+
+      {/* Players row */}
+      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
+        <div style={{ flex:1 }}>
+          <div style={{ fontWeight:700, fontSize:11 }}>{favPlayer}</div>
+          <div style={{ fontSize:9, color:T.muted, marginTop:2 }}>favored by model</div>
+        </div>
+        <div style={{ fontSize:9, color:T.muted, fontWeight:700 }}>vs</div>
+        <div style={{ flex:1, textAlign:"right" }}>
+          <div style={{ fontWeight:700, fontSize:11 }}>{undPlayer}</div>
+          <div style={{ fontSize:9, color:T.muted, marginTop:2 }}>underdog</div>
+        </div>
+      </div>
+
+      {/* Stats row */}
+      <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+        <div style={{ textAlign:"center", flex:1 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:T.accent }}>{modelFav.toFixed(0)}%</div>
+          <div style={{ fontSize:8, color:T.muted }}>model</div>
+        </div>
+        {bookFav !== null && <>
+          <div style={{ textAlign:"center", flex:1 }}>
+            <div style={{ fontSize:12, fontWeight:700, color:T.muted }}>{bookFav.toFixed(0)}%</div>
+            <div style={{ fontSize:8, color:T.muted }}>book implied</div>
+          </div>
+          <div style={{ textAlign:"center", flex:1 }}>
+            <div style={{ fontSize:12, fontWeight:700, color: edge > 0 ? T.green : T.red }}>{edge > 0 ? "+" : ""}{edge}%</div>
+            <div style={{ fontSize:8, color:T.muted }}>edge</div>
+          </div>
+        </>}
+        <div style={{ textAlign:"center", flex:1 }}>
+          <div style={{ fontSize:11, color:T.gold, fontWeight:700 }}>{fairML(modelFav)}</div>
+          <div style={{ fontSize:8, color:T.muted }}>fair ML</div>
+        </div>
+        {favOdds && <div style={{ textAlign:"center", flex:1 }}>
+          <div style={{ fontSize:11, color:T.muted, fontWeight:700 }}>{fmtOdds(favOdds)}</div>
+          <div style={{ fontSize:8, color:T.muted }}>book odds</div>
+        </div>}
+      </div>
+    </div>
+  );
+}
+
+function DailyGroupsView({ liveScores, results, oddsMap }) {
   const groups = extractGroups(liveScores);
   if (!groups.length) return (
     <div style={{ color:T.muted, fontSize:10, padding:"12px 0" }}>
@@ -750,43 +841,23 @@ function DailyGroupsView({ liveScores, results }) {
   const winMap = {};
   results.forEach(r => { winMap[r.player] = parseFloat(r.winPct); });
 
+  // Flatten all pairings across groups, sort by edge desc
+  const pairings = [];
+  groups.forEach((group, gi) => {
+    for (let ai = 0; ai < group.length; ai++) {
+      for (let bi = ai + 1; bi < group.length; bi++) {
+        pairings.push({ a: group[ai], b: group[bi], groupLabel: "GROUP " + (gi + 1) });
+      }
+    }
+  });
+
   return (
-    <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-      {groups.map((group, gi) => {
-        const sorted = [...group].sort((a, b) => (winMap[b] || 0) - (winMap[a] || 0));
-        return (
-          <div key={gi} style={{ background:T.navy, border:"1px solid "+T.border, borderRadius:4, padding:"10px 12px" }}>
-            <div style={{ fontSize:"8px", color:T.muted, letterSpacing:"1px", marginBottom:8 }}>GROUP {gi+1}</div>
-            <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-              {sorted.map(p => (
-                <div key={p} style={{ flex:1, minWidth:100, textAlign:"center", padding:"6px 8px", background:T.card, borderRadius:4 }}>
-                  <div style={{ fontWeight:700, fontSize:10 }}>{p.split(" ").pop()}</div>
-                  <div style={{ fontSize:8, color:T.muted }}>{p.split(" ")[0]}</div>
-                  <div style={{ fontSize:9, color:T.accent, marginTop:4 }}>{winMap[p] ? winMap[p]+"% win" : "—"}</div>
-                </div>
-              ))}
-            </div>
-            {sorted.length >= 2 && (
-              <div style={{ marginTop:8, display:"flex", gap:6, flexWrap:"wrap" }}>
-                {sorted.map((a, ai) => sorted.slice(ai+1).map(b => {
-                  const aWin = winMap[a] || 0, bWin = winMap[b] || 0;
-                  const total = aWin + bWin || 1;
-                  const aPct = (aWin / total * 100).toFixed(0);
-                  return (
-                    <div key={a+b} style={{ fontSize:9, color:T.muted, background:T.card, border:"1px solid "+T.border, borderRadius:3, padding:"3px 8px" }}>
-                      <span style={{ color:T.text }}>{a.split(" ").pop()}</span>
-                      <span style={{ color:T.accent, fontWeight:700, margin:"0 4px" }}>{aPct}%</span>
-                      <span style={{ color:T.muted }}>vs {b.split(" ").pop()}</span>
-                    </div>
-                  );
-                }))}
-              </div>
-            )}
-          </div>
-        );
-      })}
-      <div style={{ fontSize:8, color:T.muted }}>
-        H2H % within each group uses relative win probability as a fast approximation. Use the full H2H Matrix above for precise simulation-based matchup odds.
+    <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+      {pairings.map(({ a, b, groupLabel }) => (
+        <PairingCard key={a+"|"+b} playerA={a} playerB={b} winMap={winMap} oddsMap={oddsMap} groupLabel={groupLabel} />
+      ))}
+      <div style={{ fontSize:8, color:T.muted, marginTop:4 }}>
+        Model % uses relative outright win probability. Book implied % normalizes each player's outright odds head-to-head, removing the vig.
       </div>
     </div>
   );
@@ -1210,7 +1281,7 @@ function App() {
             {extractGroups(liveScores).length > 0 && (
               <div style={S.sec}>
                 <div style={S.secLabel}>Today's Playing Groups</div>
-                <DailyGroupsView liveScores={liveScores} results={results}/>
+                <DailyGroupsView liveScores={liveScores} results={results} oddsMap={oddsMap}/>
               </div>
             )}
 
