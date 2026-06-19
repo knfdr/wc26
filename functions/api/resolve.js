@@ -81,7 +81,8 @@ function resolveBet(bet, game, cornersTotal = null) {
     const pickedHome = market.includes(betHomeLC);
     if      (pickedHome  && homeScore > awayScore) result = "win";
     else if (!pickedHome && awayScore > homeScore) result = "win";
-    else if (homeScore === awayScore)              result = "push";
+    // Soccer draws are a loss for team-win bets; MLB ties are a push
+    else if (homeScore === awayScore) result = bet.sport === "MLB" ? "push" : "loss";
   } else if (market.includes("over")) {
     const line = parseFloat(bet.market.match(/[\d.]+/)?.[0] || "0");
     if      (homeScore + awayScore > line) result = "win";
