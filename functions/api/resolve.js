@@ -31,7 +31,7 @@ function normBetTeam(n) {
     .replace("Oakland Athletics", "Athletics");
 }
 
-function resolveBet(bet, game) {
+function resolveBet(bet, game, cornersTotal = null) {
   const homeScore = parseInt((game.scores.find(s => s.name === game.home_team) || {}).score || "0");
   const awayScore = parseInt((game.scores.find(s => s.name !== game.home_team) || {}).score || "0");
   const h1Home = game.h1Home ?? null;
@@ -44,7 +44,12 @@ function resolveBet(bet, game) {
   const market = bet.market.toLowerCase();
 
   if (market.includes("corners")) {
-    result = "push";
+    if (cornersTotal === null) result = "pending_corners"; // sentinel — caller will keep as pending
+    else {
+      const line = parseFloat(bet.market.match(/[\d.]+/)?.[0] || "0");
+      if (market.includes("over"))       result = cornersTotal > line ? "win" : cornersTotal === line ? "push" : "loss";
+      else if (market.includes("under")) result = cornersTotal < line ? "win" : cornersTotal === line ? "push" : "loss";
+    }
   } else if (market.includes("1h over") || market.includes("1h under")) {
     const line = parseFloat(bet.market.match(/[\d.]+/)?.[0] || "0");
     const h1Total = h1Home != null ? h1Home + h1Away : homeScore + awayScore;
@@ -143,6 +148,45 @@ export async function onRequest(context) {
     } catch(e) {}
   }
 
+  // Fetch ESPN corners data for WC games that have pending corners bets
+  // cornersMap: "HomeTeam|AwayTeam" -> total corners (int)
+  const cornersMap = {};
+  const hasWCCornersBets = pending.some(b => b.sport === "WC" && b.market.toLowerCase().includes("corners"));
+  if (hasWCCornersBets) {
+    try {
+      const sbRes = await fetch("https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard");
+      if (sbRes.ok) {
+        const sbData = await sbRes.json();
+        const finishedEvents = (sbData.events || []).filter(e => {
+          const status = (e.competitions?.[0]?.status?.type?.name || "");
+          return status.includes("FULL_TIME") || status.includes("FINAL");
+        });
+        // Fetch summaries in parallel for finished games only
+        await Promise.all(finishedEvents.map(async e => {
+          try {
+            const sumRes = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary?event=${e.id}`);
+            if (!sumRes.ok) return;
+            const sum = await sumRes.json();
+            const teams = sum.boxscore?.teams || [];
+            let totalCorners = 0;
+            const teamNames = [];
+            teams.forEach(t => {
+              teamNames.push(t.team?.displayName || "");
+              const c = (t.statistics || []).find(s => s.name === "wonCorners");
+              if (c) totalCorners += parseInt(c.displayValue || c.value || 0);
+            });
+            if (teamNames.length === 2) {
+              const key1 = teamNames[0] + "|" + teamNames[1];
+              const key2 = teamNames[1] + "|" + teamNames[0];
+              cornersMap[key1] = totalCorners;
+              cornersMap[key2] = totalCorners;
+            }
+          } catch(_) {}
+        }));
+      }
+    } catch(_) {}
+  }
+
   // Resolve
   const resolved = bets.map(bet => {
     if (bet.result !== "pending") return bet;
@@ -165,7 +209,12 @@ export async function onRequest(context) {
       if (diffMs > 2 * 24 * 60 * 60 * 1000) return bet;
     }
 
-    return resolveBet(bet, game);
+    // Attach corners total from ESPN for WC corners bets
+    const cornersKey = (bet.homeTeam || "") + "|" + (bet.awayTeam || "");
+    const cornersTotal = cornersMap[cornersKey] ?? cornersMap[bet.awayTeam + "|" + bet.homeTeam] ?? null;
+
+    const resolved = resolveBet(bet, game, cornersTotal);
+    return resolved.result === "pending_corners" ? bet : resolved;
   });
 
   // Write back only if something changed
