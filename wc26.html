@@ -845,34 +845,32 @@ function betToKalshi(bet) {
 }
 
 function KalshiButton({ bet, onLog, logged }) {
+  const [step, setStep] = useState("idle"); // idle | loading | found | placing | placed | error
   const [market, setMarket] = useState(null);
-  const [placing, setPlacing] = useState(false);
-  const [placed, setPlaced] = useState(false);
-  const [error, setError] = useState(null);
+  const [errorMsg, setErrorMsg] = useState(null);
   const kalshi = betToKalshi(bet);
 
-  useEffect(() => {
-    if (!kalshi) return;
-    fetch(`/api/kalshi?ticker=${kalshi.ticker}`)
-      .then(r => r.json())
-      .then(d => d.market ? setMarket(d.market) : setError("not found"))
-      .catch(() => setError("fetch error"));
-  }, [bet.gameId, bet.market]);
-
   if (!kalshi) return null;
-  if (error) return null;
-  if (!market) return <span style={{ fontSize:8, color:"#4b6280" }}>…</span>;
 
-  const priceField = kalshi.side === "yes" ? "yes_ask_dollars" : "no_ask_dollars";
-  const priceDollars = parseFloat(market[priceField] || 0.5);
-  const priceInt = Math.round(priceDollars * 100);
-  const riskDollars = parseFloat(bet.units) * 10;
-  const contracts = Math.max(1, Math.round(riskDollars / priceDollars));
-  const label = market.title || market.yes_sub_title || kalshi.ticker;
+  async function lookup() {
+    setStep("loading");
+    try {
+      const r = await fetch(`/api/kalshi?ticker=${kalshi.ticker}`);
+      const d = await r.json();
+      if (d.market) { setMarket(d.market); setStep("found"); }
+      else { setErrorMsg("not found"); setStep("error"); }
+    } catch(e) { setErrorMsg("fetch error"); setStep("error"); }
+  }
 
   async function place() {
+    const priceField = kalshi.side === "yes" ? "yes_ask_dollars" : "no_ask_dollars";
+    const priceDollars = parseFloat(market[priceField] || 0.5);
+    const priceInt = Math.round(priceDollars * 100);
+    const riskDollars = parseFloat(bet.units) * 10;
+    const contracts = Math.max(1, Math.round(riskDollars / priceDollars));
+    const label = market.title || kalshi.ticker;
     if (!confirm(`Place on Kalshi?\n\n"${label}"\n\nSide: ${kalshi.side.toUpperCase()}\nContracts: ${contracts}\nPrice: ${priceInt}¢\nRisk: $${riskDollars.toFixed(2)}`)) return;
-    setPlacing(true);
+    setStep("placing");
     try {
       const r = await fetch("/api/kalshi", {
         method: "POST",
@@ -881,25 +879,35 @@ function KalshiButton({ bet, onLog, logged }) {
       });
       const d = await r.json();
       if (r.ok && d.order) {
-        setPlaced(true);
+        setStep("placed");
         if (onLog && !logged) onLog(bet);
-      } else {
-        setError(d.error || "order failed");
-      }
-    } catch(e) { setError("network error"); }
-    setPlacing(false);
+      } else { setErrorMsg(d.error || "order failed"); setStep("error"); }
+    } catch(e) { setErrorMsg("network error"); setStep("error"); }
   }
 
-  if (placed) return <span style={{ fontSize:8, color:"#22c55e", fontWeight:700 }}>✓ PLACED</span>;
+  if (step === "placed") return <span style={{ fontSize:8, color:"#22c55e", fontWeight:700 }}>✓ PLACED ON KALSHI</span>;
+  if (step === "error") return <span style={{ fontSize:8, color:"#ef4444" }}>✗ {errorMsg}</span>;
+
+  const label = market ? (market.title || kalshi.ticker) : null;
 
   return (
-    <button onClick={place} disabled={placing || placed} style={{
-      background:"#1a2e1a", border:"1px solid #22c55e55", color:"#22c55e",
-      borderRadius:4, padding:"5px 10px", fontSize:8, fontWeight:700,
-      cursor:"pointer", fontFamily:"inherit", letterSpacing:"1px",
-      maxWidth:200, textAlign:"left", lineHeight:1.3,
-    }}>
-      {placing ? "PLACING…" : `KALSHI: ${label}`}
+    <button
+      onClick={step === "found" ? place : lookup}
+      disabled={step === "loading" || step === "placing"}
+      style={{
+        background: step === "found" ? "#22c55e" : "#0e1f14",
+        border: "1px solid " + (step === "found" ? "#22c55e" : "#22c55e55"),
+        color: step === "found" ? "#070b14" : "#22c55e",
+        borderRadius:4, padding:"5px 10px", fontSize:8, fontWeight:700,
+        cursor: step === "loading" || step === "placing" ? "default" : "pointer",
+        fontFamily:"inherit", letterSpacing:"0.5px", maxWidth:220,
+        textAlign:"left", lineHeight:1.4,
+      }}
+    >
+      {step === "idle"    && "FIND ON KALSHI"}
+      {step === "loading" && "SEARCHING…"}
+      {step === "found"   && `PLACE: ${label}`}
+      {step === "placing" && "PLACING…"}
     </button>
   );
 }
