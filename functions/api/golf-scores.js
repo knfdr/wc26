@@ -45,43 +45,52 @@ export async function onRequest(context) {
       : statusType.includes("SCHEDULED") ? "scheduled"
       : statusType;
 
+    const PAR_PER_ROUND = 70; // Shinnecock Hills, par 70
     const players = {};
     for (const comp of (competition.competitors || [])) {
       const name = comp.athlete?.displayName || "";
       if (!name) continue;
 
-      const linescores = comp.linescores || [];
+      // How many holes has this player completed in their current round
+      const thru = comp.status?.thru ?? 0;
+      const playerFinishedCurrentRound = thru >= 18;
+
+      // Round scores: only store if the round is fully complete.
+      // ls.value is the running stroke total for the round (partial or complete).
+      // A past-period linescore is always complete.
+      // The current-period linescore is complete only if thru >= 18.
       const r = [null, null, null, null];
-      linescores.forEach(ls => {
-        const period = (ls.period || ls.displayPeriod || 0) - 1;
-        const val = parseInt(ls.value || ls.displayValue, 10);
-        if (period >= 0 && period < 4 && !isNaN(val)) r[period] = val;
+      (comp.linescores || []).forEach(ls => {
+        const period = (ls.period || 0) - 1;
+        if (period < 0 || period >= 4) return;
+        if (ls.value == null) return; // round not started
+        const isPastRound = period < currentRound - 1;
+        const isCurrentRound = period === currentRound - 1;
+        if (isPastRound || (isCurrentRound && playerFinishedCurrentRound)) {
+          r[period] = Math.round(parseFloat(ls.value));
+        }
       });
 
-      // Determine how many rounds are fully complete.
-      // A round is complete if the player's score for that round is non-null
-      // AND it's a past round (not the current in-progress one, unless event is final).
-      const roundsComplete = eventStatus === "final"
-        ? r.filter(v => v !== null).length
-        : Math.max(0, (r.filter(v => v !== null).length) - (statusType.includes("IN_PROGRESS") ? 1 : 0));
+      const roundsComplete = r.filter(v => v !== null).length;
+
+      // Use ESPN's scoreToPar statistic — it correctly accounts for holes played
+      // in the current round, so it's accurate for in-progress rounds too.
+      const toParStat = (comp.statistics || []).find(s => s.name === "scoreToPar");
+      const toPar = toParStat != null ? Math.round(parseFloat(toParStat.value)) : null;
+
+      // Current round detail: "Thru 15", "F", etc.
+      const thruDisplay = comp.status?.displayValue || "";
 
       const statusName = comp.status?.type?.name || comp.status?.type?.id || "";
       const made_cut = !statusName.toLowerCase().includes("cut");
       const withdrew = statusName.toLowerCase().includes("wd") || statusName.toLowerCase().includes("disqualified");
 
-      // Compute toPar from raw round scores — more reliable than parsing ESPN's displayValue
-      const PAR_PER_ROUND = 70; // Shinnecock Hills
-      const scoredRounds = r.filter(v => v !== null);
-      const toPar = scoredRounds.length > 0
-        ? scoredRounds.reduce((a, v) => a + v, 0) - PAR_PER_ROUND * scoredRounds.length
-        : null;
-
       const position = comp.status?.position?.displayValue || "";
 
       // teeTime is used to reconstruct playing groups
-      const teeTime = comp.teeTime || comp.athlete?.teeTime || null;
+      const teeTime = (comp.linescores || [])[0]?.teeTime || comp.status?.teeTime || null;
 
-      players[name] = { r1: r[0], r2: r[1], r3: r[2], r4: r[3], toPar, position, made_cut, withdrew, roundsComplete, teeTime };
+      players[name] = { r1: r[0], r2: r[1], r3: r[2], r4: r[3], toPar, thru, thruDisplay, position, made_cut, withdrew, roundsComplete, teeTime };
     }
 
     // Build playing groups: bucket competitors by teeTime, keep groups of 2-4

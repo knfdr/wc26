@@ -274,6 +274,8 @@ function runTournamentSim(field, liveScores) {
       est: !!params.est,
       r1: k.r[0], r2: k.r[1], r3: k.r[2], r4: k.r[3],
       toPar: k.toPar ?? null,
+      thru: k.thru || 0,
+      thruDisplay: k.thruDisplay || "",
       position: k.position || "",
       madecut: k.madecut,
       withdrew: k.withdrew,
@@ -406,6 +408,8 @@ function getKnownRounds(playerName, liveScores) {
     withdrew: d.withdrew,
     roundsComplete: d.roundsComplete,
     toPar: d.toPar,
+    thru: d.thru || 0,
+    thruDisplay: d.thruDisplay || "",
     position: d.position,
   };
 }
@@ -921,7 +925,12 @@ function TournamentTable({ results, oddsMap, betLogger, liveScores }) {
                 <td style={{ ...S.tdR, color:parseFloat(r.sg)>=1?T.green:parseFloat(r.sg)>=0?T.text:T.muted, fontSize:9 }}>
                   {parseFloat(r.sg)>0?"+":""}{parseFloat(r.sg).toFixed(2)}
                 </td>
-                {hasLive && <td style={{ ...S.tdR, color:toParColor, fontWeight:700 }}>{toParStr}</td>}
+                {hasLive && (
+                  <td style={{ ...S.tdR }}>
+                    <span style={{ color:toParColor, fontWeight:700 }}>{toParStr}</span>
+                    {r.thruDisplay && r.thru < 18 && <div style={{ fontSize:"7px", color:T.muted, marginTop:1 }}>{r.thruDisplay}</div>}
+                  </td>
+                )}
                 {hasLive && currentRound >= 1 && <td style={{ ...S.tdR, color:T.muted, fontSize:9 }}>{r.r1 ?? "—"}</td>}
                 {hasLive && currentRound >= 2 && <td style={{ ...S.tdR, color:T.muted, fontSize:9 }}>{r.r2 ?? "—"}</td>}
                 {hasLive && currentRound >= 3 && <td style={{ ...S.tdR, color:T.muted, fontSize:9 }}>{r.r3 ?? "—"}</td>}
