@@ -69,11 +69,14 @@ export async function onRequest(context) {
       const made_cut = !statusName.toLowerCase().includes("cut");
       const withdrew = statusName.toLowerCase().includes("wd") || statusName.toLowerCase().includes("disqualified");
 
-      const toParStat = (comp.statistics || []).find(s => s.name === "toPar" || s.name === "score");
-      const toParStr = comp.status?.displayValue || toParStat?.displayValue || "";
-      const toPar = toParStr === "E" ? 0 : parseInt(toParStr, 10) || null;
+      // Compute toPar from raw round scores — more reliable than parsing ESPN's displayValue
+      const PAR_PER_ROUND = 70; // Shinnecock Hills
+      const scoredRounds = r.filter(v => v !== null);
+      const toPar = scoredRounds.length > 0
+        ? scoredRounds.reduce((a, v) => a + v, 0) - PAR_PER_ROUND * scoredRounds.length
+        : null;
 
-      const position = comp.status?.position?.displayValue || comp.status?.displayValue || "";
+      const position = comp.status?.position?.displayValue || "";
 
       // teeTime is used to reconstruct playing groups
       const teeTime = comp.teeTime || comp.athlete?.teeTime || null;

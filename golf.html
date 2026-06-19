@@ -654,9 +654,9 @@ function H2HMatrixView({ results, liveScores }) {
   const [matrix, setMatrix] = useState(null);
   const [running, setRunning] = useState(false);
   const [players, setPlayers] = useState(null);
+  const autoRan = React.useRef(false);
 
   function run() {
-    // Take top 15 by win%
     const top = results.filter(r => !r.withdrew).slice(0, 15).map(r => r.player);
     setPlayers(top);
     setRunning(true);
@@ -665,6 +665,14 @@ function H2HMatrixView({ results, liveScores }) {
       setRunning(false);
     }, 20);
   }
+
+  // Auto-run once when results first arrive
+  useEffect(() => {
+    if (results && !autoRan.current && !running) {
+      autoRan.current = true;
+      run();
+    }
+  }, [results]);
 
   const currentRound = liveScores?.currentRound || 1;
   const hasLive = !!(liveScores?.players && Object.keys(liveScores.players).length > 0);
@@ -882,7 +890,6 @@ function TournamentTable({ results, oddsMap, betLogger, liveScores }) {
             {!hasLive && <SortTh label="Cut %" col="cutPct" sortKey={sortKey} setSortKey={setSortKey} right/>}
             <th style={S.thR}>Odds</th>
             <th style={S.thR}>Edge</th>
-            <th style={S.th}></th>
           </tr>
         </thead>
         <tbody>
@@ -906,7 +913,7 @@ function TournamentTable({ results, oddsMap, betLogger, liveScores }) {
                 <td style={S.td}>
                   <div style={{ display:"flex", alignItems:"center", gap:6 }}>
                     <span style={{ fontWeight:700 }}>{r.player}</span>
-                    {r.est && <span style={{ fontSize:"7px", color:T.muted, background:T.border, borderRadius:2, padding:"1px 4px" }}>est</span>}
+                    {r.est && <span style={{ fontSize:"7px", color:T.muted, letterSpacing:"0.5px" }} title="SG:Total estimated — player competes on LIV or DP World Tour, not tracked on PGA Tour">*</span>}
                     {isCut && <span style={{ fontSize:"7px", color:T.red, background:"rgba(239,68,68,0.12)", border:"1px solid rgba(239,68,68,0.25)", borderRadius:2, padding:"1px 4px" }}>CUT</span>}
                     {r.withdrew && <span style={{ fontSize:"7px", color:T.muted, background:T.border, borderRadius:2, padding:"1px 4px" }}>WD</span>}
                   </div>
@@ -926,14 +933,6 @@ function TournamentTable({ results, oddsMap, betLogger, liveScores }) {
                 <td style={{ ...S.tdR, color:T.gold }}>{bookFmt}</td>
                 <td style={{ ...S.tdR, color:edgeColor, fontWeight: edge && parseFloat(edge)>1?"700":"400" }}>
                   {edge ? (parseFloat(edge)>0?"+":"")+edge+"%" : "—"}
-                </td>
-                <td style={S.td}>
-                  {bookOdds && parseFloat(edge) > 0 && !isCut && !r.withdrew && (
-                    <button onClick={() => logBet(makeBet(r.player, r.player+" Win", r.winPct, bookFmt))}
-                      style={{ background:logged?T.green+"22":T.accent, color:logged?T.green:"#070b14", border:"1px solid "+(logged?T.green:T.accent), borderRadius:3, padding:"3px 8px", fontSize:"8px", fontWeight:700, cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap" }}>
-                      {logged?"✓ LOGGED":"+ LOG"}
-                    </button>
-                  )}
                 </td>
               </tr>
             );
@@ -1125,13 +1124,23 @@ function App() {
     } catch(e) { console.error(e); }
   }
 
-  function runSim() {
+  function runSim(scores) {
     setRunning(true);
+    const sc = scores !== undefined ? scores : liveScores;
     setTimeout(() => {
-      setResults(runTournamentSim(UNIQUE_FIELD, liveScores));
+      setResults(runTournamentSim(UNIQUE_FIELD, sc));
       setRunning(false);
     }, 20);
   }
+
+  // Auto-run once scores and bet logger are both ready
+  const autoSimRan = React.useRef(false);
+  useEffect(() => {
+    if (!autoSimRan.current && betLogger.loaded && (liveScores !== null || scoresStatus === "error" || scoresStatus === "pretournament")) {
+      autoSimRan.current = true;
+      runSim(liveScores);
+    }
+  }, [betLogger.loaded, liveScores, scoresStatus]);
 
   const sp = betLogger.stats.bySport && betLogger.stats.bySport["GOLF"];
   const currentRound = liveScores?.currentRound || 1;
