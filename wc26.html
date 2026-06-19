@@ -925,8 +925,8 @@ function extractTopBets(agg, game, sport) {
 
   if (sport === "WC" && agg) {
     const checks = [
-      { market: homeTeam+" Win", pct: parseFloat(agg.hWPct), odds: "ML" },
-      { market: awayTeam+" Win", pct: parseFloat(agg.aWPct), odds: "ML" },
+      { market: homeTeam+" Win", pct: parseFloat(agg.hWPct), odds: game?.homeOdds || "ML" },
+      { market: awayTeam+" Win", pct: parseFloat(agg.aWPct), odds: game?.awayOdds || "ML" },
       { market: "Over "+agg.overUnderLine+" Goals", pct: parseFloat(agg.overPct), odds: agg.overOdds||"—" },
       { market: "Under "+agg.overUnderLine+" Goals", pct: parseFloat(agg.underPct), odds: agg.underOdds||"—" },
       { market: homeTeam+" Clean Sheet", pct: parseFloat(agg.csPct), odds:"~Market" },
