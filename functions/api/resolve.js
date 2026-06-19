@@ -155,24 +155,13 @@ export async function onRequest(context) {
   const hasWCCornersBets = pending.some(b => b.sport === "WC" && b.market.toLowerCase().includes("corners"));
   if (hasWCCornersBets) {
     try {
-      // Fetch scoreboard for today + past 3 days to catch recent completed games
-      const dateStrings = Array.from({ length: 4 }, (_, i) => {
-        const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
-        return d.toISOString().slice(0, 10).replace(/-/g, "");
-      });
-      const sbResponses = await Promise.all(
-        dateStrings.map(ds => fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=${ds}`).catch(() => null))
-      );
-      const allEvents = [];
-      for (const sbRes of sbResponses) {
-        if (!sbRes?.ok) continue;
+      const sbRes = await fetch("https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard");
+      if (sbRes.ok) {
         const sbData = await sbRes.json();
-        allEvents.push(...(sbData.events || []));
-      }
-      const finishedEvents = allEvents.filter(e => {
-        const status = (e.competitions?.[0]?.status?.type?.name || "");
-        return status.includes("FULL_TIME") || status.includes("FINAL");
-      });
+        const finishedEvents = (sbData.events || []).filter(e => {
+          const status = (e.competitions?.[0]?.status?.type?.name || "");
+          return status.includes("FULL_TIME") || status.includes("FINAL");
+        });
         // Fetch summaries in parallel for finished games only
         await Promise.all(finishedEvents.map(async e => {
           try {
