@@ -289,6 +289,16 @@ function impliedProb(odds) {
   return odds < 0 ? (-odds / (-odds + 100)) * 100 : (100 / (odds + 100)) * 100;
 }
 function tierToUnits(t) { return t==="LOCK"?2:t==="HIGH"?1.5:1; }
+function kellyUnits(simPctStr, bookOddsStr, tier) {
+  const p = parseFloat(simPctStr) / 100;
+  const oddsNum = parseFloat((bookOddsStr || "").replace(/^~/, ""));
+  if (!isNaN(oddsNum) && oddsNum !== 0) {
+    const b = oddsNum > 0 ? oddsNum / 100 : 100 / Math.abs(oddsNum);
+    const kelly = (b * p - (1 - p)) / b;
+    if (kelly > 0) return parseFloat(Math.min(3, Math.max(0.5, kelly * 15)).toFixed(1));
+  }
+  return tierToUnits(tier);
+}
 function tierColor(t, T) { return t==="LOCK"?T.red:t==="HIGH"?T.green:t==="LEAN"?T.gold:T.muted; }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
@@ -340,7 +350,7 @@ function extractTopBets(agg, game) {
       id: Date.now() + "_" + Math.random().toString(36).slice(2, 7),
       sport: "WNBA", gameId, homeTeam, awayTeam,
       market, simPct, bookOdds,
-      tier, units: tierToUnits(tier),
+      tier, units: kellyUnits(simPct, bookOdds, tier),
       loggedAt: new Date().toISOString(),
       result: "pending", resolvedAt: null, finalScore: null,
       gameDate: new Date().toLocaleDateString("en-CA"),
