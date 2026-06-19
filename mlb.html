@@ -715,7 +715,7 @@ function StatsBanner({ stats, T, S }) {
       <div style={{ display:"flex", gap:20, flexWrap:"wrap", alignItems:"center" }}>
         <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Win %</div><div style={{ fontSize:20, fontWeight:700, color:T.green }}>{stats.winPct}%</div></div>
         <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Record</div><div style={{ fontSize:14, fontWeight:700 }}><span style={{ color:T.green }}>{stats.wins}W</span>-<span style={{ color:T.red }}>{stats.losses}L</span>-<span style={{ color:T.muted }}>{stats.pushes}P</span></div></div>
-        <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Units</div><div style={{ fontSize:20, fontWeight:700, color:unitColor }}>{parseFloat(stats.totalUnits)>=0?"+":""}{stats.totalUnits}u</div></div>
+        <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Units</div><div style={{ fontSize:20, fontWeight:700, color:unitColor }}>{parseFloat(stats.totalUnits)>=0?"+":""}{stats.totalUnits}u</div><div style={{ fontSize:"8px", color:T.muted }}>1u = $10</div></div>
         <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Pending</div><div style={{ fontSize:14, fontWeight:700, color:T.yellow }}>{stats.pending}</div></div>
       </div>
       {Object.entries(stats.bySportTier||{}).map(([sport, tiers]) => {
