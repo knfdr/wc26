@@ -2,7 +2,7 @@ const GIST_ID = "8a76d2b09c709882e4364528a0152ccc";
 const GIST_FILENAME = "sharpsim_bets.json";
 
 const SPORT_CONFIG = {
-  WC:   { key: "soccer_fifa_world_cup", daysFrom: 4 },
+  WC:   { key: "soccer_fifa_world_cup", daysFrom: 3 },
   MLB:  { key: "baseball_mlb",          daysFrom: 3 },
   WNBA: { key: "basketball_wnba",       daysFrom: 3 },
 };
