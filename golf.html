@@ -126,6 +126,71 @@ const PLAYER_PARAMS = {
   "Corey Conners":              { sg: 0.08,  sigma: 2.90, abbr:"CON" },
   "Emiliano Grillo":            { sg: 0.10,  sigma: 2.90, abbr:"GRI" },
   "Michael Brennan":            { sg: 0.10,  sigma: 3.00, abbr:"MBR" },
+  // Additional US Open field — PGA Tour SG or estimates (est:true)
+  "Jason Day":                  { sg: 0.52,  sigma: 2.85, abbr:"DAY" },
+  "Si Woo Kim":                 { sg: 0.48,  sigma: 2.85, abbr:"SWK" },
+  "Min Woo Lee":                { sg: 0.47,  sigma: 2.85, abbr:"MWL", est:true },
+  "J.T. Poston":                { sg: 0.44,  sigma: 2.85, abbr:"POS" },
+  "Taylor Montgomery":          { sg: 0.41,  sigma: 2.85, abbr:"MON" },
+  "Billy Horschel":             { sg: 0.38,  sigma: 2.85, abbr:"HOR" },
+  "J.J. Spaun":                 { sg: 0.35,  sigma: 2.85, abbr:"SPA" },
+  "Aaron Rai":                  { sg: 0.33,  sigma: 2.85, abbr:"RAI", est:true },
+  "Davis Thompson":             { sg: 0.32,  sigma: 2.85, abbr:"DTP" },
+  "Jake Knapp":                 { sg: 0.31,  sigma: 2.85, abbr:"KNA" },
+  "Nick Hardy":                 { sg: 0.30,  sigma: 2.90, abbr:"NHA" },
+  "Ben Griffin":                { sg: 0.29,  sigma: 2.90, abbr:"BGR" },
+  "Nico Echavarria":            { sg: 0.28,  sigma: 2.90, abbr:"ECH" },
+  "Chris Kirk":                 { sg: 0.27,  sigma: 2.90, abbr:"KIR" },
+  "Patrick Rodgers":            { sg: 0.26,  sigma: 2.90, abbr:"PRO" },
+  "Peter Uihlein":              { sg: 0.25,  sigma: 2.90, abbr:"UIH", est:true },
+  "David Puig":                 { sg: 0.25,  sigma: 2.90, abbr:"PUI", est:true },
+  "Lucas Herbert":              { sg: 0.24,  sigma: 2.90, abbr:"LHE", est:true },
+  "Pierceson Coody":            { sg: 0.23,  sigma: 2.90, abbr:"COO" },
+  "Alex Fitzpatrick":           { sg: 0.22,  sigma: 2.90, abbr:"AFI", est:true },
+  "Andrew Novak":               { sg: 0.21,  sigma: 2.90, abbr:"NOV" },
+  "Alejandro Tosti":            { sg: 0.20,  sigma: 2.90, abbr:"TOS" },
+  "Alex Smalley":               { sg: 0.20,  sigma: 2.90, abbr:"SMA" },
+  "Harry Hall":                 { sg: 0.20,  sigma: 2.90, abbr:"HHA" },
+  "Ugo Coussaud":               { sg: 0.19,  sigma: 2.90, abbr:"COU", est:true },
+  "Jacob Bridgeman":            { sg: 0.19,  sigma: 2.90, abbr:"JBR" },
+  "Matt McCarty":               { sg: 0.18,  sigma: 2.90, abbr:"MCA" },
+  "Matti Schmid":               { sg: 0.18,  sigma: 2.90, abbr:"SCM", est:true },
+  "Jayden Schaper":             { sg: 0.18,  sigma: 2.90, abbr:"JSC", est:true },
+  "Laurie Canter":              { sg: 0.17,  sigma: 2.90, abbr:"LCA", est:true },
+  "Matthew Jordan":             { sg: 0.17,  sigma: 2.90, abbr:"MJO", est:true },
+  "Hennie Du Plessis":          { sg: 0.16,  sigma: 2.90, abbr:"HDP", est:true },
+  "Bud Cauley":                 { sg: 0.16,  sigma: 2.90, abbr:"CAU" },
+  "Brandon Wu":                 { sg: 0.15,  sigma: 2.90, abbr:"BWU" },
+  "Padraig Harrington":         { sg: 0.14,  sigma: 2.95, abbr:"PAH", est:true },
+  "Graeme McDowell":            { sg: 0.10,  sigma: 2.95, abbr:"GMC", est:true },
+  "J.B. Holmes":                { sg: 0.10,  sigma: 2.95, abbr:"JBH" },
+  "Carlos Ortiz":               { sg: 0.10,  sigma: 2.90, abbr:"ORT" },
+  "Filippo Celli":              { sg: 0.09,  sigma: 2.95, abbr:"CEL", est:true },
+  "Adrien Saddier":             { sg: 0.08,  sigma: 2.95, abbr:"SAD", est:true },
+  "Nathan Kimsey":              { sg: 0.08,  sigma: 2.95, abbr:"KIM", est:true },
+  "John Parry":                 { sg: 0.07,  sigma: 2.95, abbr:"PAR", est:true },
+  "Harry Higgs":                { sg: 0.07,  sigma: 2.90, abbr:"HIG" },
+  "Michael Kim":                { sg: 0.06,  sigma: 2.90, abbr:"MKI" },
+  "Ben Kohles":                 { sg: 0.05,  sigma: 2.95, abbr:"KOH" },
+  "Ben Silverman":              { sg: 0.05,  sigma: 2.95, abbr:"BSI" },
+  "Zac Blair":                  { sg: 0.04,  sigma: 2.95, abbr:"ZBL" },
+  "Niklas Nørgaard":            { sg: 0.04,  sigma: 2.95, abbr:"NOR", est:true },
+  "T.K. Kim":                   { sg: 0.03,  sigma: 2.95, abbr:"TKK" },
+  "Caleb Surratt":              { sg: 0.02,  sigma: 2.95, abbr:"SUR" },
+  // Amateurs / qualifiers with minimal tour data — use field average
+  "Miles Russell":              { sg: 0.00,  sigma: 3.10, abbr:"MRU", est:true },
+  "Cole Hammer":                { sg: 0.00,  sigma: 3.10, abbr:"HAM", est:true },
+  "Manav Shah":                 { sg:-0.10,  sigma: 3.10, abbr:"MSH", est:true },
+  "Sudarshan Yellamaraju":      { sg:-0.10,  sigma: 3.10, abbr:"YEL", est:true },
+  "Greyson Leach":              { sg:-0.05,  sigma: 3.10, abbr:"LEA", est:true },
+  "Arni Sveinsson":             { sg:-0.10,  sigma: 3.10, abbr:"SVE", est:true },
+  "Jackson Koivun":             { sg:-0.05,  sigma: 3.10, abbr:"KOI", est:true },
+  // 2026 US Open qualifiers/unknowns
+  "Jimmy Stanger":              { sg:-0.10,  sigma: 3.10, abbr:"JST", est:true },
+  "Kevin Roy":                  { sg:-0.10,  sigma: 3.10, abbr:"KRO", est:true },
+  "Brandon Holtz":              { sg:-0.10,  sigma: 3.10, abbr:"BHO", est:true },
+  "Dylan Wu":                   { sg:-0.05,  sigma: 3.10, abbr:"DWU", est:true },
+  "Spencer Tibbits":            { sg:-0.10,  sigma: 3.10, abbr:"TIB", est:true },
 };
 
 // US Open 2026 Field
@@ -435,64 +500,6 @@ function getKnownRounds(playerName, liveScores) {
   };
 }
 
-// ── H2H matrix: one shared sim covers all pairs for top-N players ─────────────
-function runH2HMatrix(players, liveScores) {
-  const n = 50000;
-  const currentRound = liveScores?.currentRound || 1;
-  const cutIsKnown = currentRound >= 3;
-  const known = {};
-  players.forEach(p => { known[p] = getKnownRounds(p, liveScores); });
-
-  // wins[a][b] = number of times a finished ahead of b
-  const wins = {};
-  players.forEach(a => { wins[a] = {}; players.forEach(b => { wins[a][b] = 0; }); });
-
-  for (let i = 0; i < n; i++) {
-    const r12 = {}, totals = {}, madecut = {};
-    players.forEach(p => {
-      const k = known[p];
-      const r1 = k.r[0] !== null ? k.r[0] : simulateRound(p);
-      const r2 = k.r[1] !== null ? k.r[1] : simulateRound(p);
-      r12[p] = r1 + r2;
-      if (cutIsKnown) {
-        madecut[p] = k.madecut !== false && !k.withdrew;
-      } else {
-        const cutLine = Math.round(randNormal(148, 3));
-        madecut[p] = r12[p] <= cutLine;
-      }
-      if (madecut[p]) {
-        const r3 = k.r[2] !== null ? k.r[2] : simulateRound(p);
-        const r4 = k.r[3] !== null ? k.r[3] : simulateRound(p);
-        totals[p] = r12[p] + r3 + r4;
-      } else {
-        totals[p] = 9999; // missed cut = worst possible
-      }
-    });
-
-    for (let ai = 0; ai < players.length; ai++) {
-      for (let bi = ai + 1; bi < players.length; bi++) {
-        const a = players[ai], b = players[bi];
-        if (totals[a] < totals[b]) wins[a][b]++;
-        else if (totals[b] < totals[a]) wins[b][a]++;
-        // ties: neither gets a win (ties rare but possible)
-      }
-    }
-  }
-
-  // Convert to { [a]: { [b]: winPct } }
-  const matrix = {};
-  players.forEach(a => {
-    matrix[a] = {};
-    players.forEach(b => {
-      if (a === b) { matrix[a][b] = 50; return; }
-      const aW = wins[a][b], bW = wins[b][a];
-      const total = aW + bW || 1;
-      matrix[a][b] = parseFloat((aW / total * 100).toFixed(1));
-    });
-  });
-  return matrix;
-}
-
 // ── Golf signals extraction ───────────────────────────────────────────────────
 function extractGolfSignals(results, oddsMap, currentRound) {
   const signals = [];
@@ -646,119 +653,6 @@ function GolfTopSignals({ results, oddsMap, liveScores, betLogger }) {
   );
 }
 
-function H2HMatrixView({ results, liveScores }) {
-  const [matrix, setMatrix] = useState(null);
-  const [running, setRunning] = useState(false);
-  const [players, setPlayers] = useState(null);
-  const autoRan = React.useRef(false);
-
-  function run() {
-    const top = results.filter(r => !r.withdrew).slice(0, 15).map(r => r.player);
-    setPlayers(top);
-    setRunning(true);
-    setTimeout(() => {
-      setMatrix(runH2HMatrix(top, liveScores));
-      setRunning(false);
-    }, 20);
-  }
-
-  // Auto-run once when results first arrive
-  useEffect(() => {
-    if (results && !autoRan.current && !running) {
-      autoRan.current = true;
-      run();
-    }
-  }, [results]);
-
-  const currentRound = liveScores?.currentRound || 1;
-  const hasLive = !!(liveScores?.players && Object.keys(liveScores.players).length > 0);
-
-  return (
-    <div>
-      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:12, flexWrap:"wrap" }}>
-        <button onClick={run} disabled={running}
-          style={{ background:running?"none":T.accent, color:running?T.muted:"#070b14", border:"1px solid "+(running?T.border:T.accent), borderRadius:4, padding:"7px 18px", fontSize:9, fontWeight:700, cursor:running?"default":"pointer", fontFamily:"inherit" }}>
-          {running ? "⟳ Computing..." : matrix ? "↻ Re-Run Matrix" : "▶ Run H2H Matrix (Top 15)"}
-        </button>
-        {hasLive && <span style={{ fontSize:8, color:T.accent }}>conditioned on R{Math.min(currentRound-1,4)} live scores</span>}
-        <span style={{ fontSize:8, color:T.muted }}>· 50k iterations · one shared sim for all pairs</span>
-      </div>
-
-      {matrix && players && (
-        <>
-          <div style={{ overflowX:"auto", fontSize:9 }}>
-            <table style={{ borderCollapse:"collapse", minWidth:600 }}>
-              <thead>
-                <tr>
-                  <th style={{ ...S.th, minWidth:120, position:"sticky", left:0, background:T.card, zIndex:1 }}>vs →</th>
-                  {players.map(p => (
-                    <th key={p} style={{ ...S.th, textAlign:"center", minWidth:64, fontSize:"7px", whiteSpace:"nowrap", maxWidth:80, overflow:"hidden", textOverflow:"ellipsis" }}>
-                      {p.split(" ").pop()}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {players.map(rowP => (
-                  <tr key={rowP}>
-                    <td style={{ ...S.td, fontWeight:700, fontSize:9, position:"sticky", left:0, background:T.card, zIndex:1, whiteSpace:"nowrap" }}>
-                      {rowP.split(" ").slice(-1)[0]}, {rowP.split(" ")[0][0]}.
-                    </td>
-                    {players.map(colP => {
-                      if (rowP === colP) return <td key={colP} style={{ ...S.td, textAlign:"center", background:T.border+"88", color:T.muted }}>—</td>;
-                      const pct = matrix[rowP][colP];
-                      const bg = pct >= 65 ? "rgba(74,222,128,0.18)"
-                               : pct >= 55 ? "rgba(74,222,128,0.08)"
-                               : pct <= 35 ? "rgba(239,68,68,0.15)"
-                               : pct <= 45 ? "rgba(239,68,68,0.06)"
-                               : "transparent";
-                      const color = pct >= 55 ? T.accent : pct <= 45 ? T.red : T.muted;
-                      return (
-                        <td key={colP} style={{ ...S.td, textAlign:"center", background:bg, color, fontWeight: Math.abs(pct-50) > 10 ? 700 : 400 }}>
-                          {pct.toFixed(0)}%
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div style={{ fontSize:8, color:T.muted, marginTop:8, lineHeight:1.7 }}>
-            Read as: row player wins against column player X% of the time (4-round total). Green = row favored, red = column favored. Cut logic applied — a player who misses cut loses to any cut-maker.
-          </div>
-
-          {/* Surface lopsided matchups as signals */}
-          <div style={{ marginTop:14 }}>
-            <div style={{ fontSize:"9px", letterSpacing:"2px", color:T.muted, marginBottom:8 }}>STRONGEST MODEL H2H EDGES</div>
-            <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
-              {(() => {
-                const edges = [];
-                for (let ai = 0; ai < players.length; ai++) {
-                  for (let bi = ai+1; bi < players.length; bi++) {
-                    const a = players[ai], b = players[bi];
-                    const pct = matrix[a][b];
-                    const favored = pct >= 50 ? a : b;
-                    const favPct = pct >= 50 ? pct : matrix[b][a];
-                    if (favPct >= 60) edges.push({ a, b, favored, favPct, fairML: fairML(favPct) });
-                  }
-                }
-                return edges.sort((x,y) => y.favPct - x.favPct).slice(0, 8).map((e, i) => (
-                  <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"6px 10px", background:T.navy, border:"1px solid "+T.border, borderRadius:4, flexWrap:"wrap", fontSize:10 }}>
-                    <span style={{ color:T.accent, fontWeight:700, minWidth:36 }}>{e.favPct.toFixed(0)}%</span>
-                    <span style={{ fontWeight:700, color:T.text }}>{e.favored}</span>
-                    <span style={{ color:T.muted, fontSize:9 }}>over {e.favored === e.a ? e.b : e.a}</span>
-                    <span style={{ marginLeft:"auto", color:T.gold, fontSize:9 }}>fair ML {e.fairML}</span>
-                  </div>
-                ));
-              })()}
-            </div>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
 
 
 // Look up PLAYER_PARAMS by ESPN display name (which may use accents/casing differently)
@@ -1288,13 +1182,6 @@ function App() {
               <div style={S.secLabel}>Tournament Probabilities — {UNIQUE_FIELD.length} Players · {SIM_N.toLocaleString()} Simulations · Click column to sort</div>
               <div style={S.card}>
                 <TournamentTable results={results} oddsMap={oddsMap} betLogger={betLogger} liveScores={liveScores}/>
-              </div>
-            </div>
-
-            <div style={S.sec}>
-              <div style={S.secLabel}>H2H Matrix — Top 15 Players</div>
-              <div style={S.card}>
-                <H2HMatrixView results={results} liveScores={liveScores}/>
               </div>
             </div>
 
