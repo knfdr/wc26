@@ -261,111 +261,57 @@ function simulateCards(teamName, isUnderdog, goalDeficit) {
 // ════════════════════════════════════════════════════════════════════════════════
 const MATCHES = [
   {
-    id: "czr-rsa", group: "A",
-    time: "12:00 PM ET · Mercedes-Benz Stadium, Atlanta GA",
-    homeTeam: "Czechia", awayTeam: "South Africa",
-    homeIsSeeded: true,
-    venue: "Mercedes-Benz Stadium, Atlanta GA — Closed dome, climate controlled",
-    weather: "AC indoors — no weather impact on play",
-    overUnderLine: 2.5, overOdds: "+110", underOdds: "-165",
-    homeOdds: "-130", awayOdds: "+370", drawOdds: "+270",
-    homeImplied: 56.5, awayImplied: 21.3,
-    homeIntel: [
-      "Patrick Schick leads attack — physical target man, clinical in box",
-      "Tomáš Souček (West Ham) box-to-box engine, aerial threat at set pieces",
-      "Lost opener — must win to keep Group A knockout hopes alive",
-      "Ondřej Kolář reliable in goal; strong defensive organization",
-      "Well-drilled European side; experience in tight tournament games",
-      "Full squad available; no significant injury concerns",
-    ],
-    awayIntel: [
-      "Yaya Sithole + Thema Zwane both suspended after red cards vs Mexico",
-      "Percy Tau (Al-Ahly) lone genuine attacking quality — key man",
-      "Lost opener to Mexico; already under severe pressure to advance",
-      "Will attempt compact defensive block but missing key midfielders",
-      "Set pieces and counter-attacks only realistic path to a goal",
-      "Historically limited at World Cup level — just second WC appearance",
-    ],
-  },
-  {
-    id: "sui-bih", group: "B",
+    id: "usa-aus", group: "C",
     time: "3:00 PM ET · SoFi Stadium, Inglewood CA",
-    homeTeam: "Switzerland", awayTeam: "Bosnia-Herzegovina",
+    homeTeam: "USA", awayTeam: "Australia",
     homeIsSeeded: true,
     venue: "SoFi Stadium, Inglewood CA — Closed dome, climate controlled",
     weather: "AC indoors — no weather impact on play",
-    overUnderLine: 2.5, overOdds: "+100", underOdds: "-123",
-    homeOdds: "-188", awayOdds: "+506", drawOdds: "+310",
-    homeImplied: 65.3, awayImplied: 16.5,
+    overUnderLine: 2.5, overOdds: "-115", underOdds: "-112",
+    homeOdds: "-160", awayOdds: "+425", drawOdds: "+330",
+    homeImplied: 61.5, awayImplied: 19.0,
     homeIntel: [
-      "Granit Xhaka (38) veteran captain; midfield general controls tempo",
-      "Breel Embolo leads attack; physical against Bosnia's aging backline",
-      "Swiss won Group B opener vs Qatar — confident and organized",
-      "Disciplined low-block defending; hard to break but limited flair",
-      "Historically consistent WC performers — rarely capitulate",
-      "No major injury concerns; strong experienced squad",
+      "Host nation USA — enormous home crowd at SoFi Stadium",
+      "Christian Pulisic (AC Milan) leads attack; in top club form",
+      "Gio Reyna and Weston McKennie provide creative midfield depth",
+      "Turner solid in goal; USA defense organized under Berhalter",
+      "Won opener — confident and riding home support momentum",
+      "No major injury concerns; full squad available",
     ],
     awayIntel: [
-      "Edin Džeko (39) — iconic striker, poacher instinct still sharp",
-      "Miralem Pjanić effectively retired from international duty",
-      "Lost opener to Canada — must win to stay in tournament",
-      "Physical and direct; set pieces from Džeko are a real threat",
-      "Limited quality to unlock Swiss defensive shape in open play",
-      "Full squad available; desperate for a result",
+      "Harry Souttar anchors Australia's center-back pairing",
+      "Mathew Leckie veteran wide threat; pace on the counter",
+      "Lost opener — backs against wall, must win to stay alive",
+      "Socceroos historically underperform in North American heat/travel",
+      "Limited quality to break down organized USA midfield block",
+      "Full squad available; physical and direct approach expected",
     ],
   },
   {
-    id: "can-qat", group: "B",
-    time: "6:00 PM ET · BC Place, Vancouver BC",
-    homeTeam: "Canada", awayTeam: "Qatar",
-    homeIsSeeded: true,
-    venue: "BC Place, Vancouver BC — Retractable roof, climate controlled",
-    weather: "Indoor dome — no weather impact on play",
-    overUnderLine: 2.5, overOdds: "-135", underOdds: "+105",
-    homeOdds: "-350", awayOdds: "+1000", drawOdds: "+450",
-    homeImplied: 77.8, awayImplied: 9.1,
+    id: "sco-mar", group: "C",
+    time: "6:00 PM ET · AT&T Stadium, Arlington TX",
+    homeTeam: "Scotland", awayTeam: "Morocco",
+    homeIsSeeded: false,
+    venue: "AT&T Stadium, Arlington TX — Closed dome, climate controlled",
+    weather: "AC indoors — no weather impact on play",
+    overUnderLine: 2.5, overOdds: "-105", underOdds: "-115",
+    homeOdds: "+475", awayOdds: "-150", drawOdds: "+270",
+    homeImplied: 17.4, awayImplied: 60.0,
     homeIntel: [
-      "Alphonso Davies (Bayern Munich) — elite wide threat, will terrorize Qatar",
-      "Jonathan David (Juventus) in top club form; leads line with pace",
-      "Won opener vs Bosnia — riding confidence in front of home crowd",
-      "BC Place sellout — massive home advantage for host nation Canada",
-      "Cyle Larin and Tajon Buchanan provide dangerous depth wide",
-      "No significant injury concerns; full squad available",
+      "Andy Robertson (Liverpool) — still elite at left back, key creative outlet",
+      "Scott McTominay (Napoli) goal-scoring threat from midfield",
+      "Scotland historically underperform in major tournaments",
+      "Lost opener — must win; will push forward and be open on counter",
+      "Kenny McLean and Ryan Christie add energy in midfield",
+      "Desperate for result; high line expected which suits Morocco's pace",
     ],
     awayIntel: [
-      "2022 host; went 0-3 and conceded 7 goals in their own group stage",
-      "Akram Afif (Ballon d'Or nominated 2023) lone genuine quality threat",
-      "Lost opener to Switzerland — no path to advancement unless Canada implodes",
-      "Will set up in deep 5-4-1; limited ability to threaten Canada's backline",
-      "Hassan Al-Haydos veteran captain; 2022 experience means little here",
-      "Full squad available but significant quality gap vs Canada",
-    ],
-  },
-  {
-    id: "mex-kor", group: "A",
-    time: "9:00 PM ET · Estadio Akron, Guadalajara Mexico",
-    homeTeam: "Mexico", awayTeam: "South Korea",
-    homeIsSeeded: true,
-    venue: "Estadio Akron, Guadalajara, Mexico — Open air, 45,000 capacity",
-    weather: "Guadalajara elevation ~1,540m. Warm evening kickoff.",
-    overUnderLine: 2.5, overOdds: "+140", underOdds: "-175",
-    homeOdds: "-105", awayOdds: "+320", drawOdds: "+230",
-    homeImplied: 48.8, awayImplied: 23.8,
-    homeIntel: [
-      "Raúl Jiménez (Fulham) leads line — in strong Premier League form",
-      "Hirving Lozano (35) veteran wide threat; dangerous on the break",
-      "Playing at Akron in Guadalajara — enormous home crowd energy",
-      "Beat South Africa in opener — must win or draw to advance",
-      "Héctor Herrera midfield anchor; high press style at altitude",
-      "Home nation pressure is double-edged — crowd or burden",
-    ],
-    awayIntel: [
-      "Son Heung-min (34) — still world-class captain and talisman",
-      "Lee Kang-in (PSG) creative spark; set piece delivery elite",
-      "Cho Gue-sung physical striker; aerial threat at set pieces",
-      "Lost opener to Czechia — need win to advance; nothing to lose",
-      "Korea press intensely and transition quickly — dangerous vs Mexico",
-      "No major injury concerns; physical, disciplined squad",
+      "Hakim Ziyech (Galatasaray) veteran orchestrator; set piece specialist",
+      "Sofyan Amrabat midfield enforcer; breaks up play relentlessly",
+      "Won opener — confident and well-drilled under coach",
+      "Elite pressing and counter-attacking unit; punish high lines",
+      "Achraf Hakimi (PSG) world-class at right back; overlap threat",
+      "Morocco have pace and quality to exploit Scotland's defensive gaps",
     ],
   },
 ];
@@ -1017,12 +963,7 @@ function useBetLogger() {
   async function logAllBets(newBets) {
     if (!newBets.length) return;
     setSaving(true);
-    const today = new Date().toLocaleDateString("en-CA");
-    const existingKeys = new Set(
-      bets
-        .filter(b => b.gameDate === today)
-        .map(b => b.gameId + "|" + b.market)
-    );
+    const existingKeys = new Set(bets.map(b => b.gameId + "|" + b.market));
     const toAdd = newBets.filter(b => !existingKeys.has(b.gameId + "|" + b.market));
     if (!toAdd.length) { setSaving(false); return; }
     const updated = [...bets, ...toAdd];
@@ -1038,9 +979,8 @@ function useBetLogger() {
   }
 
   const stats = calcStats(bets);
-  const today = new Date().toISOString().slice(0,10);
   const isLogged = (gameId, market) =>
-    bets.some(b => b.gameId === gameId && b.market === market && b.gameDate === today && b.result === "pending");
+    bets.some(b => b.gameId === gameId && b.market === market);
 
   return { bets, stats, logBet, logAllBets, removeBet, saving, loaded, isLogged };
 }
