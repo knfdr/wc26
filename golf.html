@@ -216,8 +216,8 @@ function normalCDF(z) {
 // Difference of two independent normals: D = scoreA - scoreB ~ N(μA-μB, √(σA²+σB²))
 // P(A < B) = P(D < 0) = Φ(-muDiff / sigmaDiff)
 function roundH2HProb(playerA, playerB) {
-  const pA = PLAYER_PARAMS[playerA] || { sg: 0, sigma: 2.90 };
-  const pB = PLAYER_PARAMS[playerB] || { sg: 0, sigma: 2.90 };
+  const pA = getPlayerParams(playerA) || { sg: 0, sigma: 2.90 };
+  const pB = getPlayerParams(playerB) || { sg: 0, sigma: 2.90 };
   const muA = FIELD_AVG - pA.sg;
   const muB = FIELD_AVG - pB.sg;
   const muDiff = muA - muB; // positive = A expected to score higher (worse)
@@ -761,6 +761,20 @@ function H2HMatrixView({ results, liveScores }) {
 }
 
 
+// Look up PLAYER_PARAMS by ESPN display name (which may use accents/casing differently)
+function getPlayerParams(espnName) {
+  if (PLAYER_PARAMS[espnName]) return PLAYER_PARAMS[espnName];
+  // Check if ESPN_NAME_MAP maps this ESPN name to one of our canonical keys
+  const canonical = ESPN_NAME_MAP[espnName];
+  if (canonical && PLAYER_PARAMS[canonical]) return PLAYER_PARAMS[canonical];
+  // normStr fallback across all PLAYER_PARAMS keys
+  const norm = normStr(espnName);
+  for (const [k, v] of Object.entries(PLAYER_PARAMS)) {
+    if (normStr(k) === norm) return v;
+  }
+  return null;
+}
+
 // Standard 3-ball market is typically priced at -110 (52.38% implied)
 const H2H_MARKET_IMPLIED = 100 / (100 + 110) * 100; // ~52.38%
 
@@ -781,8 +795,8 @@ function PairingCard({ playerA, playerB, groupLabel }) {
   const tier = edge >= 7 ? "LOCK" : edge >= 4 ? "HIGH" : edge >= 2 ? "LEAN" : null;
   const tc = tier ? TIER_COLORS[tier] : T.border;
 
-  const pFav = PLAYER_PARAMS[favPlayer] || {};
-  const pUnd = PLAYER_PARAMS[undPlayer] || {};
+  const pFav = getPlayerParams(favPlayer) || {};
+  const pUnd = getPlayerParams(undPlayer) || {};
   const sgDiff = ((pFav.sg || 0) - (pUnd.sg || 0)).toFixed(2);
 
   return (
