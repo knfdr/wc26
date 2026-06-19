@@ -18,8 +18,17 @@ const FALLBACK_GAMES = {
   "uzb-col": { home_team:"Uzbekistan",  away_team:"Colombia",      completed:true, scores:[{name:"Uzbekistan",score:"1"},{name:"Colombia",score:"3"}],     h1Home:0, h1Away:1 },
 };
 
+// Normalize names coming FROM the Odds API
 function normName(n) {
   return n.replace("Congo DR", "DR Congo").replace("Curaçao", "Curacao");
+}
+
+// Normalize team names stored IN bets to match Odds API names
+function normBetTeam(n) {
+  return (n || "")
+    .replace("Czechia", "Czech Republic")
+    .replace("Bosnia-Herzegovina", "Bosnia & Herzegovina")
+    .replace("Oakland Athletics", "Athletics");
 }
 
 function resolveBet(bet, game) {
@@ -27,6 +36,9 @@ function resolveBet(bet, game) {
   const awayScore = parseInt((game.scores.find(s => s.name !== game.home_team) || {}).score || "0");
   const h1Home = game.h1Home ?? null;
   const h1Away = game.h1Away ?? null;
+
+  // Use bet's stored homeTeam for market-text matching (avoids API name vs display name mismatch)
+  const betHomeLC = (bet.homeTeam || game.home_team).toLowerCase();
 
   let result = "loss";
   const market = bet.market.toLowerCase();
@@ -41,14 +53,14 @@ function resolveBet(bet, game) {
   } else if (market.includes("ht win") || market.includes("halftime")) {
     const h1H = h1Home ?? homeScore;
     const h1A = h1Away ?? awayScore;
-    const pickedHome = bet.market.toLowerCase().includes(game.home_team.toLowerCase());
+    const pickedHome = market.includes(betHomeLC);
     if      (pickedHome  && h1H > h1A) result = "win";
     else if (!pickedHome && h1A > h1H) result = "win";
     else if (h1H === h1A)              result = "push";
   } else if (market.includes("1h") && market.includes("spread")) {
     const h1H = h1Home ?? homeScore;
     const h1A = h1Away ?? awayScore;
-    const pickedHome = bet.market.toLowerCase().includes(game.home_team.toLowerCase());
+    const pickedHome = market.includes(betHomeLC);
     if      (pickedHome  && h1H > h1A) result = "win";
     else if (!pickedHome && h1A > h1H) result = "win";
     else if (h1H === h1A)              result = "push";
@@ -57,11 +69,11 @@ function resolveBet(bet, game) {
   } else if (market.includes("yrfi")) {
     result = (homeScore > 0 || awayScore > 0) ? "win" : "loss";
   } else if (market.includes("-1.5") || market.includes("run line")) {
-    const pickedHome = bet.market.includes(game.home_team);
+    const pickedHome = market.includes(betHomeLC);
     if      (pickedHome  && (homeScore - awayScore) >= 2) result = "win";
     else if (!pickedHome && (awayScore - homeScore) >= 2) result = "win";
   } else if (market.includes("ml") || market.includes(" win") || market.includes("moneyline")) {
-    const pickedHome = bet.market.toLowerCase().includes(game.home_team.toLowerCase());
+    const pickedHome = market.includes(betHomeLC);
     if      (pickedHome  && homeScore > awayScore) result = "win";
     else if (!pickedHome && awayScore > homeScore) result = "win";
     else if (homeScore === awayScore)              result = "push";
@@ -78,7 +90,7 @@ function resolveBet(bet, game) {
     const pointMatch = bet.market.match(/([+-][\d.]+)$/);
     if (pointMatch) {
       const point = parseFloat(pointMatch[1]);
-      const pickedHome = bet.market.includes(game.home_team);
+      const pickedHome = market.includes(betHomeLC);
       const margin = homeScore - awayScore;
       const adj = pickedHome ? margin + point : -margin + (-point);
       if      (adj > 0) result = "win";
@@ -135,16 +147,22 @@ export async function onRequest(context) {
   const resolved = bets.map(bet => {
     if (bet.result !== "pending") return bet;
 
+    const normHome = normBetTeam(bet.homeTeam);
+    const normAway = normBetTeam(bet.awayTeam);
+    const matchedById = !!(scoreMap[bet.gameId]);
     let game = scoreMap[bet.gameId]
-      || scoreMap[bet.homeTeam + "|" + bet.awayTeam]
+      || scoreMap[normHome + "|" + normAway]
+      || scoreMap[normAway + "|" + normHome]
       || FALLBACK_GAMES[bet.gameId];
 
     if (!game?.completed) return bet;
 
-    // Prevent cross-day false matches: bet date must match game date
-    if (bet.gameDate && game.commence_time) {
+    // Date guard: skip only for name-based matches (IDs are unique, no false-match risk).
+    // Allow ±1 day to handle games starting late evening (UTC date tips to next day).
+    if (!matchedById && bet.gameDate && game.commence_time) {
       const gameDate = new Date(game.commence_time).toISOString().slice(0, 10);
-      if (gameDate !== bet.gameDate) return bet;
+      const diffMs = Math.abs(new Date(gameDate) - new Date(bet.gameDate));
+      if (diffMs > 2 * 24 * 60 * 60 * 1000) return bet;
     }
 
     return resolveBet(bet, game);
