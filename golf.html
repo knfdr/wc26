@@ -826,6 +826,15 @@ function PairingCard({ playerA, playerB, groupLabel }) {
   );
 }
 
+const TIER_ORDER = { LOCK: 0, HIGH: 1, LEAN: 2, null: 3 };
+
+function pairingTier(playerA, playerB) {
+  const prob = roundH2HProb(playerA, playerB);
+  const modelFav = Math.max(prob, 100 - prob);
+  const edge = modelFav - H2H_MARKET_IMPLIED;
+  return edge >= 7 ? "LOCK" : edge >= 4 ? "HIGH" : edge >= 2 ? "LEAN" : null;
+}
+
 function DailyGroupsView({ liveScores }) {
   const groups = extractGroups(liveScores);
   if (!groups.length) return (
@@ -838,18 +847,23 @@ function DailyGroupsView({ liveScores }) {
   groups.forEach((group, gi) => {
     for (let ai = 0; ai < group.length; ai++) {
       for (let bi = ai + 1; bi < group.length; bi++) {
-        pairings.push({ a: group[ai], b: group[bi], groupLabel: "GROUP " + (gi + 1) });
+        const tier = pairingTier(group[ai], group[bi]);
+        pairings.push({ a: group[ai], b: group[bi], groupLabel: "GROUP " + (gi + 1), tier });
       }
     }
   });
 
+  pairings.sort((x, y) => (TIER_ORDER[x.tier] ?? 3) - (TIER_ORDER[y.tier] ?? 3));
+
   return (
-    <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-      {pairings.map(({ a, b, groupLabel }) => (
-        <PairingCard key={a+"|"+b} playerA={a} playerB={b} groupLabel={groupLabel} />
-      ))}
-      <div style={{ fontSize:8, color:T.muted, marginTop:4 }}>
-        Win % = P(lower round score) derived analytically from each player's SG:Total and round variance. Edge vs standard -110 3-ball line (~52.4% implied).
+    <div>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+        {pairings.map(({ a, b, groupLabel }) => (
+          <PairingCard key={a+"|"+b} playerA={a} playerB={b} groupLabel={groupLabel} />
+        ))}
+      </div>
+      <div style={{ fontSize:8, color:T.muted, marginTop:8 }}>
+        Win % = P(lower round score) derived analytically from SG:Total and round variance. Edge vs standard -110 3-ball line (~52.4% implied). Each group shows all combinations within the actual playing group.
       </div>
     </div>
   );
