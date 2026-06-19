@@ -608,7 +608,7 @@ function extractTopBets(agg, game, sport) {
       loggedAt: new Date().toISOString(),
       result: "pending",
       resolvedAt: null, finalScore: null,
-      gameDate: new Date().toISOString().slice(0,10),
+      gameDate: new Date().toLocaleDateString("en-CA"),
     });
   }
 
@@ -1272,7 +1272,7 @@ function MLBParlayTab({ simData, games, betLogger }) {
           tier: parlay.legs[0].tier, units: Math.min(parseFloat(totalUnits), 2),
           loggedAt: new Date().toISOString(), result:"pending",
           resolvedAt:null, finalScore:null,
-          gameDate: new Date().toISOString().slice(0,10),
+          gameDate: new Date().toLocaleDateString("en-CA"),
         };
 
         return (

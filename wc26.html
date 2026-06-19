@@ -831,7 +831,7 @@ function extractTopBets(agg, game, sport) {
       loggedAt: new Date().toISOString(),
       result: "pending",
       resolvedAt: null, finalScore: null,
-      gameDate: new Date().toISOString().slice(0,10),
+      gameDate: new Date().toLocaleDateString("en-CA"),
     });
   }
 
