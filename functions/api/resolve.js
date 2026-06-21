@@ -28,7 +28,8 @@ function normBetTeam(n) {
   return (n || "")
     .replace("Czechia", "Czech Republic")
     .replace("Bosnia-Herzegovina", "Bosnia & Herzegovina")
-    .replace("Oakland Athletics", "Athletics");
+    .replace("Oakland Athletics", "Athletics")
+    .replace("Curaçao", "Curacao");
 }
 
 function resolveBet(bet, game, cornersTotal = null) {
