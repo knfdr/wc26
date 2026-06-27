@@ -1383,6 +1383,21 @@ function simPctToFairOdds(simPctStr) {
   if (p >= 0.5) return "-" + Math.round(p / (1 - p) * 100);
   return "+" + Math.round((1 - p) / p * 100);
 }
+// Parse book odds string (handles "~-180", "+135", "-200") → implied prob %.
+// Returns null for non-numeric strings like "~Market", "ML", "CS", "—".
+function bookOddsToImplied(oddsStr) {
+  if (!oddsStr) return null;
+  const cleaned = oddsStr.replace(/^~/, "").trim();
+  const n = parseFloat(cleaned);
+  if (isNaN(n)) return null;
+  return n < 0 ? (-n) / (-n + 100) * 100 : 100 / (n + 100) * 100;
+}
+function calcEdge(simPctStr, bookOddsStr) {
+  const modelPct = parseFloat(simPctStr);
+  const bookImplied = bookOddsToImplied(bookOddsStr);
+  if (isNaN(modelPct) || bookImplied === null) return null;
+  return modelPct - bookImplied;
+}
 
 // ════════════════════════════════════════════════════════════════════════════════
 // SHARED BET TRACKING UI COMPONENTS
@@ -1392,6 +1407,8 @@ function simPctToFairOdds(simPctStr) {
 function TopBetCard({ bet, onLog, logged, T, S }) {
   const tc = tierColor(bet.tier, T);
   const fairOdds = simPctToFairOdds(bet.simPct);
+  const edge = calcEdge(bet.simPct, bet.bookOdds);
+  const edgeColor = edge === null ? T.muted : edge >= 5 ? T.green : edge >= 0 ? T.gold : T.red;
   return (
     <div style={{ ...S.card, borderLeft:"3px solid "+tc, marginBottom:8 }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:6 }}>
@@ -1411,13 +1428,19 @@ function TopBetCard({ bet, onLog, logged, T, S }) {
               <div style={{ fontSize:"7px", color:T.muted, letterSpacing:"0.5px", marginBottom:1 }}>BOOK ODDS</div>
               <span style={{ fontSize:11, color:T.muted }}>{bet.bookOdds}</span>
             </div>
+            <div>
+              <div style={{ fontSize:"7px", color:T.muted, letterSpacing:"0.5px", marginBottom:1 }}>EDGE</div>
+              <span style={{ fontSize:11, color:edgeColor, fontWeight:700 }}>
+                {edge === null ? "—" : (edge >= 0 ? "+" : "") + edge.toFixed(1) + " pts"}
+              </span>
+            </div>
             <div style={{ display:"flex", gap:5, alignItems:"center" }}>
               <span style={{ background:tc+"22", border:"1px solid "+tc+"44", color:tc, fontSize:"8px", fontWeight:700, padding:"2px 6px", borderRadius:2 }} title="Model confidence tier">{bet.tier}</span>
               <span style={{ background:T.purple+"1a", border:"1px solid "+T.purple+"33", color:T.purple, fontSize:"8px", padding:"2px 6px", borderRadius:2 }}>{bet.units}u</span>
             </div>
           </div>
           <div style={{ fontSize:"7px", color:T.muted, marginTop:4, opacity:0.6 }}>
-            {bet.tier} = model confidence · {bet.simPct} = model hit rate across 100k sims
+            {bet.tier} = model confidence · {bet.simPct} = model hit rate across 100k sims · edge = model% − book implied%
           </div>
         </div>
         <div style={{ display:"flex", flexDirection:"column", gap:6, alignItems:"flex-end" }}>
