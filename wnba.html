@@ -857,13 +857,14 @@ function buildWNBAParlays(simData, games) {
 
   const parlays = [];
   [2,3,4,5].forEach(function(size) {
-    buildCombos(allLegs, size).forEach(combo => {
-      const jp = combo.reduce((acc,leg) => acc * leg.prob, 1);
-      parlays.push({ legs:combo, size, jointProb:jp, jointProbPct:(jp*100).toFixed(2) });
-    });
+    buildCombos(allLegs, size)
+      .map(combo => ({ legs:combo, size, jointProb:combo.reduce((acc,leg) => acc * leg.prob, 1) }))
+      .sort((a,b) => b.jointProb - a.jointProb)
+      .slice(0,15)
+      .forEach(p => parlays.push({ ...p, jointProbPct:(p.jointProb*100).toFixed(2) }));
   });
   parlays.sort((a,b) => b.jointProb - a.jointProb);
-  return { legs: allLegs, parlays: parlays.slice(0,40) };
+  return { legs: allLegs, parlays };
 }
 
 function WNBAParlayTab({ simData, games, betLogger }) {
