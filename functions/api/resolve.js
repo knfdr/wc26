@@ -42,6 +42,20 @@ const FALLBACK_GAMES = {
   "eng-gha": { home_team:"England",     away_team:"Ghana",         completed:true, scores:[{name:"England",score:"0"},{name:"Ghana",score:"0"}],           h1Home:0, h1Away:0 },
   "pan-cro": { home_team:"Panama",      away_team:"Croatia",       completed:true, scores:[{name:"Panama",score:"0"},{name:"Croatia",score:"1"}],          h1Home:0, h1Away:0 },
   "col-cod": { home_team:"Colombia",    away_team:"DR Congo",      completed:true, scores:[{name:"Colombia",score:"1"},{name:"DR Congo",score:"0"}],       h1Home:1, h1Away:0 },
+  // 6/24 MD3 games (Groups A, B, C)
+  "cze-mex": { home_team:"Czech Republic", away_team:"Mexico",            completed:true, scores:[{name:"Czech Republic",score:"0"},{name:"Mexico",score:"3"}],          h1Home:0, h1Away:0 },
+  "rsa-kor": { home_team:"South Africa",   away_team:"South Korea",       completed:true, scores:[{name:"South Africa",score:"1"},{name:"South Korea",score:"0"}],       h1Home:0, h1Away:0 },
+  "sui-can": { home_team:"Switzerland",    away_team:"Canada",            completed:true, scores:[{name:"Switzerland",score:"3"},{name:"Canada",score:"1"}],             h1Home:1, h1Away:0 },
+  "bih-qat": { home_team:"Bosnia & Herzegovina", away_team:"Qatar",       completed:true, scores:[{name:"Bosnia & Herzegovina",score:"3"},{name:"Qatar",score:"1"}],     h1Home:2, h1Away:1 },
+  "sco-bra": { home_team:"Scotland",       away_team:"Brazil",            completed:true, scores:[{name:"Scotland",score:"0"},{name:"Brazil",score:"3"}],              h1Home:0, h1Away:2 },
+  "mor-hai": { home_team:"Morocco",        away_team:"Haiti",             completed:true, scores:[{name:"Morocco",score:"4"},{name:"Haiti",score:"2"}],               h1Home:2, h1Away:1 },
+  // 6/25 MD3 games (Groups D, E, F)
+  "tur-usa": { home_team:"Turkey",         away_team:"USA",               completed:true, scores:[{name:"Turkey",score:"3"},{name:"USA",score:"2"}],                  h1Home:2, h1Away:1 },
+  "par-aus": { home_team:"Paraguay",       away_team:"Australia",         completed:true, scores:[{name:"Paraguay",score:"0"},{name:"Australia",score:"0"}],           h1Home:0, h1Away:0 },
+  "cuw-civ": { home_team:"Curacao",        away_team:"Ivory Coast",       completed:true, scores:[{name:"Curacao",score:"0"},{name:"Ivory Coast",score:"2"}],          h1Home:0, h1Away:1 },
+  "ecu-ger": { home_team:"Ecuador",        away_team:"Germany",           completed:true, scores:[{name:"Ecuador",score:"2"},{name:"Germany",score:"1"}],              h1Home:0, h1Away:1 },
+  "tun-ned": { home_team:"Tunisia",        away_team:"Netherlands",       completed:true, scores:[{name:"Tunisia",score:"1"},{name:"Netherlands",score:"3"}],          h1Home:0, h1Away:2 },
+  "jpn-swe": { home_team:"Japan",          away_team:"Sweden",            completed:true, scores:[{name:"Japan",score:"1"},{name:"Sweden",score:"1"}],                 h1Home:1, h1Away:1 },
 };
 
 // Normalize names coming FROM the Odds API
