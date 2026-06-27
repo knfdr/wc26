@@ -1558,16 +1558,19 @@ function buildParlays(simData) {
     allLegs.push(...legs);
   });
   if (allLegs.length === 0) return { legs: allLegs, parlays: [] };
+  // Take top 15 per size independently so larger parlays aren't crowded out by
+  // 2-leg combos (which always dominate by raw joint probability).
   const parlays = [];
   for (const size of [2, 3, 4, 5]) {
     const combos = buildCombinations(allLegs, size);
-    combos.forEach(combo => {
-      const jp = combo.reduce((acc, leg) => acc * leg.prob, 1);
-      parlays.push({ legs: combo, size, jointProb: jp, jointProbPct: (jp * 100).toFixed(2) });
-    });
+    combos
+      .map(combo => ({ legs: combo, size, jointProb: combo.reduce((acc, leg) => acc * leg.prob, 1) }))
+      .sort((a, b) => b.jointProb - a.jointProb)
+      .slice(0, 15)
+      .forEach(p => parlays.push({ ...p, jointProbPct: (p.jointProb * 100).toFixed(2) }));
   }
   parlays.sort((a, b) => b.jointProb - a.jointProb);
-  return { legs: allLegs, parlays: parlays.slice(0, 40) };
+  return { legs: allLegs, parlays };
 }
 
 function ParlayTab({ simData, betLogger }) {
