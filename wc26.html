@@ -1323,6 +1323,12 @@ function fmtOdds(n) {
   if (!n && n!==0) return "—";
   return n > 0 ? "+"+n : ""+n;
 }
+function simPctToFairOdds(simPctStr) {
+  const p = parseFloat(simPctStr) / 100;
+  if (!p || p <= 0 || p >= 1) return "—";
+  if (p >= 0.5) return "-" + Math.round(p / (1 - p) * 100);
+  return "+" + Math.round((1 - p) / p * 100);
+}
 
 // ════════════════════════════════════════════════════════════════════════════════
 // SHARED BET TRACKING UI COMPONENTS
@@ -1331,17 +1337,33 @@ function fmtOdds(n) {
 // Top Bets Card — used on both game tabs and top-picks tab
 function TopBetCard({ bet, onLog, logged, T, S }) {
   const tc = tierColor(bet.tier, T);
+  const fairOdds = simPctToFairOdds(bet.simPct);
   return (
     <div style={{ ...S.card, borderLeft:"3px solid "+tc, marginBottom:8 }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:6 }}>
         <div>
           <div style={{ fontSize:9, color:T.muted, marginBottom:3 }}>{bet.homeTeam} vs {bet.awayTeam}</div>
           <div style={{ fontSize:13, fontWeight:700, color:T.text }}>{bet.market}</div>
-          <div style={{ display:"flex", gap:10, marginTop:5, flexWrap:"wrap" }}>
-            <span style={{ fontSize:10, color:tc, fontWeight:700 }}>{bet.simPct}</span>
-            <span style={{ fontSize:10, color:T.muted }}>{bet.bookOdds}</span>
-            <span style={{ background:tc+"22", border:"1px solid "+tc+"44", color:tc, fontSize:"8px", fontWeight:700, padding:"1px 6px", borderRadius:2 }}>{bet.tier}</span>
-            <span style={{ background:T.purple+"1a", border:"1px solid "+T.purple+"33", color:T.purple, fontSize:"8px", padding:"1px 6px", borderRadius:2 }}>{bet.units}u</span>
+          <div style={{ display:"flex", gap:12, marginTop:6, flexWrap:"wrap", alignItems:"center" }}>
+            <div>
+              <div style={{ fontSize:"7px", color:T.muted, letterSpacing:"0.5px", marginBottom:1 }}>MODEL HIT %</div>
+              <span style={{ fontSize:12, color:tc, fontWeight:700 }}>{bet.simPct}</span>
+            </div>
+            <div>
+              <div style={{ fontSize:"7px", color:T.muted, letterSpacing:"0.5px", marginBottom:1 }}>FAIR ODDS</div>
+              <span style={{ fontSize:11, color:T.text, fontWeight:600 }}>{fairOdds}</span>
+            </div>
+            <div>
+              <div style={{ fontSize:"7px", color:T.muted, letterSpacing:"0.5px", marginBottom:1 }}>BOOK ODDS</div>
+              <span style={{ fontSize:11, color:T.muted }}>{bet.bookOdds}</span>
+            </div>
+            <div style={{ display:"flex", gap:5, alignItems:"center" }}>
+              <span style={{ background:tc+"22", border:"1px solid "+tc+"44", color:tc, fontSize:"8px", fontWeight:700, padding:"2px 6px", borderRadius:2 }} title="Model confidence tier">{bet.tier}</span>
+              <span style={{ background:T.purple+"1a", border:"1px solid "+T.purple+"33", color:T.purple, fontSize:"8px", padding:"2px 6px", borderRadius:2 }}>{bet.units}u</span>
+            </div>
+          </div>
+          <div style={{ fontSize:"7px", color:T.muted, marginTop:4, opacity:0.6 }}>
+            {bet.tier} = model confidence · {bet.simPct} = model hit rate across 100k sims
           </div>
         </div>
         <div style={{ display:"flex", flexDirection:"column", gap:6, alignItems:"flex-end" }}>
@@ -1352,7 +1374,6 @@ function TopBetCard({ bet, onLog, logged, T, S }) {
           >
             {logged ? "✓ LOGGED" : "+ LOG BET"}
           </button>
-          {bet.sport === "WC" && <KalshiButton bet={bet} onLog={onLog} logged={logged} />}
         </div>
       </div>
     </div>
@@ -1369,7 +1390,7 @@ function BetHistoryRow({ bet, T, S }) {
       <div style={{ flex:2, fontSize:10, color:T.text }}>{bet.market}</div>
       <div style={{ fontSize:9, color:T.muted, flex:1 }}>{bet.homeTeam} vs {bet.awayTeam}</div>
       <div style={{ fontSize:9, color:tc }}>{bet.tier} · {bet.units}u</div>
-      <div style={{ fontSize:10, color:T.muted }}>{bet.simPct}</div>
+      <div style={{ fontSize:10, color:T.muted }}>{bet.simPct} <span style={{ fontSize:8, color:T.muted, opacity:0.6 }}>fair {simPctToFairOdds(bet.simPct)}</span></div>
       <div style={{ minWidth:50, textAlign:"right" }}>
         <span style={{ background:rc+"22", border:"1px solid "+rc+"44", color:rc, fontSize:"8px", fontWeight:700, padding:"2px 6px", borderRadius:2 }}>
           {bet.result === "pending" ? "PENDING" : bet.result === "win" ? "WIN" : bet.result === "loss" ? "LOSS" : "PUSH"}
@@ -1942,8 +1963,8 @@ function WCTopPicksTab({ simData, betLogger }) {
                 <span style={{ minWidth:120, color:T.muted }}>DATE</span>
                 <span style={{ flex:2, color:T.muted }}>MARKET</span>
                 <span style={{ flex:1, color:T.muted }}>MATCHUP</span>
-                <span style={{ color:T.muted }}>TIER</span>
-                <span style={{ color:T.muted }}>SIM %</span>
+                <span style={{ color:T.muted }}>CONFIDENCE</span>
+                <span style={{ color:T.muted }}>MODEL HIT %</span>
                 <span style={{ minWidth:50, textAlign:"right", color:T.muted }}>RESULT</span>
               </div>
               {betLogger.bets.filter(b=>b.sport==="WC").slice().reverse().map(b=>(
