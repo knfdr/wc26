@@ -1998,6 +1998,7 @@ function WCTopPicksTab({ simData, betLogger }) {
     const agg = simData[m.id];
     if (!agg) return;
     const gameObj = { id: m.id, homeTeam: m.homeTeam, awayTeam: m.awayTeam,
+      homeOdds: m.homeOdds, awayOdds: m.awayOdds,
       overUnderLine: m.overUnderLine, overOdds: m.overOdds, underOdds: m.underOdds };
     extractTopBets({ ...agg, overUnderLine: m.overUnderLine, overOdds: m.overOdds, underOdds: m.underOdds }, gameObj, "WC")
       .forEach(b => allBets.push(b));
@@ -2149,7 +2150,7 @@ function App() {
     MATCHES.forEach(m => {
       const agg = simData[m.id];
       if (!agg) return;
-      const gameObj = { id:m.id, homeTeam:m.homeTeam, awayTeam:m.awayTeam, overUnderLine:m.overUnderLine, overOdds:m.overOdds, underOdds:m.underOdds };
+      const gameObj = { id:m.id, homeTeam:m.homeTeam, awayTeam:m.awayTeam, homeOdds:m.homeOdds, awayOdds:m.awayOdds, overUnderLine:m.overUnderLine, overOdds:m.overOdds, underOdds:m.underOdds };
       extractTopBets({...agg, overUnderLine:m.overUnderLine, overOdds:m.overOdds, underOdds:m.underOdds}, gameObj, "WC")
         .forEach(b => allBets.push(b));
     });
@@ -2160,7 +2161,7 @@ function App() {
   const topBetCount = MATCHES.reduce((acc,m) => {
     const agg = simData[m.id];
     if (!agg) return acc;
-    const gameObj = { id:m.id, homeTeam:m.homeTeam, awayTeam:m.awayTeam, overUnderLine:m.overUnderLine };
+    const gameObj = { id:m.id, homeTeam:m.homeTeam, awayTeam:m.awayTeam, homeOdds:m.homeOdds, awayOdds:m.awayOdds, overUnderLine:m.overUnderLine };
     return acc + extractTopBets({...agg,overUnderLine:m.overUnderLine},gameObj,"WC").length;
   },0);
 
