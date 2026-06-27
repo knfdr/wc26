@@ -1434,10 +1434,7 @@ function TopBetCard({ bet, onLog, logged, T, S }) {
                 {edge === null ? "—" : (edge >= 0 ? "+" : "") + edge.toFixed(1) + " pts"}
               </span>
             </div>
-            <div style={{ display:"flex", gap:5, alignItems:"center" }}>
-              <span style={{ background:tc+"22", border:"1px solid "+tc+"44", color:tc, fontSize:"8px", fontWeight:700, padding:"2px 6px", borderRadius:2 }} title="Model confidence tier">{bet.tier}</span>
-              <span style={{ background:T.purple+"1a", border:"1px solid "+T.purple+"33", color:T.purple, fontSize:"8px", padding:"2px 6px", borderRadius:2 }}>{bet.units}u</span>
-            </div>
+            <span style={{ background:T.purple+"1a", border:"1px solid "+T.purple+"33", color:T.purple, fontSize:"8px", padding:"2px 6px", borderRadius:2 }}>{bet.units}u</span>
           </div>
           <div style={{ fontSize:"7px", color:T.muted, marginTop:4, opacity:0.6 }}>
             {bet.tier} = model confidence · {bet.simPct} = model hit rate across 100k sims · edge = model% − book implied%
