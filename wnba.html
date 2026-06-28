@@ -1056,6 +1056,41 @@ function App() {
 
   const betLogger = useBetLogger();
 
+  const autoRanRef = useRef(false);
+
+  // Auto-sim all games sequentially once games are loaded; skip cached results
+  useEffect(() => {
+    if (!games.length || autoRanRef.current) return;
+    autoRanRef.current = true;
+    const cached = (() => { try { return JSON.parse(localStorage.getItem(SIM_CACHE_KEY) || "{}"); } catch(e) { return {}; } })();
+    const needsSim = games.filter(g => {
+      const key = g.homeTeam + "|" + g.awayTeam;
+      return (!TEAM_PARAMS[g.homeTeam] || !TEAM_PARAMS[g.awayTeam]) ? false : !cached[key];
+    });
+    if (!needsSim.length) return;
+    let idx = 0;
+    function runNext() {
+      if (idx >= needsSim.length) return;
+      const game = needsSim[idx++];
+      const key = game.homeTeam + "|" + game.awayTeam;
+      setRunningId(key);
+      setTimeout(() => {
+        const result = runWNBASim(game.homeTeam, game.awayTeam);
+        if (result) {
+          setSimData(prev => {
+            const next = { ...prev, [key]: result };
+            localStorage.setItem(SIM_CACHE_KEY, JSON.stringify(next));
+            return next;
+          });
+          setRunCounts(prev => ({ ...prev, [key]: 1 }));
+        }
+        setRunningId(null);
+        setTimeout(runNext, 30);
+      }, 50);
+    }
+    setTimeout(runNext, 200);
+  }, [games]);
+
   // App-level auto-log
   const appAutoLoggedRef = useRef(false);
   const allSimsReady = games.length > 0 && games.every(g => simData[g.homeTeam + "|" + g.awayTeam]);
@@ -1082,14 +1117,6 @@ function App() {
         .filter(g => new Date(g.commence_time).toLocaleDateString("en-CA") === today)
         .map(parseOddsGame).filter(Boolean);
       setGames(parsed);
-      if (parsed.length > 0 && activeTab === "top_picks") {
-        // auto-sim uncached games
-        const uncached = parsed.filter(g => !simData[g.homeTeam + "|" + g.awayTeam]
-          && TEAM_PARAMS[g.homeTeam] && TEAM_PARAMS[g.awayTeam]);
-        if (uncached.length > 0) {
-          runAutoSim(uncached, 0);
-        }
-      }
     } catch(e) { setGamesError(e.message); }
     setLoadingGames(false);
   }
