@@ -70,6 +70,8 @@ const FALLBACK_GAMES = {
   "cod-uzb": { home_team:"DR Congo",       away_team:"Uzbekistan",        completed:true, scores:[{name:"DR Congo",score:"3"},{name:"Uzbekistan",score:"1"}],           h1Home:1, h1Away:0 },
   "alg-aut": { home_team:"Algeria",        away_team:"Austria",           completed:true, scores:[{name:"Algeria",score:"3"},{name:"Austria",score:"3"}],               h1Home:2, h1Away:1 },
   "jor-arg": { home_team:"Jordan",         away_team:"Argentina",         completed:true, scores:[{name:"Jordan",score:"1"},{name:"Argentina",score:"3"}],              h1Home:0, h1Away:2 },
+  // 6/28 R32
+  "rsa-can": { home_team:"South Africa",   away_team:"Canada",            completed:true, scores:[{name:"South Africa",score:"0"},{name:"Canada",score:"1"}],            h1Home:0, h1Away:0 },
 };
 
 // Normalize names coming FROM the Odds API
