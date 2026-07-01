@@ -1094,6 +1094,24 @@ function App() {
   // App-level auto-log
   const appAutoLoggedRef = useRef(false);
   const allSimsReady = games.length > 0 && games.every(g => simData[g.homeTeam + "|" + g.awayTeam]);
+
+  // Write parlay legs to localStorage for cross-sport parlay page
+  const xsportWrittenRef = useRef(false);
+  useEffect(() => {
+    if (!allSimsReady || xsportWrittenRef.current) return;
+    xsportWrittenRef.current = true;
+    const legs = [];
+    games.forEach(game => {
+      const key = game.homeTeam + "|" + game.awayTeam;
+      const agg = simData[key];
+      if (!agg) return;
+      extractTopBets(agg, game).forEach(b => {
+        legs.push({ matchId: key, match: b.awayTeam + " @ " + b.homeTeam,
+          market: b.market, prob: parseFloat(b.simPct) / 100, probPct: b.simPct, tier: b.tier, sport: "WNBA" });
+      });
+    });
+    try { localStorage.setItem("sharp_xsport_legs_wnba_" + new Date().toLocaleDateString("en-CA"), JSON.stringify({ legs, ts: Date.now() })); } catch(e) {}
+  }, [allSimsReady]);
   useEffect(() => {
     if (!allSimsReady || !betLogger.loaded || appAutoLoggedRef.current) return;
     const allBets = [];

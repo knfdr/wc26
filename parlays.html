@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sharp Sim — Cross-Sport Parlays</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100vh;background:#070b14;font-family:'IBM Plex Mono','Courier New',monospace;color:#dde5f0;zoom:1.2}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:#0c1526}
+::-webkit-scrollbar-thumb{background:#1a2a3e;border-radius:3px}
+#root{min-height:100vh}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const T = {
+  bg:"#070b14", navy:"#0c1526", card:"#101d30", border:"#1a2a3e",
+  text:"#dde5f0", muted:"#4b6280", gold:"#e8c547", green:"#22c55e",
+  red:"#ef4444", purple:"#a78bfa", blue:"#38bdf8",
+};
+
+const SPORT_META = {
+  WC:   { label:"FIFA World Cup", icon:"⚽", color:T.gold,   key:"wc"   },
+  MLB:  { label:"MLB Baseball",   icon:"⚾", color:T.green,  key:"mlb"  },
+  WNBA: { label:"WNBA",          icon:"🏀", color:"#e879f9", key:"wnba" },
+};
+
+const SIZE_LABELS = { 2:"PARLAY", 3:"3-LEG", 4:"4-LEG", 5:"5-LEG" };
+
+const S = {
+  sec:  { marginBottom:20 },
+  card: { background:T.card, border:`1px solid ${T.border}`, borderRadius:6, padding:"14px 16px" },
+  secLabel: { fontSize:9, letterSpacing:"3px", color:T.muted, textTransform:"uppercase", marginBottom:10, paddingBottom:6, borderBottom:`1px solid ${T.border}` },
+  disclaimer: { fontSize:9, color:"#2a3a52", lineHeight:1.8, marginTop:16 },
+};
+
+function formatAge(ts) {
+  const mins = Math.floor((Date.now() - ts) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return mins + "m ago";
+  return Math.floor(mins / 60) + "h " + (mins % 60) + "m ago";
+}
+
+function loadLegs(sport) {
+  const today = new Date().toLocaleDateString("en-CA");
+  try {
+    const raw = localStorage.getItem("sharp_xsport_legs_" + SPORT_META[sport].key + "_" + today);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch(e) { return null; }
+}
+
+function buildCombinations(legs, size) {
+  const results = [];
+  function combine(start, current) {
+    if (current.length === size) { results.push([...current]); return; }
+    for (let i = start; i < legs.length; i++) {
+      if (!current.some(l => l.matchId === legs[i].matchId)) {
+        current.push(legs[i]); combine(i + 1, current); current.pop();
+      }
+    }
+  }
+  combine(0, []);
+  return results;
+}
+
+function buildParlays(allLegs) {
+  if (allLegs.length === 0) return [];
+  const parlays = [];
+  for (const size of [2, 3, 4, 5]) {
+    buildCombinations(allLegs, size)
+      .map(combo => ({ legs: combo, size, jointProb: combo.reduce((acc, leg) => acc * leg.prob, 1) }))
+      .sort((a, b) => b.jointProb - a.jointProb)
+      .slice(0, 15)
+      .forEach(p => parlays.push({ ...p, jointProbPct: (p.jointProb * 100).toFixed(2) }));
+  }
+  parlays.sort((a, b) => b.jointProb - a.jointProb);
+  return parlays;
+}
+
+function tierColor(tier) {
+  return tier === "LOCK" ? T.red : tier === "HIGH" ? T.green : tier === "CONSIDER" ? "#f97316" : T.gold;
+}
+
+function App() {
+  const [sportData, setSportData] = useState({ WC: null, MLB: null, WNBA: null });
+  const [filterSize, setFilterSize] = useState("all");
+  const [filterSport, setFilterSport] = useState("all");
+  const intervalRef = useRef(null);
+
+  function refresh() {
+    setSportData({
+      WC:   loadLegs("WC"),
+      MLB:  loadLegs("MLB"),
+      WNBA: loadLegs("WNBA"),
+    });
+  }
+
+  useEffect(() => {
+    refresh();
+    intervalRef.current = setInterval(refresh, 5000);
+    return () => clearInterval(intervalRef.current);
+  }, []);
+
+  const loadedSports = Object.keys(sportData).filter(s => sportData[s] !== null);
+  const pendingSports = Object.keys(sportData).filter(s => sportData[s] === null);
+
+  // Collect all legs, optionally filtered by sport
+  const allLegs = [];
+  Object.keys(sportData).forEach(sport => {
+    if (!sportData[sport]) return;
+    sportData[sport].legs.forEach(leg => allLegs.push(leg));
+  });
+
+  const filteredLegs = filterSport === "all" ? allLegs : allLegs.filter(l => l.sport === filterSport);
+  const parlays = buildParlays(filteredLegs);
+  const filtered = filterSize === "all" ? parlays : parlays.filter(p => p.size === parseInt(filterSize));
+
+  return (
+    <div style={{ background:T.bg, minHeight:"100vh" }}>
+      {/* Header */}
+      <div style={{ background:"linear-gradient(160deg,#0c1526 0%,#070b14 100%)", borderBottom:`1px solid ${T.border}`, padding:"32px 24px 28px", textAlign:"center", position:"relative", overflow:"hidden" }}>
+        <div style={{ position:"absolute", top:0, left:0, right:0, bottom:0, background:"radial-gradient(ellipse at 50% -10%,rgba(167,139,250,0.07) 0%,transparent 65%)", pointerEvents:"none" }} />
+        <div style={{ display:"inline-block", background:"rgba(167,139,250,0.1)", border:"1px solid rgba(167,139,250,0.25)", color:T.purple, fontSize:9, letterSpacing:"3px", padding:"3px 12px", borderRadius:2, marginBottom:14 }}>
+          ⚡ SHARP SIM · CROSS-SPORT PARLAYS
+        </div>
+        <div style={{ fontSize:"clamp(24px,4vw,38px)", fontWeight:700, letterSpacing:"-1px", marginBottom:6, background:"linear-gradient(135deg,#a78bfa 0%,#dde5f0 60%)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", backgroundClip:"text" }}>
+          Multi-Sport Parlay Builder
+        </div>
+        <div style={{ fontSize:10, color:T.muted, letterSpacing:"1px" }}>MLB · WNBA · FIFA World Cup 2026 · Combined signal pool</div>
+        <a href="/" style={{ display:"inline-block", marginTop:12, fontSize:9, color:T.muted, letterSpacing:"1px", borderBottom:`1px solid ${T.border}`, paddingBottom:1 }}>← Back to Sharp Sim</a>
+      </div>
+
+      <div style={{ maxWidth:960, margin:"0 auto", padding:"28px 16px 60px" }}>
+
+        {/* Sport status */}
+        <div style={S.sec}>
+          <div style={S.secLabel}>Data Sources</div>
+          <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+            {Object.keys(SPORT_META).map(sport => {
+              const meta = SPORT_META[sport];
+              const data = sportData[sport];
+              const ready = data !== null;
+              return (
+                <div key={sport} style={{ ...S.card, flex:"1 1 200px", borderLeft:`3px solid ${ready ? meta.color : T.border}`, opacity: ready ? 1 : 0.6 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+                    <span style={{ fontSize:18 }}>{meta.icon}</span>
+                    <div>
+                      <div style={{ fontSize:10, fontWeight:700, color: ready ? meta.color : T.muted }}>{meta.label}</div>
+                      <div style={{ fontSize:9, color:T.muted }}>
+                        {ready
+                          ? `${data.legs.length} legs · updated ${formatAge(data.ts)}`
+                          : "Waiting for simulations…"}
+                      </div>
+                    </div>
+                    <div style={{ marginLeft:"auto", fontSize:16 }}>{ready ? "✓" : "⏳"}</div>
+                  </div>
+                  {!ready && (
+                    <div style={{ fontSize:9, color:T.muted, lineHeight:1.6 }}>
+                      Open <a href={`${meta.key === "wc" ? "wc26" : meta.key}.html`} style={{ color:meta.color }}>{meta.label}</a> to run simulations, then return here.
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {allLegs.length === 0 ? (
+          <div style={{ ...S.card, textAlign:"center", padding:"48px 24px", color:T.muted, lineHeight:2 }}>
+            <div style={{ fontSize:28, marginBottom:12 }}>⏳</div>
+            <div style={{ fontSize:12, fontWeight:700, marginBottom:8 }}>No simulations loaded yet</div>
+            <div style={{ fontSize:10 }}>
+              Visit <a href="mlb.html" style={{ color:T.green }}>MLB</a>,{" "}
+              <a href="wnba.html" style={{ color:"#e879f9" }}>WNBA</a>, and{" "}
+              <a href="wc26.html" style={{ color:T.gold }}>WC 2026</a> pages to run simulations.
+              This page updates automatically every 5 seconds as they complete.
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Builder header */}
+            <div style={S.sec}>
+              <div style={{ ...S.card, background:"#0a1020", border:`1px solid ${T.purple}33` }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
+                  <div>
+                    <div style={{ fontSize:11, color:T.purple, fontWeight:700, letterSpacing:"1px" }}>CROSS-SPORT PARLAY BUILDER</div>
+                    <div style={{ fontSize:10, color:T.muted, marginTop:3 }}>
+                      {filteredLegs.length} qualifying legs across {new Set(filteredLegs.map(l => l.matchId)).size} games · {loadedSports.length} sport{loadedSports.length !== 1 ? "s" : ""} loaded · 2/3/4/5-leg combos
+                    </div>
+                  </div>
+                  <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                    <span style={{ background:T.red+"22", border:`1px solid ${T.red}44`, color:T.red, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>LOCK ≥85%</span>
+                    <span style={{ background:T.green+"22", border:`1px solid ${T.green}44`, color:T.green, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>HIGH ≥70%</span>
+                    <span style={{ background:T.gold+"22", border:`1px solid ${T.gold}44`, color:T.gold, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>LEAN &gt;52%</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Sport filter */}
+            <div style={{ ...S.sec, display:"flex", gap:6, flexWrap:"wrap", alignItems:"center" }}>
+              <div style={{ fontSize:9, color:T.muted, letterSpacing:"2px", marginRight:4 }}>SPORT</div>
+              {["all", "WC", "MLB", "WNBA"].map(v => {
+                const meta = v !== "all" ? SPORT_META[v] : null;
+                const active = filterSport === v;
+                const ac = meta ? meta.color : T.purple;
+                return (
+                  <button key={v} onClick={() => setFilterSport(v)} style={{ padding:"5px 12px", fontSize:10, fontWeight:700, letterSpacing:"0.5px", background: active ? ac : T.card, color: active ? "#070b14" : T.muted, border:`1px solid ${active ? ac : T.border}`, borderRadius:4, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
+                    {v === "all" ? "ALL SPORTS" : (meta.icon + " " + v)}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Signal pool */}
+            <div style={S.sec}>
+              <div style={S.secLabel}>Signal Pool ({filteredLegs.length} qualifying legs)</div>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                {filteredLegs.map((leg, i) => {
+                  const tc = tierColor(leg.tier);
+                  const sm = SPORT_META[leg.sport];
+                  return (
+                    <div key={i} style={{ background:T.card, border:`1px solid ${T.border}`, borderLeft:`3px solid ${tc}`, borderRadius:4, padding:"5px 10px", fontSize:10, display:"flex", alignItems:"center", gap:6 }}>
+                      <span style={{ fontSize:12 }}>{sm.icon}</span>
+                      <span style={{ background:tc+"22", color:tc, fontSize:"8px", fontWeight:700, padding:"1px 5px", borderRadius:2 }}>{leg.tier}</span>
+                      <span style={{ color:T.muted, fontSize:9 }}>{leg.match} ·</span>
+                      <span style={{ color:T.text, fontWeight:700 }}>{leg.market}</span>
+                      <span style={{ color:tc, marginLeft:2 }}>{leg.probPct}%</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Size filter */}
+            <div style={{ ...S.sec, display:"flex", gap:6, flexWrap:"wrap" }}>
+              {["all","2","3","4","5"].map(v => (
+                <button key={v} onClick={() => setFilterSize(v)} style={{ padding:"6px 14px", fontSize:10, fontWeight:700, letterSpacing:"1px", background:filterSize===v?T.gold:T.card, color:filterSize===v?"#070b14":T.muted, border:`1px solid ${filterSize===v?T.gold:T.border}`, borderRadius:4, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
+                  {v === "all" ? "ALL" : v+"-LEG"}
+                </button>
+              ))}
+              <div style={{ marginLeft:"auto", fontSize:10, color:T.muted, alignSelf:"center" }}>Showing {filtered.length} parlays</div>
+            </div>
+
+            {filtered.length === 0 && (
+              <div style={{ ...S.card, textAlign:"center", padding:32, color:T.muted, fontSize:11, marginTop:12 }}>
+                Not enough qualifying signals for {filterSize}-leg parlays with current sport filter.
+              </div>
+            )}
+
+            {filtered.map((parlay, pi) => {
+              const jp = parlay.jointProb;
+              const fairOdds = jp > 0 ? (jp < 0.5 ? "+" + Math.round((1/jp-1)*100) : "-" + Math.round((jp/(1-jp))*100)) : "—";
+              const rankColor = pi===0?T.gold:pi===1?"#94a3b8":pi===2?"#cd7f32":T.border;
+              const sports = [...new Set(parlay.legs.map(l => l.sport))];
+              return (
+                <div key={pi} style={{ ...S.card, marginTop:10, borderLeft:`3px solid ${pi<3?rankColor:T.border}` }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10, flexWrap:"wrap", gap:6 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                      <div style={{ background:pi<3?rankColor+"22":T.navy, border:`1px solid ${pi<3?rankColor:T.border}`, color:pi<3?rankColor:T.muted, fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:3 }}>#{pi+1}</div>
+                      <div style={{ background:T.purple+"1a", border:`1px solid ${T.purple}33`, color:T.purple, fontSize:9, padding:"2px 8px", borderRadius:3, letterSpacing:"1px" }}>{SIZE_LABELS[parlay.size]}</div>
+                      {sports.map(s => (
+                        <div key={s} style={{ background:SPORT_META[s].color+"1a", border:`1px solid ${SPORT_META[s].color}33`, color:SPORT_META[s].color, fontSize:9, padding:"2px 7px", borderRadius:3 }}>
+                          {SPORT_META[s].icon} {s}
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ textAlign:"right" }}>
+                      <div style={{ fontSize:22, fontWeight:700, color:jp>0.4?T.green:jp>0.2?T.gold:T.red }}>{parlay.jointProbPct}%</div>
+                      <div style={{ fontSize:9, color:T.muted }}>joint probability</div>
+                    </div>
+                  </div>
+                  <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+                    {parlay.legs.map((leg, li) => {
+                      const tc = tierColor(leg.tier);
+                      const sm = SPORT_META[leg.sport];
+                      return (
+                        <div key={li} style={{ display:"flex", alignItems:"center", gap:8, background:T.navy, borderRadius:4, padding:"7px 10px", borderLeft:`2px solid ${tc}` }}>
+                          <span style={{ fontSize:13 }}>{sm.icon}</span>
+                          <span style={{ background:tc+"22", color:tc, fontSize:"8px", fontWeight:700, padding:"1px 5px", borderRadius:2, minWidth:32, textAlign:"center" }}>{leg.tier}</span>
+                          <div style={{ fontSize:9, color:T.muted, minWidth:110 }}>{leg.match}</div>
+                          <div style={{ flex:1, fontSize:11, color:T.text, fontWeight:600 }}>{leg.market}</div>
+                          <div style={{ fontSize:11, color:tc, fontWeight:700, minWidth:44, textAlign:"right" }}>{leg.probPct}%</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ display:"flex", gap:16, marginTop:10, flexWrap:"wrap" }}>
+                    <div><div style={{ fontSize:9, color:T.muted }}>JOINT PROB</div><div style={{ fontSize:13, fontWeight:700 }}>{parlay.jointProbPct}%</div></div>
+                    <div><div style={{ fontSize:9, color:T.muted }}>FAIR ODDS (no vig)</div><div style={{ fontSize:13, fontWeight:700, color:T.gold }}>{fairOdds}</div></div>
+                    <div><div style={{ fontSize:9, color:T.muted }}>LEGS</div><div style={{ fontSize:13, fontWeight:700, color:T.purple }}>{parlay.size}</div></div>
+                    <div><div style={{ fontSize:9, color:T.muted }}>SPORTS</div><div style={{ fontSize:13, fontWeight:700 }}>{sports.map(s => SPORT_META[s].icon).join(" ")}</div></div>
+                  </div>
+                </div>
+              );
+            })}
+
+            <div style={{ ...S.disclaimer, marginTop:20 }}>
+              Parlay legs assumed independent across matches. Correlated same-match legs excluded by design. Fair odds shown before bookmaker vig (~10-15%). Not professional betting advice. Gamble responsibly.
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

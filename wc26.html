@@ -2058,6 +2058,20 @@ function App() {
   const allSimsReady = MATCHES.every(m => !!simData[m.id]);
   const totalSimsLoaded = MATCHES.filter(m => !!simData[m.id]).length;
 
+  // Write parlay legs to localStorage for cross-sport parlay page
+  const xsportWrittenRef = useRef(false);
+  useEffect(() => {
+    if (!allSimsReady || xsportWrittenRef.current) return;
+    xsportWrittenRef.current = true;
+    const legs = [];
+    MATCHES.forEach(m => {
+      extractLegs(m.id, simData[m.id], m.homeTeam, m.awayTeam).forEach(leg => {
+        legs.push({ ...leg, sport: "WC" });
+      });
+    });
+    try { localStorage.setItem("sharp_xsport_legs_wc_" + new Date().toLocaleDateString("en-CA"), JSON.stringify({ legs, ts: Date.now() })); } catch(e) {}
+  }, [allSimsReady]);
+
   // Auto-log at App level so it fires regardless of which tab is active
   const appAutoLoggedRef = useRef(false);
   useEffect(() => {
