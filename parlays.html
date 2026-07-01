@@ -16,6 +16,8 @@ html,body{min-height:100vh;background:#070b14;font-family:'IBM Plex Mono','Couri
 ::-webkit-scrollbar-track{background:#0c1526}
 ::-webkit-scrollbar-thumb{background:#1a2a3e;border-radius:3px}
 #root{min-height:100vh}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
@@ -92,28 +94,72 @@ function tierColor(tier) {
   return tier === "LOCK" ? T.red : tier === "HIGH" ? T.green : tier === "CONSIDER" ? "#f97316" : T.gold;
 }
 
+const SPORT_PAGES = { WC: "wc26.html", MLB: "mlb.html", WNBA: "wnba.html" };
+
 function App() {
   const [sportData, setSportData] = useState({ WC: null, MLB: null, WNBA: null });
+  const [loading, setLoading] = useState({ WC: false, MLB: false, WNBA: false });
   const [filterSize, setFilterSize] = useState("all");
   const [filterSport, setFilterSport] = useState("all");
   const intervalRef = useRef(null);
+  const iframesRef = useRef({});
 
   function refresh() {
-    setSportData({
-      WC:   loadLegs("WC"),
-      MLB:  loadLegs("MLB"),
-      WNBA: loadLegs("WNBA"),
+    setSportData(prev => {
+      const next = { ...prev };
+      let changed = false;
+      Object.keys(SPORT_META).forEach(sport => {
+        if (next[sport] === null) {
+          const d = loadLegs(sport);
+          if (d !== null) { next[sport] = d; changed = true; }
+        }
+      });
+      return changed ? next : prev;
     });
   }
 
+  // Spawn a hidden iframe for a sport that hasn't run yet
+  function spawnIframe(sport) {
+    if (iframesRef.current[sport]) return;
+    setLoading(prev => ({ ...prev, [sport]: true }));
+    const iframe = document.createElement("iframe");
+    iframe.src = SPORT_PAGES[sport];
+    iframe.style.cssText = "position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;border:none;";
+    document.body.appendChild(iframe);
+    iframesRef.current[sport] = iframe;
+  }
+
+  // Remove iframe once data is loaded
   useEffect(() => {
-    refresh();
-    intervalRef.current = setInterval(refresh, 5000);
-    return () => clearInterval(intervalRef.current);
+    Object.keys(iframesRef.current).forEach(sport => {
+      if (sportData[sport] !== null && iframesRef.current[sport]) {
+        document.body.removeChild(iframesRef.current[sport]);
+        delete iframesRef.current[sport];
+        setLoading(prev => ({ ...prev, [sport]: false }));
+      }
+    });
+  }, [sportData]);
+
+  useEffect(() => {
+    // Initial load from localStorage
+    const initial = { WC: loadLegs("WC"), MLB: loadLegs("MLB"), WNBA: loadLegs("WNBA") };
+    setSportData(initial);
+    // Spawn iframes for any sport with no data yet
+    Object.keys(SPORT_META).forEach(sport => {
+      if (initial[sport] === null) spawnIframe(sport);
+    });
+    intervalRef.current = setInterval(refresh, 2000);
+    return () => {
+      clearInterval(intervalRef.current);
+      Object.values(iframesRef.current).forEach(iframe => {
+        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+      });
+    };
   }, []);
 
   const loadedSports = Object.keys(sportData).filter(s => sportData[s] !== null);
   const pendingSports = Object.keys(sportData).filter(s => sportData[s] === null);
+  const anyLoading = pendingSports.length > 0;
 
   // Collect all legs, optionally filtered by sport
   const allLegs = [];
@@ -151,23 +197,24 @@ function App() {
               const meta = SPORT_META[sport];
               const data = sportData[sport];
               const ready = data !== null;
+              const isLoading = loading[sport];
               return (
-                <div key={sport} style={{ ...S.card, flex:"1 1 200px", borderLeft:`3px solid ${ready ? meta.color : T.border}`, opacity: ready ? 1 : 0.6 }}>
-                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+                <div key={sport} style={{ ...S.card, flex:"1 1 200px", borderLeft:`3px solid ${ready ? meta.color : isLoading ? meta.color+"66" : T.border}` }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom: isLoading ? 8 : 0 }}>
                     <span style={{ fontSize:18 }}>{meta.icon}</span>
-                    <div>
-                      <div style={{ fontSize:10, fontWeight:700, color: ready ? meta.color : T.muted }}>{meta.label}</div>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:10, fontWeight:700, color: ready ? meta.color : isLoading ? meta.color+"99" : T.muted }}>{meta.label}</div>
                       <div style={{ fontSize:9, color:T.muted }}>
-                        {ready
-                          ? `${data.legs.length} legs · updated ${formatAge(data.ts)}`
-                          : "Waiting for simulations…"}
+                        {ready ? `${data.legs.length} legs · updated ${formatAge(data.ts)}`
+                          : isLoading ? "Running simulations…"
+                          : "Queued"}
                       </div>
                     </div>
-                    <div style={{ marginLeft:"auto", fontSize:16 }}>{ready ? "✓" : "⏳"}</div>
+                    <div style={{ fontSize:15 }}>{ready ? "✓" : isLoading ? "⚙️" : "⏳"}</div>
                   </div>
-                  {!ready && (
-                    <div style={{ fontSize:9, color:T.muted, lineHeight:1.6 }}>
-                      Open <a href={`${meta.key === "wc" ? "wc26" : meta.key}.html`} style={{ color:meta.color }}>{meta.label}</a> to run simulations, then return here.
+                  {isLoading && !ready && (
+                    <div style={{ height:3, background:T.border, borderRadius:2, overflow:"hidden" }}>
+                      <div style={{ height:"100%", background:`linear-gradient(90deg, transparent, ${meta.color}, transparent)`, borderRadius:2, animation:"shimmer 1.4s infinite", backgroundSize:"200% 100%" }} />
                     </div>
                   )}
                 </div>
@@ -178,13 +225,11 @@ function App() {
 
         {allLegs.length === 0 ? (
           <div style={{ ...S.card, textAlign:"center", padding:"48px 24px", color:T.muted, lineHeight:2 }}>
-            <div style={{ fontSize:28, marginBottom:12 }}>⏳</div>
-            <div style={{ fontSize:12, fontWeight:700, marginBottom:8 }}>No simulations loaded yet</div>
+            <div style={{ fontSize:28, marginBottom:12, display:"inline-block", animation:"spin 1.8s linear infinite" }}>⚙️</div>
+            <div style={{ fontSize:12, fontWeight:700, marginBottom:8, color:T.text }}>Running simulations…</div>
             <div style={{ fontSize:10 }}>
-              Visit <a href="mlb.html" style={{ color:T.green }}>MLB</a>,{" "}
-              <a href="wnba.html" style={{ color:"#e879f9" }}>WNBA</a>, and{" "}
-              <a href="wc26.html" style={{ color:T.gold }}>WC 2026</a> pages to run simulations.
-              This page updates automatically every 5 seconds as they complete.
+              Loading {pendingSports.map(s => SPORT_META[s].icon + " " + SPORT_META[s].label).join(", ")} in the background.
+              Parlays will appear automatically once ready.
             </div>
           </div>
         ) : (
