@@ -141,13 +141,13 @@ function App() {
   }, [sportData]);
 
   useEffect(() => {
-    // Initial load from localStorage
-    const initial = { WC: loadLegs("WC"), MLB: loadLegs("MLB"), WNBA: loadLegs("WNBA") };
-    setSportData(initial);
-    // Spawn iframes for any sport with no data yet
+    // Always clear stale legs and re-run all sport sims fresh
+    const today = new Date().toLocaleDateString("en-CA");
     Object.keys(SPORT_META).forEach(sport => {
-      if (initial[sport] === null) spawnIframe(sport);
+      localStorage.removeItem("sharp_xsport_legs_" + SPORT_META[sport].key + "_" + today);
     });
+    setSportData({ WC: null, MLB: null, WNBA: null });
+    Object.keys(SPORT_META).forEach(sport => spawnIframe(sport));
     intervalRef.current = setInterval(refresh, 2000);
     return () => {
       clearInterval(intervalRef.current);
