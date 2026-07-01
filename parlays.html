@@ -37,7 +37,7 @@ const SPORT_META = {
   WNBA: { label:"WNBA",          icon:"🏀", color:"#e879f9", key:"wnba" },
 };
 
-const SIZE_LABELS = { 2:"PARLAY", 3:"3-LEG", 4:"4-LEG", 5:"5-LEG", 6:"6-LEG", 7:"7-LEG", 8:"8-LEG" };
+const SIZE_LABELS = { 2:"PARLAY", 3:"3-LEG", 4:"4-LEG", 5:"5-LEG" };
 
 const S = {
   sec:  { marginBottom:20 },
@@ -79,7 +79,7 @@ function buildCombinations(legs, size) {
 function buildParlays(allLegs) {
   if (allLegs.length === 0) return [];
   const parlays = [];
-  for (const size of [2, 3, 4, 5, 6, 7, 8]) {
+  for (const size of [2, 3, 4, 5]) {
     buildCombinations(allLegs, size)
       .map(combo => ({ legs: combo, size, jointProb: combo.reduce((acc, leg) => acc * leg.prob, 1) }))
       .sort((a, b) => b.jointProb - a.jointProb)
@@ -290,7 +290,7 @@ function App() {
 
             {/* Size filter */}
             <div style={{ ...S.sec, display:"flex", gap:6, flexWrap:"wrap" }}>
-              {["all","2","3","4","5","6","7","8"].map(v => (
+              {["all","2","3","4","5"].map(v => (
                 <button key={v} onClick={() => setFilterSize(v)} style={{ padding:"6px 14px", fontSize:10, fontWeight:700, letterSpacing:"1px", background:filterSize===v?T.gold:T.card, color:filterSize===v?"#070b14":T.muted, border:`1px solid ${filterSize===v?T.gold:T.border}`, borderRadius:4, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
                   {v === "all" ? "ALL" : v+"-LEG"}
                 </button>
