@@ -1089,24 +1089,6 @@ function TopPicksTab({ simData, games, betLogger }) {
   const simsReady = games.filter(g => simData[g.homeTeam+"|"+g.awayTeam]).length;
   const allSimsReady = simsReady === games.length && games.length > 0;
 
-  // Write parlay legs to localStorage for cross-sport parlay page
-  const xsportWrittenRef = useRef(false);
-  useEffect(() => {
-    if (!allSimsReady || xsportWrittenRef.current) return;
-    xsportWrittenRef.current = true;
-    const legs = [];
-    games.forEach(game => {
-      const key = game.homeTeam + "|" + game.awayTeam;
-      const agg = simData[key];
-      if (!agg) return;
-      extractTopBets(agg, game, "MLB").forEach(b => {
-        legs.push({ matchId: key, match: b.awayTeam + " @ " + b.homeTeam,
-          market: b.market, prob: parseFloat(b.simPct) / 100, probPct: b.simPct, tier: b.tier, sport: "MLB" });
-      });
-    });
-    try { localStorage.setItem("sharp_xsport_legs_mlb_" + new Date().toLocaleDateString("en-CA"), JSON.stringify({ legs, ts: Date.now() })); } catch(e) {}
-  }, [allSimsReady]);
-
   // Auto-log all bets once all sims are complete and logger is loaded
   useEffect(() => {
     if (!allSimsReady || !betLogger.loaded || autoLoggedRef.current || !allBets.length) return;
@@ -1402,6 +1384,25 @@ function App() {
   const betLogger = useBetLogger();
 
   useEffect(() => { loadGames(); }, []);
+
+  // Write parlay legs to localStorage for cross-sport parlay page (App level so it runs regardless of active tab)
+  const xsportWrittenRef = useRef(false);
+  useEffect(() => {
+    const allSimsReady = games.length > 0 && games.every(g => simData[g.homeTeam + "|" + g.awayTeam]);
+    if (!allSimsReady || xsportWrittenRef.current) return;
+    xsportWrittenRef.current = true;
+    const legs = [];
+    games.forEach(game => {
+      const key = game.homeTeam + "|" + game.awayTeam;
+      const agg = simData[key];
+      if (!agg) return;
+      extractTopBets(agg, game, "MLB").forEach(b => {
+        legs.push({ matchId: key, match: b.awayTeam + " @ " + b.homeTeam,
+          market: b.market, prob: parseFloat(b.simPct) / 100, probPct: b.simPct, tier: b.tier, sport: "MLB" });
+      });
+    });
+    try { localStorage.setItem("sharp_xsport_legs_mlb_" + new Date().toLocaleDateString("en-CA"), JSON.stringify({ legs, ts: Date.now() })); } catch(e) {}
+  }, [games, simData]);
 
   // Auto-sim all games sequentially once games are loaded; skip cached results
   useEffect(() => {

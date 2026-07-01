@@ -1095,23 +1095,6 @@ function App() {
   const appAutoLoggedRef = useRef(false);
   const allSimsReady = games.length > 0 && games.every(g => simData[g.homeTeam + "|" + g.awayTeam]);
 
-  // Write parlay legs to localStorage for cross-sport parlay page
-  const xsportWrittenRef = useRef(false);
-  useEffect(() => {
-    if (!allSimsReady || xsportWrittenRef.current) return;
-    xsportWrittenRef.current = true;
-    const legs = [];
-    games.forEach(game => {
-      const key = game.homeTeam + "|" + game.awayTeam;
-      const agg = simData[key];
-      if (!agg) return;
-      extractTopBets(agg, game).forEach(b => {
-        legs.push({ matchId: key, match: b.awayTeam + " @ " + b.homeTeam,
-          market: b.market, prob: parseFloat(b.simPct) / 100, probPct: b.simPct, tier: b.tier, sport: "WNBA" });
-      });
-    });
-    try { localStorage.setItem("sharp_xsport_legs_wnba_" + new Date().toLocaleDateString("en-CA"), JSON.stringify({ legs, ts: Date.now() })); } catch(e) {}
-  }, [allSimsReady]);
   useEffect(() => {
     if (!allSimsReady || !betLogger.loaded || appAutoLoggedRef.current) return;
     const allBets = [];
@@ -1124,6 +1107,32 @@ function App() {
     appAutoLoggedRef.current = true;
     betLogger.logAllBets(allBets);
   }, [allSimsReady, betLogger.loaded]);
+
+  // Write parlay legs to localStorage for cross-sport parlay page (App level, handles no-games day)
+  const xsportWrittenRef = useRef(false);
+  useEffect(() => {
+    if (loadingGames || xsportWrittenRef.current) return;
+    // No games today — write empty legs so parlays page knows we're done
+    if (games.length === 0) {
+      xsportWrittenRef.current = true;
+      try { localStorage.setItem("sharp_xsport_legs_wnba_" + new Date().toLocaleDateString("en-CA"), JSON.stringify({ legs: [], ts: Date.now() })); } catch(e) {}
+      return;
+    }
+    const allSimsReady = games.every(g => simData[g.homeTeam + "|" + g.awayTeam]);
+    if (!allSimsReady) return;
+    xsportWrittenRef.current = true;
+    const legs = [];
+    games.forEach(game => {
+      const key = game.homeTeam + "|" + game.awayTeam;
+      const agg = simData[key];
+      if (!agg) return;
+      extractTopBets(agg, game).forEach(b => {
+        legs.push({ matchId: key, match: b.awayTeam + " @ " + b.homeTeam,
+          market: b.market, prob: parseFloat(b.simPct) / 100, probPct: b.simPct, tier: b.tier, sport: "WNBA" });
+      });
+    });
+    try { localStorage.setItem("sharp_xsport_legs_wnba_" + new Date().toLocaleDateString("en-CA"), JSON.stringify({ legs, ts: Date.now() })); } catch(e) {}
+  }, [games, simData, loadingGames]);
 
   async function loadGames(opts = {}) {
     setLoadingGames(true); setGamesError("");
