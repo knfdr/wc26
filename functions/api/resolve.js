@@ -80,6 +80,10 @@ const FALLBACK_GAMES = {
   "civ-nor": { home_team:"Ivory Coast",    away_team:"Norway",            completed:true, scores:[{name:"Ivory Coast",score:"1"},{name:"Norway",score:"2"}],              h1Home:0, h1Away:1 },
   "fra-swe": { home_team:"France",         away_team:"Sweden",            completed:true, scores:[{name:"France",score:"3"},{name:"Sweden",score:"0"}],                   h1Home:2, h1Away:0 },
   "mex-ecu": { home_team:"Mexico",         away_team:"Ecuador",           completed:true, scores:[{name:"Mexico",score:"2"},{name:"Ecuador",score:"0"}],                  h1Home:1, h1Away:0 },
+  // 7/1 R32
+  "eng-cod": { home_team:"England",        away_team:"DR Congo",          completed:true, scores:[{name:"England",score:"2"},{name:"DR Congo",score:"1"}],                  h1Home:1, h1Away:0 },
+  "bel-sen": { home_team:"Belgium",        away_team:"Senegal",           completed:true, scores:[{name:"Belgium",score:"3"},{name:"Senegal",score:"2"}],                   h1Home:2, h1Away:1 },
+  "usa-bih": { home_team:"USA",            away_team:"Bosnia & Herzegovina", completed:true, scores:[{name:"USA",score:"2"},{name:"Bosnia & Herzegovina",score:"0"}],      h1Home:1, h1Away:0 },
 };
 
 // Normalize names coming FROM the Odds API
