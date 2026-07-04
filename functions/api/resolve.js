@@ -88,6 +88,10 @@ const FALLBACK_GAMES = {
   "esp-aut": { home_team:"Spain",          away_team:"Austria",           completed:true, scores:[{name:"Spain",score:"3"},{name:"Austria",score:"0"}],                    h1Home:2, h1Away:0 },
   "por-cro": { home_team:"Portugal",       away_team:"Croatia",           completed:true, scores:[{name:"Portugal",score:"2"},{name:"Croatia",score:"1"}],                  h1Home:0, h1Away:0 },
   "sui-alg": { home_team:"Switzerland",    away_team:"Algeria",           completed:true, scores:[{name:"Switzerland",score:"2"},{name:"Algeria",score:"0"}],               h1Home:1, h1Away:0 },
+  // 7/3 R32
+  "aus-egy": { home_team:"Australia",      away_team:"Egypt",             completed:true, scores:[{name:"Australia",score:"1"},{name:"Egypt",score:"1"}],                    h1Home:0, h1Away:1 },
+  "arg-cpv": { home_team:"Argentina",      away_team:"Cape Verde",        completed:true, scores:[{name:"Argentina",score:"3"},{name:"Cape Verde",score:"2"}],                h1Home:1, h1Away:0 },
+  "col-gha": { home_team:"Colombia",       away_team:"Ghana",             completed:true, scores:[{name:"Colombia",score:"1"},{name:"Ghana",score:"0"}],                     h1Home:1, h1Away:0 },
 };
 
 // Normalize names coming FROM the Odds API
