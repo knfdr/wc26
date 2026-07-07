@@ -98,6 +98,9 @@ const FALLBACK_GAMES = {
   // 7/5 R16
   "bra-nor": { home_team:"Brazil",         away_team:"Norway",            completed:true, scores:[{name:"Brazil",score:"1"},{name:"Norway",score:"2"}],                     h1Home:0, h1Away:0 },
   "mex-eng": { home_team:"Mexico",         away_team:"England",           completed:true, scores:[{name:"Mexico",score:"2"},{name:"England",score:"3"}],                    h1Home:0, h1Away:2 },
+  // 7/6 R16
+  "por-esp": { home_team:"Portugal",       away_team:"Spain",             completed:true, scores:[{name:"Portugal",score:"0"},{name:"Spain",score:"1"}],                    h1Home:0, h1Away:0 },
+  "usa-bel": { home_team:"USA",            away_team:"Belgium",           completed:true, scores:[{name:"USA",score:"1"},{name:"Belgium",score:"4"}],                      h1Home:1, h1Away:2 },
 };
 
 // Normalize names coming FROM the Odds API
