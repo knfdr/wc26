@@ -106,6 +106,8 @@ const FALLBACK_GAMES = {
   "sui-col": { home_team:"Switzerland",    away_team:"Colombia",          completed:true, scores:[{name:"Switzerland",score:"0"},{name:"Colombia",score:"0"}],               h1Home:0, h1Away:0 },
   // 7/9 QF
   "fra-mor": { home_team:"France",         away_team:"Morocco",           completed:true, scores:[{name:"France",score:"2"},{name:"Morocco",score:"0"}],                     h1Home:0, h1Away:0 },
+  // 7/10 QF
+  "esp-bel": { home_team:"Spain",          away_team:"Belgium",           completed:true, scores:[{name:"Spain",score:"2"},{name:"Belgium",score:"1"}],                     h1Home:1, h1Away:1 },
 };
 
 // Normalize names coming FROM the Odds API
