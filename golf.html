@@ -3,11 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Sharp Sim — US Open 2026</title>
+<title>Sharp Sim — Golf</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="js/bets.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -21,7 +22,10 @@ a{text-decoration:none;color:inherit}
 <body>
 <div id="root"></div>
 <script type="text/babel" data-presets="react">
-const { useState, useEffect, useRef } = React;
+const { useState, useEffect, useRef, useMemo } = React;
+const SB = window.SharpBets;
+const { GradeBadge, ChanceLine, GradeLegend, BetButton, RecordCard, SortTh, sortRows, useSettings, money } = SB;
+
 
 const T = {
   bg:"#070b14", navy:"#0c1526", card:"#101d30", border:"#1a2a3e",
@@ -49,17 +53,21 @@ const S = {
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const TOURNAMENT = "2026 U.S. Open";
-const COURSE     = "Shinnecock Hills Golf Club";
-const COURSE_LOC = "Southampton, NY · Par 70";
-const PAR        = 70;
-const FIELD_AVG  = 73.5;  // expected field avg per round, US Open setup
-const CUT_SPOTS  = 60;    // top 60 + ties make cut
-const SIM_N      = 100000;
-const GIST_ID    = "8a76d2b09c709882e4364528a0152ccc";
-const GIST_FILE  = "sharpsim_bets.json";
-const ODDS_CACHE_KEY = "sharp_golf_odds_cache";
-const CACHE_TTL  = 30 * 60 * 1000;
+const SIM_N       = 20000;   // tournament sims per run (field is ~150 golfers)
+const H2H_N       = 10000;
+const DEFAULT_SG  = 0;       // golfers we have no strokes-gained data for play like an average tour pro
+const DEFAULT_SIG = 3.0;
+const SCORES_TTL  = 3 * 60 * 1000;   // ESPN leaderboard refresh
+const PRICES_TTL  = 60 * 1000;       // Kalshi price refresh
+// Kalshi golf series for one PGA Tour event. The winner series names the event; the others share its suffix (KXPGATOUR-THRC26 -> KXPGATOP10-THRC26).
+const MARKETS = [
+  { key:"win",   label:"Win",      verb:"win",           series:"KXPGATOUR" },
+  { key:"top5",  label:"Top 5",    verb:"finish top 5",  series:"KXPGATOP5" },
+  { key:"top10", label:"Top 10",   verb:"finish top 10", series:"KXPGATOP10" },
+  { key:"top20", label:"Top 20",   verb:"finish top 20", series:"KXPGATOP20" },
+  { key:"cut",   label:"Make cut", verb:"make the cut",  series:"KXPGAMAKECUT" },
+];
+const WIDE_GAP = 6; // ¢ — same bar the shared "hide wide markets" setting uses
 
 // ── Player Params ─────────────────────────────────────────────────────────────
 // sg: SG:Total from 2026 PGA Tour YTD (through RBC Canadian Open, Jun 14)
@@ -193,712 +201,422 @@ const PLAYER_PARAMS = {
   "Spencer Tibbits":            { sg:-0.10,  sigma: 3.10, abbr:"TIB", est:true },
 };
 
-// US Open 2026 Field
-const FIELD = [
-  "Scottie Scheffler","Rory McIlroy","Ludvig Åberg","Matt Fitzpatrick",
-  "Jon Rahm","Cameron Young","Tommy Fleetwood","Xander Schauffele",
-  "Collin Morikawa","Russell Henley","Bryson DeChambeau","Patrick Cantlay",
-  "Nicolai Højgaard","Adam Scott","Brooks Koepka","Wyndham Clark",
-  "Akshay Bhatia","Maverick McNealy","Viktor Hovland","Jordan Spieth",
-  "Justin Thomas","Hideki Matsuyama","Sam Burns","Shane Lowry",
-  "Tyrrell Hatton","Joaquin Niemann","Dustin Johnson","Cameron Smith",
-  "Robert MacIntyre","Harris English","Gary Woodland","Chris Gotterup",
-  "Rickie Fowler","Justin Rose","Sahith Theegala","Sepp Straka",
-  "Nick Taylor","Tom Kim","Daniel Berger","Sungjae Im",
-  "Keegan Bradley","Sam Stevens","Corey Conners","Brian Harman",
-  "Emiliano Grillo","Max McGreevy","Ryan Fox","Ryo Hisatsune",
-  "Kurt Kitayama","Kristoffer Reitan","Andrew Putnam","Alex Noren",
-  "Adrien Dumont de Chassart","Patrick Reed","Max Greyserman","Neal Shipley",
-  "Michael Brennan","Angel Hidalgo","Keith Mitchell","Dustin Johnson",
-  "Beau Hossler","Patrick Cantlay","Rasmus Højgaard","Justin Rose",
-];
-// dedupe
-const UNIQUE_FIELD = [...new Set(FIELD)];
-
-// ── Gist helpers ──────────────────────────────────────────────────────────────
-async function gistRead() {
-  const r = await fetch("/api/gist"); if (!r.ok) return [];
-  const d = await r.json();
-  try { return JSON.parse(d.files[GIST_FILE].content || "[]"); } catch(e) { return []; }
+// ── Name matching (Kalshi ↔ ESPN ↔ PLAYER_PARAMS) ────────────────────────────
+// Handles accents (Åberg/Aberg, Højgaard/Hojgaard/Hoejgaard), initials (J.T./JT, S.Y./Seung-Yul),
+// hyphens, case (van/Van) and suffixes (Jr., III). No last-name-only guessing.
+function fold(s) {
+  return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/ø/gi, "o").replace(/æ/gi, "ae").replace(/ß/g, "ss").replace(/đ/gi, "d").replace(/ł/gi, "l").toLowerCase();
 }
-async function gistWrite(bets) {
-  await fetch("/api/gist", { method:"PATCH", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({ files:{ [GIST_FILE]:{ content: JSON.stringify(bets,null,2) } } }) });
+const SUFFIXES = new Set(["jr", "sr", "ii", "iii", "iv"]);
+function nameTokens(s) {
+  const t = fold(s).replace(/['’`]/g, "").replace(/[^a-z]+/g, " ").split(" ").filter(t => t && !SUFFIXES.has(t));
+  // drop a middle initial ("Jordan L. Smith" -> "jordan smith"), but keep real initials ("J.T. Poston")
+  return t.length >= 3 && t[0].length > 1 ? t.filter((x, i) => i === 0 || i === t.length - 1 || x.length > 1) : t;
+}
+function nameKeys(s) {
+  const t = nameTokens(s);
+  if (!t.length) return { full:"", oe:"", init:"", initials:false, pre:"" };
+  const full = t.join("");
+  const last = t[t.length - 1];
+  // initials key only counts when one side actually wrote initials (J.T., S.Y.), so Carson Young never matches Cameron Young
+  const initials = t.length > 1 && t.slice(0, -1).every(x => x.length === 1);
+  // pre: first 3 letters of the first name + last name, for nicknames (Zach/Zachary, Cam/Cameron, Kris/Kristoffer, Ben/Benjamin)
+  const pre = t.length > 1 && t[0].length >= 3 ? t[0].slice(0, 3) + "|" + t.slice(1).join("") : "";
+  return { full, oe: full.replace(/oe/g, "o"), init: t.slice(0, -1).map(x => x[0]).join("") + "|" + last, initials, pre };
+}
+// Build a lookup over `names`; returns (otherName) => matching name from `names` or null.
+function makeMatcher(names) {
+  const idx = { full:{}, oe:{}, init:{}, pre:{} }, keys = {};
+  const add = (m, k, n) => { if (!k) return; (m[k] = m[k] || new Set()).add(n); };
+  names.forEach(n => { const k = keys[n] = nameKeys(n); add(idx.full, k.full, n); add(idx.oe, k.oe, n); add(idx.init, k.init, n); add(idx.pre, k.pre, n); });
+  const one = (set) => set && set.size === 1 ? [...set][0] : null;
+  return (name) => {
+    const k = nameKeys(name);
+    if (!k.full) return null;
+    const hit = one(idx.full[k.full]) || one(idx.oe[k.oe]);
+    if (hit) return hit;
+    const n = one(idx.init[k.init]);
+    if (n && (k.initials || keys[n].initials)) return n;
+    return one(idx.pre[k.pre]);
+  };
+}
+const paramsMatch = makeMatcher(Object.keys(PLAYER_PARAMS));
+function paramsFor(name) { const k = paramsMatch(name); return k ? { ...PLAYER_PARAMS[k], key: k } : null; }
+
+function sameEvent(a, b) {
+  const n = (s) => fold(s).replace(/\b(the|20\d\d|championship|tournament|presented|by)\b/g, " ").replace(/[^a-z]+/g, " ").trim();
+  const x = n(a), y = n(b);
+  if (!x || !y) return false;
+  if (x.includes(y) || y.includes(x)) return true;
+  const tx = new Set(x.split(" ")), ty = y.split(" ");
+  const hit = ty.filter(t => tx.has(t)).length;
+  return hit / Math.max(tx.size, ty.length) >= 0.6;
 }
 
-// ── Bet logger ────────────────────────────────────────────────────────────────
-function calcStats(bets) {
-  const resolved = bets.filter(b => b.result !== "pending");
-  const wins = resolved.filter(b => b.result === "win");
-  const losses = resolved.filter(b => b.result === "loss");
-  const pushes = resolved.filter(b => b.result === "push");
-  const units = resolved.reduce((a,b) => a+(b.result==="win"?b.units:b.result==="loss"?-b.units:0), 0);
-  const bySport = {};
-  resolved.forEach(b => {
-    if (!bySport[b.sport]) bySport[b.sport] = { wins:0, losses:0, pushes:0, units:0 };
-    bySport[b.sport].units += b.result==="win"?b.units:b.result==="loss"?-b.units:0;
-    if (b.result==="win") bySport[b.sport].wins++;
-    else if (b.result==="loss") bySport[b.sport].losses++;
-    else bySport[b.sport].pushes++;
-  });
-  return { total:bets.length, wins:wins.length, losses:losses.length, pushes:pushes.length,
-    pending:bets.filter(b=>b.result==="pending").length,
-    winPct: (wins.length+losses.length)>0?((wins.length/(wins.length+losses.length))*100).toFixed(1):"—",
-    totalUnits: units.toFixed(1), bySport };
-}
-
-function useBetLogger() {
-  const [bets, setBets] = useState([]);
-  const [saving, setSaving] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  useEffect(() => {
-    gistRead().then(data => { setBets(data); setLoaded(true); }).catch(() => setLoaded(true));
-  }, []);
-  async function logBet(bet) {
-    const today = new Date().toLocaleDateString("en-CA");
-    if (bets.some(b => b.gameId === bet.gameId && b.market === bet.market && b.gameDate === today)) return;
-    const updated = [...bets, bet];
-    setBets(updated);
-    setSaving(true);
-    try { await gistWrite(updated); } catch(e) { console.error(e); }
-    setSaving(false);
-  }
-  const today = new Date().toLocaleDateString("en-CA");
-  const isLogged = (gameId, market) => bets.some(b => b.gameId === gameId && b.market === market && b.gameDate === today);
-  return { bets, stats: calcStats(bets), logBet, saving, loaded, isLogged };
+// ── Formatting ────────────────────────────────────────────────────────────────
+const pctFmt = (p) => p == null ? "—" : p >= 99.95 ? "100%" : p < 10 ? p.toFixed(1) + "%" : p.toFixed(0) + "%";
+const centsFmt = (c) => c == null ? "—" : c < 10 ? (Math.round(c * 10) / 10) + "¢" : Math.round(c) + "¢";
+const edgeFmt = (e) => e == null ? "—" : (e >= 0 ? "+" : "") + (Math.abs(e) < 10 ? e.toFixed(1) : e.toFixed(0)) + "¢";
+const toParFmt = (v) => v == null ? "—" : v === 0 ? "E" : v > 0 ? "+" + v : "" + v;
+function formatAge(ts) {
+  const mins = Math.floor((Date.now() - ts) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return mins + "m ago";
+  return Math.floor(mins / 60) + "h " + (mins % 60) + "m ago";
 }
 
 // ── Simulation ────────────────────────────────────────────────────────────────
-// Standard normal CDF (Abramowitz & Stegun approximation, max error 7.5e-8)
-function normalCDF(z) {
-  const t = 1 / (1 + 0.2316419 * Math.abs(z));
-  const d = 0.3989423 * Math.exp(-z * z / 2);
-  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.7814779 + t * (-1.8212560 + t * 1.3302744))));
-  return z > 0 ? 1 - p : p;
-}
-
-// P(playerA shoots lower than playerB in a single round) — analytic, no sim needed.
-// Difference of two independent normals: D = scoreA - scoreB ~ N(μA-μB, √(σA²+σB²))
-// P(A < B) = P(D < 0) = Φ(-muDiff / sigmaDiff)
-function roundH2HProb(playerA, playerB) {
-  const pA = getPlayerParams(playerA) || { sg: 0, sigma: 2.90 };
-  const pB = getPlayerParams(playerB) || { sg: 0, sigma: 2.90 };
-  const muA = FIELD_AVG - pA.sg;
-  const muB = FIELD_AVG - pB.sg;
-  const muDiff = muA - muB; // positive = A expected to score higher (worse)
-  const sigmaDiff = Math.sqrt(pA.sigma ** 2 + pB.sigma ** 2);
-  return normalCDF(-muDiff / sigmaDiff) * 100; // P(A < B) = P(D < 0)
-}
-
-function randNormal(mean, std) {
+// Scores are simulated relative to par. Each golfer's expected round = field average (vs par) − SG:Total,
+// with round-to-round spread sigma. Holes already played are fixed at the golfer's live score; a round in
+// progress only simulates the holes left (mean and variance scaled by holes left / 18).
+let spare = null;
+function randn() {
+  if (spare !== null) { const s = spare; spare = null; return s; }
   let u = 0, v = 0;
   while (u === 0) u = Math.random();
   while (v === 0) v = Math.random();
-  return mean + std * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+  const r = Math.sqrt(-2 * Math.log(u)), a = 2 * Math.PI * v;
+  spare = r * Math.sin(a);
+  return r * Math.cos(a);
 }
 
-function simulateRound(playerName) {
-  const p = PLAYER_PARAMS[playerName] || { sg: 0, sigma: 2.90 };
-  const expected = FIELD_AVG - p.sg;
-  return Math.round(randNormal(expected, p.sigma));
-}
-
-function runTournamentSim(field, liveScores) {
-  const n = SIM_N;
-  const stats = {};
-  field.forEach(p => { stats[p] = { win:0, top5:0, top10:0, top25:0, cut:0 }; });
-
-  const currentRound = liveScores?.currentRound || 1;
-  const cutIsKnown = currentRound >= 3; // actual cut results are in
-  const known = {};
-  field.forEach(p => { known[p] = getKnownRounds(p, liveScores); });
-
-  for (let i = 0; i < n; i++) {
-    const r12 = {};
-    field.forEach(p => {
-      const k = known[p];
-      const r1 = k.r[0] !== null ? k.r[0] : simulateRound(p);
-      const r2 = k.r[1] !== null ? k.r[1] : simulateRound(p);
-      r12[p] = r1 + r2;
-    });
-
-    let survivors;
-    if (cutIsKnown) {
-      survivors = field.filter(p => known[p].madecut !== false && !known[p].withdrew);
-    } else {
-      const scores = field.map(p => r12[p]).sort((a,b) => a-b);
-      const cutLine = scores[Math.min(CUT_SPOTS - 1, scores.length - 1)];
-      survivors = field.filter(p => r12[p] <= cutLine);
-    }
-    survivors.forEach(p => stats[p].cut++);
-
-    const totals = {};
-    survivors.forEach(p => {
-      const k = known[p];
-      const r3 = k.r[2] !== null ? k.r[2] : simulateRound(p);
-      const r4 = k.r[3] !== null ? k.r[3] : simulateRound(p);
-      totals[p] = r12[p] + r3 + r4;
-    });
-    survivors.sort((a,b) => totals[a] - totals[b]);
-
-    survivors.forEach((p, idx) => {
-      if (idx === 0) stats[p].win++;
-      if (idx < 5)  stats[p].top5++;
-      if (idx < 10) stats[p].top10++;
-      if (idx < 25) stats[p].top25++;
-    });
-  }
-
-  return field.map(p => {
-    const s = stats[p];
-    const params = PLAYER_PARAMS[p] || { sg:0, sigma:2.9, abbr:"???" };
-    const k = known[p];
-    return {
-      player: p,
-      abbr: params.abbr,
-      sg: params.sg || 0,
-      est: !!params.est,
-      r1: k.r[0], r2: k.r[1], r3: k.r[2], r4: k.r[3],
-      toPar: k.toPar ?? null,
-      thru: k.thru || 0,
-      thruDisplay: k.thruDisplay || "",
-      position: k.position || "",
-      madecut: k.madecut,
-      withdrew: k.withdrew,
-      winPct:  (s.win  / n * 100).toFixed(2),
-      top5Pct: (s.top5 / n * 100).toFixed(1),
-      top10Pct:(s.top10/ n * 100).toFixed(1),
-      top25Pct:(s.top25/ n * 100).toFixed(1),
-      cutPct:  (s.cut  / n * 100).toFixed(1),
-    };
-  }).sort((a,b) => parseFloat(b.winPct) - parseFloat(a.winPct));
-}
-
-function runH2HSim(playerA, playerB, liveScores) {
-  const kA = getKnownRounds(playerA, liveScores);
-  const kB = getKnownRounds(playerB, liveScores);
-  const currentRound = liveScores?.currentRound || 1;
-  const cutIsKnown = currentRound >= 3;
-
-  // If cut is settled and one player's fate is known, resolve immediately
-  if (cutIsKnown) {
-    const aCut = kA.madecut !== false && !kA.withdrew;
-    const bCut = kB.madecut !== false && !kB.withdrew;
-    if (!aCut && bCut) return { aWinPct:"0.0", bWinPct:"100.0", tiePct:"0.0" };
-    if (aCut && !bCut) return { aWinPct:"100.0", bWinPct:"0.0", tiePct:"0.0" };
-    if (!aCut && !bCut) {
-      // Both missed — compare 36-hole totals
-      const aT = (kA.r[0]||0)+(kA.r[1]||0), bT = (kB.r[0]||0)+(kB.r[1]||0);
-      return aT < bT
-        ? { aWinPct:"100.0", bWinPct:"0.0", tiePct:"0.0" }
-        : aT > bT
-          ? { aWinPct:"0.0", bWinPct:"100.0", tiePct:"0.0" }
-          : { aWinPct:"0.0", bWinPct:"0.0", tiePct:"100.0" };
-    }
-  }
-
-  // If all 4 rounds are final for both, result is deterministic
-  if (kA.r[3] !== null && kB.r[3] !== null) {
-    const aT = kA.r[0]+kA.r[1]+kA.r[2]+kA.r[3];
-    const bT = kB.r[0]+kB.r[1]+kB.r[2]+kB.r[3];
-    if (aT < bT) return { aWinPct:"100.0", bWinPct:"0.0", tiePct:"0.0" };
-    if (bT < aT) return { aWinPct:"0.0", bWinPct:"100.0", tiePct:"0.0" };
-    return { aWinPct:"0.0", bWinPct:"0.0", tiePct:"100.0" };
-  }
-
-  const n = 100000;
-  let aWins = 0, bWins = 0, ties = 0;
-
-  for (let i = 0; i < n; i++) {
-    const aR1 = kA.r[0] !== null ? kA.r[0] : simulateRound(playerA);
-    const aR2 = kA.r[1] !== null ? kA.r[1] : simulateRound(playerA);
-    const bR1 = kB.r[0] !== null ? kB.r[0] : simulateRound(playerB);
-    const bR2 = kB.r[1] !== null ? kB.r[1] : simulateRound(playerB);
-    const aR12 = aR1 + aR2, bR12 = bR1 + bR2;
-
-    let aMakesCut, bMakesCut;
-    if (cutIsKnown) {
-      aMakesCut = kA.madecut !== false && !kA.withdrew;
-      bMakesCut = kB.madecut !== false && !kB.withdrew;
-    } else {
-      // Sample cut line: US Open 36-hole cut ~ N(148, 3)
-      const cutLine = Math.round(randNormal(148, 3));
-      aMakesCut = aR12 <= cutLine;
-      bMakesCut = bR12 <= cutLine;
-    }
-
-    let aTotal = aR12, bTotal = bR12;
-    if (aMakesCut) {
-      aTotal += (kA.r[2] !== null ? kA.r[2] : simulateRound(playerA));
-      aTotal += (kA.r[3] !== null ? kA.r[3] : simulateRound(playerA));
-    }
-    if (bMakesCut) {
-      bTotal += (kB.r[2] !== null ? kB.r[2] : simulateRound(playerB));
-      bTotal += (kB.r[3] !== null ? kB.r[3] : simulateRound(playerB));
-    }
-
-    if (aMakesCut && bMakesCut) {
-      if (aTotal < bTotal) aWins++;
-      else if (bTotal < aTotal) bWins++;
-      else ties++;
-    } else if (aMakesCut) {
-      aWins++;
-    } else if (bMakesCut) {
-      bWins++;
-    } else {
-      if (aR12 < bR12) aWins++;
-      else if (bR12 < aR12) bWins++;
-      else ties++;
-    }
-  }
-  return {
-    aWinPct: (aWins/n*100).toFixed(1),
-    bWinPct: (bWins/n*100).toFixed(1),
-    tiePct:  (ties /n*100).toFixed(1),
-  };
-}
-
-// ── Name normalization for ESPN→PLAYER_PARAMS matching ───────────────────────
-function normStr(s) {
-  return s.toLowerCase()
-    .normalize("NFD").replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z\s]/g, "").trim();
-}
-// ESPN aliases for players whose names differ from our keys
-const ESPN_NAME_MAP = {
-  "Adrien Dumont De Chassart": "Adrien Dumont de Chassart",
-  "Nicolai Hoejgaard": "Nicolai Højgaard",
-  "Rasmus Hoejgaard": "Rasmus Højgaard",
-};
-function findInLiveScores(ourName, espnPlayers) {
-  if (!espnPlayers) return null;
-  if (espnPlayers[ourName]) return espnPlayers[ourName];
-  const norm = normStr(ourName);
-  for (const [k, v] of Object.entries(espnPlayers)) {
-    const mapped = ESPN_NAME_MAP[k] || k;
-    if (normStr(mapped) === norm) return v;
-  }
-  // Last-name fallback (only if unambiguous)
-  const lastName = normStr(ourName).split(" ").pop();
-  const hits = Object.entries(espnPlayers).filter(([k]) => normStr(k).split(" ").pop() === lastName);
-  return hits.length === 1 ? hits[0][1] : null;
-}
-function getKnownRounds(playerName, liveScores) {
-  const blank = { r:[null,null,null,null], madecut:null, withdrew:false, roundsComplete:0 };
-  if (!liveScores) return blank;
-  const d = findInLiveScores(playerName, liveScores.players);
-  if (!d) return blank;
-  return {
-    r: [d.r1, d.r2, d.r3, d.r4],
-    madecut: d.made_cut,
-    withdrew: d.withdrew,
-    roundsComplete: d.roundsComplete,
-    toPar: d.toPar,
-    thru: d.thru || 0,
-    thruDisplay: d.thruDisplay || "",
-    position: d.position,
-  };
-}
-
-// ── Golf signals extraction ───────────────────────────────────────────────────
-function extractGolfSignals(results, oddsMap, currentRound) {
-  const signals = [];
-  const cutSettled = currentRound >= 3;
-
-  results.forEach(r => {
-    if (r.withdrew) return;
-
-    // Winner outright — compare against book
-    const odds = oddsMap[r.player];
-    if (odds) {
-      const impl = impliedProb(odds) * 100;
-      const edge = parseFloat(r.winPct) - impl;
-      if (edge > 0) {
-        const tier = edge >= 5 ? "LOCK" : edge >= 2 ? "HIGH" : "LEAN";
-        signals.push({ player:r.player, market:"Win Outright", simPct:r.winPct, bookOdds:odds, edge:parseFloat(edge.toFixed(1)), tier, mkt:"win" });
-      }
-    }
-
-    // Top 10 — model-only threshold
-    if (!r.madecut !== true) { // not already cut
-      const t10 = parseFloat(r.top10Pct);
-      if (t10 >= 25) {
-        const tier = t10 >= 40 ? "HIGH" : "LEAN";
-        signals.push({ player:r.player, market:"Top 10 Finish", simPct:r.top10Pct, bookOdds:null, edge:null, tier, mkt:"top10" });
-      }
-    }
-
-    // Make Cut — only meaningful pre-cut
-    if (!cutSettled && r.madecut === null) {
-      const cp = parseFloat(r.cutPct);
-      if (cp >= 80) {
-        const tier = cp >= 90 ? "HIGH" : "LEAN";
-        signals.push({ player:r.player, market:"Make Cut", simPct:r.cutPct, bookOdds:null, edge:null, tier, mkt:"cut" });
-      }
-    }
+// Par from the leaderboard: golfers between rounds have toPar = sum(rounds) − par × rounds.
+function inferPar(live) {
+  const vals = [];
+  Object.values(live?.players || {}).forEach(d => {
+    const rs = [d.r1, d.r2, d.r3, d.r4].filter(v => v != null);
+    if (!rs.length || d.toPar == null || !(d.thru === 0 || d.thru >= 18)) return;
+    vals.push((rs.reduce((a, b) => a + b, 0) - d.toPar) / rs.length);
   });
-
-  const tierRank = { LOCK:0, HIGH:1, LEAN:2 };
-  return signals.sort((a, b) => {
-    if (tierRank[a.tier] !== tierRank[b.tier]) return tierRank[a.tier] - tierRank[b.tier];
-    return (b.edge || parseFloat(b.simPct)) - (a.edge || parseFloat(a.simPct));
-  });
+  if (vals.length < 5) return null;
+  vals.sort((a, b) => a - b);
+  return Math.round(vals[Math.floor(vals.length / 2)]);
+}
+// This week's scoring: average completed round vs par (0 before any round is in).
+function fieldAvgToPar(live, par) {
+  if (par == null) return 0;
+  let s = 0, n = 0;
+  Object.values(live?.players || {}).forEach(d => [d.r1, d.r2, d.r3, d.r4].forEach(v => { if (v != null) { s += v - par; n++; } }));
+  return n >= 20 ? s / n : 0;
 }
 
-// Derive playing groups from liveScores (ESPN includes teeTime per competitor)
-function extractGroups(liveScores) {
-  if (!liveScores?.groups) return [];
-  return liveScores.groups; // array of string[] player name arrays
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function formatAge(ts) {
-  const mins = Math.floor((Date.now()-ts)/60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return mins+"m ago";
-  return Math.floor(mins/60)+"h "+( mins%60)+"m ago";
-}
-function fmtOdds(v) {
-  if (!v && v !== 0) return "—";
-  return v > 0 ? "+"+v : ""+v;
-}
-function impliedProb(odds) {
-  if (!odds) return 0;
-  return odds > 0 ? 100/(odds+100) : Math.abs(odds)/(Math.abs(odds)+100);
-}
-
-// Build player→odds map from Odds API outright response
-function buildOddsMap(data) {
-  const map = {};
-  if (!data || !data.length) return map;
-  const game = data[0];
-  (game.bookmakers || []).forEach(bm => {
-    (bm.markets || []).forEach(mkt => {
-      if (mkt.key !== "outrights") return;
-      mkt.outcomes.forEach(o => {
-        // normalize name: "Scottie Scheffler" matches itself
-        const name = o.name.trim();
-        if (!map[name] || Math.abs(o.price) < Math.abs(map[name])) {
-          map[name] = o.price; // keep best (lowest American odds = most favorable)
-        }
-      });
+function buildSimState(field, live) {
+  const players = live?.players || {};
+  const status = live?.eventStatus || "scheduled";
+  const curRound = status === "scheduled" ? 1 : Math.min(4, Math.max(1, live?.currentRound || 1));
+  const final = status === "final";
+  const par = inferPar(live);
+  const fieldAvg = fieldAvgToPar(live, par);
+  const cutKnown = Object.values(players).some(d => d.made_cut === false && !d.withdrew);
+  const fieldSize = field.length;
+  // PGA Tour: top 65 and ties after 36 holes. Small invitationals (no-cut events) have fields under ~80.
+  const cutSpots = fieldSize >= 90 ? 65 : 0;
+  const simCut = !cutKnown && cutSpots > 0 && curRound <= 2 && !final;
+  const golfers = field.map(name => {
+    const d = players[name] || null;
+    const pp = paramsFor(name);
+    const thru = d ? Math.min(18, d.thru || 0) : 0;
+    const rem = [0, 0, 0, 0].map((_, i) => {
+      const k = i + 1;
+      if (final) return 0;
+      if (k < curRound) return 0;
+      if (k === curRound) return (18 - thru) / 18;
+      return 1;
     });
+    const out = !!(d && (d.withdrew || (cutKnown && d.made_cut === false)));
+    return { name, d, sg: pp ? pp.sg : DEFAULT_SG, sigma: pp ? pp.sigma : DEFAULT_SIG, hasData: !!pp, est: !!(pp && pp.est),
+      toPar: d && d.toPar != null ? d.toPar : 0, rem, out };
   });
-  return map;
+  return { golfers, curRound, final, par, fieldAvg, cutKnown, cutSpots, simCut, status };
 }
 
-function fairML(pct) {
-  if (pct <= 0 || pct >= 100) return "—";
-  return pct < 50
-    ? "+" + Math.round((100 / pct - 1) * 100)
-    : "-" + Math.round(pct / (100 - pct) * 100);
+// Runs the field n times. Returns per-golfer counts; if `pair` = [i, j] also returns their head-to-head.
+function simulate(st, n, pair) {
+  const G = st.golfers, P = G.length;
+  const mu = new Float64Array(P), sd = new Float64Array(P), base = new Float64Array(P), rem = new Float64Array(P * 4), out = new Uint8Array(P);
+  G.forEach((g, j) => { mu[j] = st.fieldAvg - g.sg; sd[j] = g.sigma; base[j] = g.toPar; out[j] = g.out ? 1 : 0; for (let k = 0; k < 4; k++) rem[j * 4 + k] = g.rem[k]; });
+  const win = new Float64Array(P), t5 = new Float64Array(P), t10 = new Float64Array(P), t20 = new Float64Array(P), made = new Float64Array(P);
+  const s36 = new Float64Array(P), tot = new Float64Array(P), alive = new Uint8Array(P);
+  let pa = 0, pb = 0, pt = 0;
+  const draw = (j, k) => { const f = rem[j * 4 + k]; return f > 0 ? mu[j] * f + sd[j] * Math.sqrt(f) * randn() : 0; };
+  for (let it = 0; it < n; it++) {
+    let cnt = 0;
+    for (let j = 0; j < P; j++) {
+      if (out[j]) { alive[j] = 0; continue; }
+      s36[j] = Math.round(base[j] + draw(j, 0) + draw(j, 1));
+      alive[j] = 1; cnt++;
+    }
+    if (st.simCut && cnt > st.cutSpots) {
+      const arr = new Float64Array(cnt); let c = 0;
+      for (let j = 0; j < P; j++) if (alive[j]) arr[c++] = s36[j];
+      arr.sort();
+      const line = arr[st.cutSpots - 1];
+      for (let j = 0; j < P; j++) if (alive[j] && s36[j] > line) alive[j] = 0;
+    }
+    let best = Infinity, nBest = 0, surv = 0;
+    for (let j = 0; j < P; j++) {
+      if (!alive[j]) continue;
+      made[j]++; surv++;
+      const t = Math.round(s36[j] + draw(j, 2) + draw(j, 3));
+      tot[j] = t;
+      if (t < best) { best = t; nBest = 1; } else if (t === best) nBest++;
+    }
+    if (!surv) continue;
+    // Playoff: tied leaders each equally likely
+    let pick = Math.floor(Math.random() * nBest);
+    const arr = new Float64Array(surv); let c = 0;
+    for (let j = 0; j < P; j++) {
+      if (!alive[j]) continue;
+      arr[c++] = tot[j];
+      if (tot[j] === best) { if (pick === 0) win[j]++; pick--; }
+    }
+    arr.sort();
+    // Kalshi top-N markets pay on ties ("top 10 including ties"): in if your total ≤ the Nth best total.
+    const th5 = arr[Math.min(5, surv) - 1], th10 = arr[Math.min(10, surv) - 1], th20 = arr[Math.min(20, surv) - 1];
+    for (let j = 0; j < P; j++) {
+      if (!alive[j]) continue;
+      if (tot[j] <= th5) t5[j]++;
+      if (tot[j] <= th10) t10[j]++;
+      if (tot[j] <= th20) t20[j]++;
+    }
+    if (pair) {
+      const [a, b] = pair, A = alive[a], B = alive[b];
+      if (A && B) { if (tot[a] < tot[b]) pa++; else if (tot[b] < tot[a]) pb++; else pt++; }
+      else if (A) pa++; else if (B) pb++;
+      else if (!out[a] && !out[b]) { if (s36[a] < s36[b]) pa++; else if (s36[b] < s36[a]) pb++; else pt++; }
+      else pt++;
+    }
+  }
+  const results = G.map((g, j) => ({
+    name: g.name, sg: g.sg, hasData: g.hasData, est: g.est, d: g.d, out: g.out,
+    win: 100 * win[j] / n, top5: 100 * t5[j] / n, top10: 100 * t10[j] / n, top20: 100 * t20[j] / n, cut: 100 * made[j] / n,
+  }));
+  return { results, h2h: pair ? { a: 100 * pa / n, b: 100 * pb / n, tie: 100 * pt / n } : null };
+}
+
+// Leaderboard position from to-par (T for ties), skipping golfers who are out
+function positions(golfers) {
+  const scores = golfers.filter(g => !g.out && g.d && g.d.toPar != null).map(g => g.d.toPar);
+  const pos = {};
+  golfers.forEach(g => {
+    if (g.out || !g.d || g.d.toPar == null) { pos[g.name] = { rank: null, label: g.d && g.d.withdrew ? "WD" : g.out ? "CUT" : "—" }; return; }
+    const better = scores.filter(s => s < g.d.toPar).length, same = scores.filter(s => s === g.d.toPar).length;
+    pos[g.name] = { rank: better + 1, label: (same > 1 ? "T" : "") + (better + 1) };
+  });
+  return pos;
+}
+
+// ── Data loading ──────────────────────────────────────────────────────────────
+async function kx(path) {
+  const r = await fetch("/api/kx/" + path);
+  if (!r.ok) throw new Error("Kalshi " + r.status);
+  return r.json();
+}
+const cents = (dollars, centsInt) => dollars != null && dollars !== "" ? Math.round(parseFloat(dollars) * 1000) / 10 : centsInt != null ? +centsInt : null;
+
+// Finds the Kalshi winner event for ESPN's tournament, then that event's top-5/10/20 and make-cut markets.
+async function loadKalshi(espnEventName) {
+  const ev = await kx("events?series_ticker=KXPGATOUR&status=open&limit=50");
+  const events = ev.events || [];
+  const name = (e) => (e.product_metadata && e.product_metadata.competition) || e.sub_title || e.title || "";
+  let event = espnEventName ? events.find(e => sameEvent(name(e), espnEventName)) : null;
+  if (!event && !espnEventName) event = events[0];
+  if (!event) return { event: null, events: events.map(name), markets: {} };
+  const suffix = event.event_ticker.slice(event.event_ticker.indexOf("-") + 1);
+  const lists = await Promise.all(MARKETS.map(m =>
+    kx(`markets?event_ticker=${m.series}-${suffix}&limit=300`).then(d => d.markets || []).catch(() => [])));
+  const markets = {};
+  MARKETS.forEach((m, i) => {
+    const byName = {};
+    lists[i].forEach(x => {
+      if (x.status !== "active" && x.status !== "open") return; // finalized = golfer already out of it
+      const golfer = x.yes_sub_title || x.no_sub_title;
+      if (!golfer) return;
+      byName[golfer] = { ticker: x.ticker, eventTicker: x.event_ticker, golfer,
+        bid: cents(x.yes_bid_dollars, x.yes_bid), ask: cents(x.yes_ask_dollars, x.yes_ask) };
+    });
+    if (Object.keys(byName).length) markets[m.key] = byName;
+  });
+  return { event: { ticker: event.event_ticker, name: name(event) }, events: events.map(name), markets };
+}
+
+async function loadScores() {
+  const r = await fetch("/api/golf-scores");
+  if (!r.ok) throw new Error("scores " + r.status);
+  const d = await r.json();
+  if (d.error) throw new Error(d.error);
+  return d;
+}
+
+// ── Grading ───────────────────────────────────────────────────────────────────
+// Shared grade, except a golfer we have no strokes-gained data for can't grade above SMALL EDGE.
+function gradeFor(chance, ask, hasData, s) {
+  const g = SB.grade(chance / 100, ask, s);
+  if (!g || hasData || (g.key !== "STRONG" && g.key !== "GOOD")) return g;
+  return { ...g, key: "SMALL", label: SB.LABELS.SMALL, color: SB.COLORS.SMALL, blurb: SB.BLURBS.SMALL + " (No stats on this golfer, so the model can't rate it higher.)", rank: SB.ORDER.indexOf("SMALL"), capped: true };
+}
+
+// One row per golfer with a live Kalshi market for this bet type
+function buildRows(mkey, sim, kal, pos, s) {
+  const mk = kal && kal.markets[mkey];
+  if (!mk || !sim) return { rows: [], hidden: 0, unmatched: [] };
+  const match = makeMatcher(sim.map(r => r.name));
+  const byName = Object.fromEntries(sim.map(r => [r.name, r]));
+  const rows = [], unmatched = []; let hidden = 0;
+  Object.values(mk).forEach(m => {
+    const who = match(m.golfer);
+    const r = who && byName[who];
+    if (!r) { unmatched.push(m.golfer); return; }
+    if (r.out) return;
+    if (!(m.ask > 0 && m.ask < 100)) return;
+    if (s.hideWide && m.bid != null && m.ask - m.bid > WIDE_GAP) { hidden++; return; }
+    const chance = r[mkey];
+    const g = gradeFor(chance, m.ask, r.hasData, s);
+    rows.push({ key: m.ticker, golfer: r.name, r, m, mkey, chance, price: m.ask, edge: g ? g.edge : null, g,
+      rank: g ? g.rank : 9, stake: SB.stake(g, "golf", s), pos: pos[r.name] });
+  });
+  return { rows, hidden, unmatched };
 }
 
 // ── Components ────────────────────────────────────────────────────────────────
+function betPick(row, eventName) {
+  const mdef = MARKETS.find(m => m.key === row.mkey);
+  return {
+    ticker: row.m.ticker, side: "yes",
+    // Kalshi long shots trade in tenths of a cent; the order goes in at the next whole cent (it still fills at the best ask).
+    price: Math.min(99, Math.max(1, Math.ceil(row.price - 1e-9))),
+    chance: row.chance, label: `${row.golfer} to ${mdef.verb}`,
+    sub: `${eventName} · model: ${pctFmt(row.chance)} chance to cash · Kalshi ${centsFmt(row.price)}`,
+    sport: "golf", grade: row.g,
+  };
+}
 
-function GolfSignalCard({ sig }) {
-  const TIER_COLORS = { LOCK:"#ef4444", HIGH:"#22c55e", LEAN:"#e8c547" };
-  const tc = TIER_COLORS[sig.tier] || T.muted;
-
+function ModelLine({ row }) {
   return (
-    <div style={{ background:T.navy, border:"1px solid "+T.border, borderLeft:"3px solid "+tc, borderRadius:4, padding:"10px 12px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-      <span style={{ background:tc+"22", border:"1px solid "+tc+"44", color:tc, fontSize:"7px", fontWeight:700, padding:"2px 6px", borderRadius:2, letterSpacing:"1px", minWidth:44, textAlign:"center" }}>
-        {sig.tier}
-      </span>
-      <div style={{ flex:1, minWidth:120 }}>
-        <div style={{ fontWeight:700, fontSize:11 }}>{sig.player}</div>
-        <div style={{ fontSize:9, color:T.muted, marginTop:2 }}>{sig.market}</div>
-      </div>
-      <div style={{ textAlign:"right" }}>
-        <div style={{ fontSize:11, color:T.accent, fontWeight:700 }}>{sig.simPct}%</div>
-        <div style={{ fontSize:8, color:T.muted }}>model</div>
-      </div>
-      {sig.bookOdds && (
-        <div style={{ textAlign:"right" }}>
-          <div style={{ fontSize:11, color:T.gold, fontWeight:700 }}>{fmtOdds(sig.bookOdds)}</div>
-          <div style={{ fontSize:8, color:T.muted }}>book</div>
-        </div>
-      )}
-      {sig.edge !== null && (
-        <div style={{ textAlign:"right" }}>
-          <div style={{ fontSize:11, color:T.green, fontWeight:700 }}>+{sig.edge}%</div>
-          <div style={{ fontSize:8, color:T.muted }}>edge</div>
-        </div>
-      )}
-      {!sig.bookOdds && (
-        <div style={{ textAlign:"right" }}>
-          <div style={{ fontSize:10, color:T.muted }}>{fairML(parseFloat(sig.simPct))}</div>
-          <div style={{ fontSize:8, color:T.muted }}>fair ML</div>
-        </div>
-      )}
-    </div>
+    <span style={{ fontSize:10, color:T.muted }}>
+      <b style={{ color: row.g ? row.g.color : T.text }}>model: {pctFmt(row.chance)} chance to cash</b>
+      {" · costs "}{centsFmt(row.price)}{" · edge "}{edgeFmt(row.edge)}
+    </span>
   );
 }
 
-function GolfTopSignals({ results, oddsMap, liveScores, betLogger }) {
-  const currentRound = liveScores?.currentRound || 1;
-  const signals = extractGolfSignals(results, oddsMap, currentRound);
-  if (!signals.length) return (
-    <div style={{ ...S.card, color:T.muted, fontSize:10, textAlign:"center", padding:20 }}>
-      No signals above threshold yet. Run the simulation first.
+function BestBets({ rows, eventName }) {
+  const top = rows.filter(r => r.g && r.rank <= 2).sort((a, b) => b.edge - a.edge).slice(0, 6);
+  if (!top.length) return (
+    <div style={{ ...S.card, color:T.muted, fontSize:10, lineHeight:1.7 }}>
+      Nothing priced below the model right now. Every Kalshi golf price is within {SB.getSettings().small.minEdge}¢ of the model's chance (or above it). Check back after the next round of scores.
     </div>
   );
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-      {signals.map((s, i) => <GolfSignalCard key={i} sig={s}/>)}
-      <div style={{ fontSize:8, color:T.muted, marginTop:6, lineHeight:1.7 }}>
-        Win Outright: edge vs book implied%. Top 10: model ≥25% threshold. Make Cut: model ≥80% (pre-cut only). No book odds = model-only signal.
-      </div>
+      {top.map(r => {
+        const mdef = MARKETS.find(m => m.key === r.mkey);
+        return (
+          <div key={r.key} style={{ background:T.navy, border:"1px solid "+T.border, borderLeft:"3px solid "+r.g.color, borderRadius:4, padding:"10px 12px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+            <GradeBadge g={r.g}/>
+            <div style={{ flex:1, minWidth:180 }}>
+              <div style={{ fontWeight:700, fontSize:11 }}>{r.golfer} to {mdef.verb}</div>
+              <div style={{ marginTop:3 }}><ModelLine row={r}/></div>
+              {r.g.longShot && <div style={{ fontSize:9, color:T.muted, marginTop:2 }}>Long shot: it loses most of the time, so keep the bet small.</div>}
+            </div>
+            <BetButton pick={betPick(r, eventName)}/>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-
-
-// Look up PLAYER_PARAMS by ESPN display name (which may use accents/casing differently)
-function getPlayerParams(espnName) {
-  if (PLAYER_PARAMS[espnName]) return PLAYER_PARAMS[espnName];
-  // Check if ESPN_NAME_MAP maps this ESPN name to one of our canonical keys
-  const canonical = ESPN_NAME_MAP[espnName];
-  if (canonical && PLAYER_PARAMS[canonical]) return PLAYER_PARAMS[canonical];
-  // normStr fallback across all PLAYER_PARAMS keys
-  const norm = normStr(espnName);
-  for (const [k, v] of Object.entries(PLAYER_PARAMS)) {
-    if (normStr(k) === norm) return v;
-  }
-  return null;
-}
-
-// Standard 3-ball market is typically priced at -110 (52.38% implied)
-const H2H_MARKET_IMPLIED = 100 / (100 + 110) * 100; // ~52.38%
-
-function PairingCard({ playerA, playerB, groupLabel }) {
-  // Single-round H2H probability from SG:Total model (analytic, not tournament sim)
-  const probA = roundH2HProb(playerA, playerB);
-  const probB = 100 - probA;
-
-  const aIsFav = probA >= probB;
-  const favPlayer = aIsFav ? playerA : playerB;
-  const undPlayer = aIsFav ? playerB : playerA;
-  const modelFav = aIsFav ? probA : probB;
-
-  // Edge vs standard -110 3-ball line
-  const edge = parseFloat((modelFav - H2H_MARKET_IMPLIED).toFixed(1));
-
-  const TIER_COLORS = { LOCK:"#ef4444", HIGH:"#22c55e", LEAN:"#e8c547" };
-  const tier = edge >= 7 ? "LOCK" : edge >= 4 ? "HIGH" : edge >= 2 ? "LEAN" : null;
-  const tc = tier ? TIER_COLORS[tier] : T.border;
-
-  const pFav = getPlayerParams(favPlayer) || {};
-  const pUnd = getPlayerParams(undPlayer) || {};
-  const sgDiff = ((pFav.sg || 0) - (pUnd.sg || 0)).toFixed(2);
-
-  return (
-    <div style={{ background:T.navy, border:"1px solid "+(tier ? tc : T.border), borderLeft:"3px solid "+tc, borderRadius:4, padding:"10px 12px" }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
-        <span style={{ fontSize:"8px", color:T.muted, letterSpacing:"1px" }}>{groupLabel} · SINGLE ROUND H2H</span>
-        {tier && <span style={{ background:tc+"22", border:"1px solid "+tc+"44", color:tc, fontSize:"7px", fontWeight:700, padding:"2px 6px", borderRadius:2, letterSpacing:"1px" }}>{tier}</span>}
-      </div>
-
-      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
-        <div style={{ flex:1 }}>
-          <div style={{ fontWeight:700, fontSize:11 }}>{favPlayer}</div>
-          <div style={{ fontSize:9, color:T.muted, marginTop:2 }}>SG {pFav.sg != null ? (pFav.sg > 0 ? "+" : "") + pFav.sg : "—"}{pFav.est ? " *" : ""}</div>
-        </div>
-        <div style={{ fontSize:9, color:T.muted, fontWeight:700 }}>vs</div>
-        <div style={{ flex:1, textAlign:"right" }}>
-          <div style={{ fontWeight:700, fontSize:11 }}>{undPlayer}</div>
-          <div style={{ fontSize:9, color:T.muted, marginTop:2 }}>SG {pUnd.sg != null ? (pUnd.sg > 0 ? "+" : "") + pUnd.sg : "—"}{pUnd.est ? " *" : ""}</div>
-        </div>
-      </div>
-
-      <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-        <div style={{ textAlign:"center", flex:1 }}>
-          <div style={{ fontSize:12, fontWeight:700, color:T.accent }}>{modelFav.toFixed(1)}%</div>
-          <div style={{ fontSize:8, color:T.muted }}>model win</div>
-        </div>
-        <div style={{ textAlign:"center", flex:1 }}>
-          <div style={{ fontSize:12, fontWeight:700, color: edge >= 2 ? T.green : edge >= 0 ? T.gold : T.red }}>{edge > 0 ? "+" : ""}{edge}%</div>
-          <div style={{ fontSize:8, color:T.muted }}>edge vs -110</div>
-        </div>
-        <div style={{ textAlign:"center", flex:1 }}>
-          <div style={{ fontSize:11, color:T.gold, fontWeight:700 }}>{fairML(modelFav)}</div>
-          <div style={{ fontSize:8, color:T.muted }}>fair ML</div>
-        </div>
-        <div style={{ textAlign:"center", flex:1 }}>
-          <div style={{ fontSize:11, color:T.muted, fontWeight:700 }}>+{sgDiff} SG</div>
-          <div style={{ fontSize:8, color:T.muted }}>advantage</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-const TIER_ORDER = { LOCK: 0, HIGH: 1, LEAN: 2, null: 3 };
-
-function pairingTier(playerA, playerB) {
-  const prob = roundH2HProb(playerA, playerB);
-  const modelFav = Math.max(prob, 100 - prob);
-  const edge = modelFav - H2H_MARKET_IMPLIED;
-  return edge >= 7 ? "LOCK" : edge >= 4 ? "HIGH" : edge >= 2 ? "LEAN" : null;
-}
-
-function DailyGroupsView({ liveScores }) {
-  const groups = extractGroups(liveScores);
-  if (!groups.length) return (
-    <div style={{ color:T.muted, fontSize:10, padding:"12px 0" }}>
-      No group/pairing data in live feed yet. Groups are typically available once the tee sheet is posted.
-    </div>
-  );
-
-  const pairings = [];
-  groups.forEach((group, gi) => {
-    for (let ai = 0; ai < group.length; ai++) {
-      for (let bi = ai + 1; bi < group.length; bi++) {
-        const tier = pairingTier(group[ai], group[bi]);
-        pairings.push({ a: group[ai], b: group[bi], groupLabel: "GROUP " + (gi + 1), tier });
-      }
-    }
-  });
-
-  pairings.sort((x, y) => (TIER_ORDER[x.tier] ?? 3) - (TIER_ORDER[y.tier] ?? 3));
-
-  return (
-    <div>
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
-        {pairings.map(({ a, b, groupLabel }) => (
-          <PairingCard key={a+"|"+b} playerA={a} playerB={b} groupLabel={groupLabel} />
-        ))}
-      </div>
-      <div style={{ fontSize:8, color:T.muted, marginTop:8 }}>
-        Win % = P(lower round score) derived analytically from SG:Total and round variance. Edge vs standard -110 3-ball line (~52.4% implied). Each group shows all combinations within the actual playing group.
-      </div>
-    </div>
-  );
-}
-
-function SortTh({ label, col, sortKey, setSortKey, right }) {
-  const active = sortKey === col;
-  const st = right ? S.thR : S.th;
-  return (
-    <th style={{ ...st, color: active ? T.accent : T.muted }} onClick={() => setSortKey(col)}>
-      {label}{active ? " ↓" : ""}
-    </th>
-  );
-}
-
-function TournamentTable({ results, oddsMap, betLogger, liveScores }) {
-  const [sortKey, setSortKey] = useState("winPct");
-  const hasLive = !!(liveScores?.players && Object.keys(liveScores.players).length > 0);
-  const currentRound = liveScores?.currentRound || 1;
-  // When live, default sort to toPar (leaderboard order); fallback to winPct
-  const [sortInit, setSortInit] = React.useState(false);
-  useEffect(() => {
-    if (hasLive && !sortInit) { setSortKey("toPar_asc"); setSortInit(true); }
-  }, [hasLive]);
-
-  const sorted = [...results].sort((a,b) => {
-    if (sortKey === "toPar_asc") {
-      // Nulls (no score yet) go to bottom
-      if (a.toPar === null && b.toPar === null) return 0;
-      if (a.toPar === null) return 1;
-      if (b.toPar === null) return -1;
-      return a.toPar - b.toPar;
-    }
-    return parseFloat(b[sortKey]) - parseFloat(a[sortKey]);
-  });
-  const { logBet, isLogged } = betLogger;
-  const today = new Date().toLocaleDateString("en-CA");
-
-  function makeBet(player, market, simPct, bookOdds) {
-    const odds = bookOdds && bookOdds !== "—" ? parseFloat(bookOdds) : null;
-    const b = odds > 0 ? odds/100 : odds ? 100/Math.abs(odds) : null;
-    const p = parseFloat(simPct)/100;
-    let units = 1.0;
-    if (b && p > 0) {
-      const kelly = (b*p-(1-p))/b;
-      units = kelly > 0 ? parseFloat(Math.min(3, Math.max(0.5, kelly*15)).toFixed(1)) : 0;
-    }
-    return {
-      id: Date.now()+"_"+Math.random().toString(36).slice(2,6),
-      sport:"GOLF", gameId:"usopen2026",
-      homeTeam: player, awayTeam:"US Open",
-      market, simPct: simPct+"%", bookOdds: bookOdds||"—",
-      tier: (() => { const b2 = odds > 0 ? odds/100 : odds ? 100/Math.abs(odds) : null; const impl = b2 ? 100/(b2+1) : null; const edge = impl ? parseFloat(simPct) - impl : null; return edge !== null ? (edge >= 5 ? "LOCK" : edge >= 2 ? "HIGH" : "LEAN") : "LEAN"; })(),
-      units, loggedAt: new Date().toISOString(),
-      result:"pending", resolvedAt:null, finalScore:null,
-      gameDate: today,
-    };
-  }
-
+function BetsTable({ rows, mkey, eventName, hidden, cutKnown }) {
+  const [sort, setSort] = useState({ k: "edge", dir: -1 });
+  const sorted = sortRows(rows, sort, (r, k) => k === "grade" ? -r.rank : k === "pos" ? (r.pos && r.pos.rank != null ? -r.pos.rank : null) : r[k]);
+  const mdef = MARKETS.find(m => m.key === mkey);
+  if (!rows.length) return <div style={{ color:T.muted, fontSize:10, padding:"10px 0" }}>No {mdef.label.toLowerCase()} prices to show{hidden ? ` (${hidden} hidden for wide bid/ask gaps)` : ""}.</div>;
   return (
     <div style={{ overflowX:"auto" }}>
       <table style={S.table}>
         <thead>
           <tr>
-            <th style={S.th}>#</th>
-            <th style={S.th}>Player</th>
-            <th style={{ ...S.thR, color:T.muted }}>SG</th>
-            {hasLive && <th style={{ ...S.thR, cursor:"pointer", color:sortKey==="toPar_asc"?T.accent:T.muted }} onClick={()=>setSortKey("toPar_asc")}>Score{sortKey==="toPar_asc"?" ↑":""}</th>}
-            {hasLive && currentRound >= 1 && <th style={S.thR}>R1</th>}
-            {hasLive && currentRound >= 2 && <th style={S.thR}>R2</th>}
-            {hasLive && currentRound >= 3 && <th style={S.thR}>R3</th>}
-            {hasLive && currentRound >= 4 && <th style={S.thR}>R4</th>}
-            <SortTh label="Win %" col="winPct" sortKey={sortKey} setSortKey={setSortKey} right/>
-            <SortTh label="Top 10" col="top10Pct" sortKey={sortKey} setSortKey={setSortKey} right/>
-            <SortTh label="Top 25" col="top25Pct" sortKey={sortKey} setSortKey={setSortKey} right/>
-            {!hasLive && <SortTh label="Cut %" col="cutPct" sortKey={sortKey} setSortKey={setSortKey} right/>}
-            <th style={S.thR}>Odds</th>
-            <th style={S.thR}>Edge</th>
+            <SortTh k="grade" sort={sort} setSort={setSort}>Grade</SortTh>
+            <SortTh k="golfer" sort={sort} setSort={setSort}>Golfer</SortTh>
+            <SortTh k="pos" sort={sort} setSort={setSort}>Pos</SortTh>
+            <SortTh k="chance" sort={sort} setSort={setSort}>Chance to cash</SortTh>
+            <SortTh k="price" sort={sort} setSort={setSort}>Price</SortTh>
+            <SortTh k="edge" sort={sort} setSort={setSort}>Edge</SortTh>
+            <SortTh k="stake" sort={sort} setSort={setSort}>Suggested bet</SortTh>
+            <SortTh sort={sort} setSort={setSort}>Bet</SortTh>
           </tr>
         </thead>
         <tbody>
-          {sorted.map((r, idx) => {
-            const bookOdds = oddsMap[r.player];
-            const bookFmt = fmtOdds(bookOdds);
-            const implPct = bookOdds ? (impliedProb(bookOdds)*100).toFixed(1) : null;
-            const modelWin = parseFloat(r.winPct);
-            const edge = implPct ? (modelWin - parseFloat(implPct)).toFixed(1) : null;
-            const edgeColor = edge && parseFloat(edge) > 0 ? T.green : edge && parseFloat(edge) < -1 ? T.red : T.muted;
-            const logged = isLogged("usopen2026", r.player+" Win");
-            const toParStr = r.toPar === null ? "—" : r.toPar === 0 ? "E" : (r.toPar > 0 ? "+"+r.toPar : ""+r.toPar);
-            const toParColor = r.toPar === null ? T.muted : r.toPar < 0 ? T.accent : r.toPar > 0 ? T.red : T.text;
-            const isCut = r.madecut === false;
-            const rowBg = isCut ? "rgba(239,68,68,0.04)" : idx%2===0 ? "transparent" : T.navy+"44";
+          {sorted.map((r, i) => {
+            const d = r.r.d;
             return (
-              <tr key={r.player} style={{ background: rowBg, opacity: isCut ? 0.55 : 1 }}>
-                <td style={{ ...S.td, color:T.muted, fontSize:9 }}>
-                  {hasLive && r.position ? r.position : idx+1}
-                </td>
+              <tr key={r.key} style={{ background: i % 2 ? T.navy + "44" : "transparent" }}>
+                <td style={S.td}><GradeBadge g={r.g} small/></td>
                 <td style={S.td}>
-                  <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                    <span style={{ fontWeight:700 }}>{r.player}</span>
-                    {r.est && <span style={{ fontSize:"7px", color:T.muted, letterSpacing:"0.5px" }} title="SG:Total estimated — player competes on LIV or DP World Tour, not tracked on PGA Tour">*</span>}
-                    {isCut && <span style={{ fontSize:"7px", color:T.red, background:"rgba(239,68,68,0.12)", border:"1px solid rgba(239,68,68,0.25)", borderRadius:2, padding:"1px 4px" }}>CUT</span>}
-                    {r.withdrew && <span style={{ fontSize:"7px", color:T.muted, background:T.border, borderRadius:2, padding:"1px 4px" }}>WD</span>}
-                  </div>
+                  <div style={{ fontWeight:700 }}>{r.golfer}{!r.r.hasData && <span title="No strokes-gained data for this golfer; the model treats him as an average tour player" style={{ color:T.muted, fontWeight:400 }}> *</span>}</div>
+                  {d && <div style={{ fontSize:8, color:T.muted, marginTop:1 }}>{toParFmt(d.toPar)}{d.thruDisplay && d.thru < 18 && d.thru > 0 ? " · " + d.thruDisplay : ""}</div>}
                 </td>
-                <td style={{ ...S.tdR, color:parseFloat(r.sg)>=1?T.green:parseFloat(r.sg)>=0?T.text:T.muted, fontSize:9 }}>
-                  {parseFloat(r.sg)>0?"+":""}{parseFloat(r.sg).toFixed(2)}
+                <td style={{ ...S.td, color:T.muted, fontSize:9 }}>{r.pos ? r.pos.label : "—"}</td>
+                <td style={{ ...S.td, color: r.g ? r.g.color : T.text, fontWeight:700 }}>{pctFmt(r.chance)}</td>
+                <td style={{ ...S.td, color:T.gold }}>{centsFmt(r.price)}</td>
+                <td style={{ ...S.td, color: r.edge > 0 ? T.green : r.edge < -2 ? T.red : T.muted, fontWeight: r.edge >= 2 ? 700 : 400 }}>{edgeFmt(r.edge)}</td>
+                <td style={{ ...S.td, color: r.stake ? T.text : T.muted }}>{r.stake ? money(r.stake) : "—"}</td>
+                <td style={S.td}>{r.rank <= 2 ? <BetButton pick={betPick(r, eventName)} compact/> : <span style={{ fontSize:9, color:T.muted }}>—</span>}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div style={{ fontSize:8, color:T.muted, marginTop:8, lineHeight:1.7 }}>
+        Chance to cash: how often the golfer {mdef.verb === "win" ? "wins" : mdef.verb.replace("finish", "finishes").replace("make", "makes")} in {SIM_N.toLocaleString()} simulations{mkey.startsWith("top") ? " (ties count, as on Kalshi)" : ""}. Price: Kalshi's current ask for YES. Edge = chance − price. * = no stats for this golfer (graded no higher than SMALL EDGE).
+        {hidden > 0 && ` ${hidden} golfer${hidden > 1 ? "s" : ""} hidden: bid/ask gap wider than ${WIDE_GAP}¢ (change in Settings).`}
+      </div>
+    </div>
+  );
+}
+
+function SimTable({ sim, pos, curRound, cutKnown }) {
+  const [sort, setSort] = useState({ k: "pos", dir: -1 });
+  const rows = sim.map(r => ({ ...r, pos: pos[r.name] }));
+  const sorted = sortRows(rows, sort, (r, k) => k === "pos" ? (r.pos && r.pos.rank != null ? -r.pos.rank : null) : k === "toPar" ? (r.d && r.d.toPar != null ? -r.d.toPar : null) : r[k]);
+  const showCut = !cutKnown;
+  return (
+    <div style={{ overflowX:"auto" }}>
+      <table style={S.table}>
+        <thead>
+          <tr>
+            <SortTh k="pos" sort={sort} setSort={setSort}>Pos</SortTh>
+            <SortTh k="name" sort={sort} setSort={setSort}>Golfer</SortTh>
+            <SortTh k="sg" sort={sort} setSort={setSort}>SG</SortTh>
+            <SortTh k="toPar" sort={sort} setSort={setSort}>Score</SortTh>
+            {[1, 2, 3, 4].filter(k => k <= curRound).map(k => <SortTh key={k} sort={sort} setSort={setSort}>R{k}</SortTh>)}
+            <SortTh k="win" sort={sort} setSort={setSort}>Win</SortTh>
+            <SortTh k="top5" sort={sort} setSort={setSort}>Top 5</SortTh>
+            <SortTh k="top10" sort={sort} setSort={setSort}>Top 10</SortTh>
+            <SortTh k="top20" sort={sort} setSort={setSort}>Top 20</SortTh>
+            {showCut && <SortTh k="cut" sort={sort} setSort={setSort}>Cut</SortTh>}
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((r, i) => {
+            const d = r.d || {};
+            return (
+              <tr key={r.name} style={{ background: r.out ? "rgba(239,68,68,0.04)" : i % 2 ? T.navy + "44" : "transparent", opacity: r.out ? 0.5 : 1 }}>
+                <td style={{ ...S.td, color:T.muted, fontSize:9 }}>{r.pos ? r.pos.label : "—"}</td>
+                <td style={{ ...S.td, fontWeight:700 }}>{r.name}{r.est && <span title="SG estimated (LIV / DP World Tour)" style={{ color:T.muted, fontWeight:400 }}> est</span>}{!r.hasData && <span title="No strokes-gained data" style={{ color:T.muted, fontWeight:400 }}> *</span>}</td>
+                <td style={{ ...S.td, color: !r.hasData ? T.muted : r.sg >= 1 ? T.green : T.text, fontSize:9 }}>{r.hasData ? (r.sg > 0 ? "+" : "") + r.sg.toFixed(2) : "—"}</td>
+                <td style={S.td}>
+                  <span style={{ fontWeight:700, color: d.toPar == null ? T.muted : d.toPar < 0 ? T.accent : d.toPar > 0 ? T.red : T.text }}>{toParFmt(d.toPar)}</span>
+                  {d.thruDisplay && d.thru > 0 && d.thru < 18 && <span style={{ fontSize:8, color:T.muted }}> {d.thruDisplay}</span>}
                 </td>
-                {hasLive && (
-                  <td style={{ ...S.tdR }}>
-                    <span style={{ color:toParColor, fontWeight:700 }}>{toParStr}</span>
-                    {r.thruDisplay && r.thru < 18 && <div style={{ fontSize:"7px", color:T.muted, marginTop:1 }}>{r.thruDisplay}</div>}
-                  </td>
-                )}
-                {hasLive && currentRound >= 1 && <td style={{ ...S.tdR, color:T.muted, fontSize:9 }}>{r.r1 ?? "—"}</td>}
-                {hasLive && currentRound >= 2 && <td style={{ ...S.tdR, color:T.muted, fontSize:9 }}>{r.r2 ?? "—"}</td>}
-                {hasLive && currentRound >= 3 && <td style={{ ...S.tdR, color:T.muted, fontSize:9 }}>{r.r3 ?? "—"}</td>}
-                {hasLive && currentRound >= 4 && <td style={{ ...S.tdR, color:T.muted, fontSize:9 }}>{r.r4 ?? "—"}</td>}
-                <td style={{ ...S.tdR, color:T.accent, fontWeight:700 }}>{r.winPct}%</td>
-                <td style={{ ...S.tdR, color:T.text }}>{r.top10Pct}%</td>
-                <td style={{ ...S.tdR, color:T.muted }}>{r.top25Pct}%</td>
-                {!hasLive && <td style={{ ...S.tdR, color:T.muted }}>{r.cutPct}%</td>}
-                <td style={{ ...S.tdR, color:T.gold }}>{bookFmt}</td>
-                <td style={{ ...S.tdR, color:edgeColor, fontWeight: edge && parseFloat(edge)>1?"700":"400" }}>
-                  {edge ? (parseFloat(edge)>0?"+":"")+edge+"%" : "—"}
-                </td>
+                {[d.r1, d.r2, d.r3, d.r4].slice(0, curRound).map((v, k) => <td key={k} style={{ ...S.td, color:T.muted, fontSize:9 }}>{v ?? "—"}</td>)}
+                <td style={{ ...S.td, color:T.accent, fontWeight:700 }}>{pctFmt(r.win)}</td>
+                <td style={S.td}>{pctFmt(r.top5)}</td>
+                <td style={S.td}>{pctFmt(r.top10)}</td>
+                <td style={{ ...S.td, color:T.muted }}>{pctFmt(r.top20)}</td>
+                {showCut && <td style={{ ...S.td, color:T.muted }}>{pctFmt(r.cut)}</td>}
               </tr>
             );
           })}
@@ -908,331 +626,220 @@ function TournamentTable({ results, oddsMap, betLogger, liveScores }) {
   );
 }
 
-function PlayerScoreLine({ name, liveScores }) {
-  const p = PLAYER_PARAMS[name];
-  const k = getKnownRounds(name, liveScores);
-  const rounds = [k.r[0], k.r[1], k.r[2], k.r[3]];
-  const hasLive = rounds.some(r => r !== null);
-  const toParStr = k.toPar === null ? null : k.toPar === 0 ? "E" : (k.toPar > 0 ? "+"+k.toPar : ""+k.toPar);
-  const toParColor = k.toPar === null ? T.muted : k.toPar < 0 ? T.accent : k.toPar > 0 ? T.red : T.text;
-  return (
-    <div style={{ fontSize:9, color:T.muted, display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
-      <span>SG {p ? ((p.sg>=0?"+":"")+p.sg.toFixed(3)+(p.est?" est":"")) : "—"}</span>
-      {hasLive && (
-        <>
-          <span style={{ color:T.border }}>|</span>
-          {rounds.map((r, i) => r !== null && (
-            <span key={i} style={{ color:T.text }}>R{i+1}: <span style={{ color:T.gold }}>{r}</span></span>
-          ))}
-          {toParStr && <span style={{ color:toParColor, fontWeight:700 }}>{toParStr}</span>}
-          {k.madecut === false && <span style={{ color:T.red, fontSize:"8px" }}>CUT</span>}
-        </>
-      )}
-    </div>
-  );
-}
-
-function H2HMatchup({ liveScores }) {
-  const [playerA, setPlayerA] = useState(UNIQUE_FIELD[0]);
-  const [playerB, setPlayerB] = useState(UNIQUE_FIELD[1]);
-  const [result, setResult] = useState(null);
-  const [running, setRunning] = useState(false);
-  const currentRound = liveScores?.currentRound || 1;
-  const hasLive = !!(liveScores?.players && Object.keys(liveScores.players).length > 0);
-
+function H2HMatchup({ state, sim }) {
+  const names = useMemo(() => (sim || []).filter(r => !r.out).map(r => r.name), [sim]);
+  const [a, setA] = useState(""), [b, setB] = useState("");
+  const [res, setRes] = useState(null), [running, setRunning] = useState(false);
+  useEffect(() => { if (names.length >= 2 && (!a || !names.includes(a))) { setA(names[0]); setB(names[1]); setRes(null); } }, [names]);
+  if (!state || names.length < 2) return null;
   function run() {
-    if (playerA === playerB) return;
+    if (a === b) return;
     setRunning(true);
     setTimeout(() => {
-      setResult(runH2HSim(playerA, playerB, liveScores));
+      const ia = state.golfers.findIndex(g => g.name === a), ib = state.golfers.findIndex(g => g.name === b);
+      setRes({ na: a, nb: b, ...simulate(state, H2H_N, [ia, ib]).h2h });
       setRunning(false);
     }, 20);
   }
-
-  // Auto-run when players change if we already had a result
-  const prevResult = React.useRef(null);
-
-  const favored = result ? (parseFloat(result.aWinPct) >= parseFloat(result.bWinPct) ? playerA : playerB) : null;
-  const favPct  = result ? Math.max(parseFloat(result.aWinPct), parseFloat(result.bWinPct)) : 0;
-  const fairML  = favPct > 0 ? (favPct < 50 ? "+"+(Math.round((100/favPct-1)*100)) : "-"+(Math.round(favPct/(100-favPct)*100))) : "—";
-
+  const fav = res ? (res.a >= res.b ? res.a : res.b) : 0;
   return (
     <div style={S.card}>
-      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
-        <div style={{ fontSize:10, color:T.accent, fontWeight:700, letterSpacing:"1px" }}>HEAD-TO-HEAD MATCHUP</div>
-        {hasLive && (
-          <span style={{ fontSize:"7px", background:"rgba(74,222,128,0.12)", border:"1px solid rgba(74,222,128,0.3)", color:T.accent, padding:"2px 6px", borderRadius:2, letterSpacing:"1px" }}>
-            LIVE R{currentRound}
-          </span>
-        )}
-      </div>
-
+      <div style={{ fontSize:10, color:T.accent, fontWeight:700, letterSpacing:"1px", marginBottom:10 }}>WHO FINISHES AHEAD? (MODEL ONLY)</div>
       <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"center", marginBottom:10 }}>
-        <select value={playerA} onChange={e => { setPlayerA(e.target.value); setResult(null); }} style={S.select}>
-          {UNIQUE_FIELD.map(p => <option key={p} value={p}>{p}</option>)}
-        </select>
+        <select value={a} onChange={e => { setA(e.target.value); setRes(null); }} style={S.select}>{names.map(p => <option key={p} value={p}>{p}</option>)}</select>
         <span style={{ color:T.muted, fontSize:11 }}>vs</span>
-        <select value={playerB} onChange={e => { setPlayerB(e.target.value); setResult(null); }} style={S.select}>
-          {UNIQUE_FIELD.map(p => <option key={p} value={p}>{p}</option>)}
-        </select>
-        <button onClick={run} disabled={running || playerA===playerB}
-          style={{ background:"none", border:"1px solid "+T.accent, color:T.accent, padding:"6px 14px", borderRadius:4, fontSize:9, cursor:"pointer", fontFamily:"inherit" }}>
-          {running ? "Running..." : "↻ Run H2H"}
+        <select value={b} onChange={e => { setB(e.target.value); setRes(null); }} style={S.select}>{names.map(p => <option key={p} value={p}>{p}</option>)}</select>
+        <button onClick={run} disabled={running || a === b} style={{ background:"none", border:"1px solid "+T.accent, color:T.accent, padding:"6px 14px", borderRadius:4, fontSize:9, cursor:"pointer", fontFamily:"inherit" }}>
+          {running ? "Running..." : "↻ Compare"}
         </button>
       </div>
-
-      <div style={{ display:"flex", gap:24, marginBottom:12, flexWrap:"wrap" }}>
+      {res && (
         <div>
-          <div style={{ fontSize:10, color:T.blue, fontWeight:700, marginBottom:3 }}>{playerA}</div>
-          <PlayerScoreLine name={playerA} liveScores={liveScores}/>
-        </div>
-        <div>
-          <div style={{ fontSize:10, color:T.green, fontWeight:700, marginBottom:3 }}>{playerB}</div>
-          <PlayerScoreLine name={playerB} liveScores={liveScores}/>
-        </div>
-      </div>
-
-      {result && (
-        <div>
-          <div style={{ display:"flex", gap:4, height:32, borderRadius:4, overflow:"hidden", marginBottom:8 }}>
-            <div style={{ width:result.aWinPct+"%", background:"linear-gradient(90deg,#1d4ed8,#3b82f6)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700 }}>
-              {parseFloat(result.aWinPct)>12 ? result.aWinPct+"%" : ""}
-            </div>
-            {parseFloat(result.tiePct)>0 && (
-              <div style={{ width:result.tiePct+"%", background:T.border, display:"flex", alignItems:"center", justifyContent:"center", fontSize:8, color:T.muted }}>
-                {parseFloat(result.tiePct)>3 ? "TIE" : ""}
-              </div>
-            )}
-            <div style={{ width:result.bWinPct+"%", background:"linear-gradient(90deg,#16a34a,#22c55e)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700, color:"#070b14" }}>
-              {parseFloat(result.bWinPct)>12 ? result.bWinPct+"%" : ""}
-            </div>
+          <div style={{ display:"flex", gap:4, height:28, borderRadius:4, overflow:"hidden", marginBottom:8 }}>
+            <div style={{ width:res.a + "%", background:"linear-gradient(90deg,#1d4ed8,#3b82f6)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700 }}>{res.a > 12 ? pctFmt(res.a) : ""}</div>
+            {res.tie > 0.5 && <div style={{ width:res.tie + "%", background:T.border, fontSize:8, color:T.muted, display:"flex", alignItems:"center", justifyContent:"center" }}>{res.tie > 4 ? "TIE" : ""}</div>}
+            <div style={{ width:res.b + "%", background:"linear-gradient(90deg,#16a34a,#22c55e)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700, color:"#070b14" }}>{res.b > 12 ? pctFmt(res.b) : ""}</div>
           </div>
-          <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, marginBottom:6 }}>
-            <div><span style={{ color:T.blue, fontWeight:700 }}>{playerA}</span> <span style={{ color:T.muted }}>{result.aWinPct}%</span></div>
-            <div><span style={{ color:T.green, fontWeight:700 }}>{playerB}</span> <span style={{ color:T.muted }}>{result.bWinPct}%</span></div>
-          </div>
-          <div style={{ fontSize:9, color:T.muted }}>
-            {favored} favored · fair ML: <span style={{ color:T.gold }}>{fairML}</span>
-            {hasLive && <span style={{ marginLeft:8, color:T.accent }}>· conditioned on R{Math.min(currentRound-1, 4)} known scores</span>}
+          <div style={{ fontSize:10, color:T.muted, lineHeight:1.7 }}>
+            <span style={{ color:"#3b82f6", fontWeight:700 }}>{res.na}</span> {pctFmt(res.a)} · <span style={{ color:T.green, fontWeight:700 }}>{res.nb}</span> {pctFmt(res.b)}{res.tie > 0.5 ? ` · tie ${pctFmt(res.tie)}` : ""}
+            <br/>Model: {res.a >= res.b ? res.na : res.nb} has a {pctFmt(fav)} chance to finish ahead (a golfer who misses the cut loses to one who makes it). Kalshi lists round-by-round 3-balls, not 72-hole matchups, so this one isn't priced.
           </div>
         </div>
       )}
     </div>
   );
 }
-
-const SCORES_CACHE_KEY = "sharp_golf_scores_cache";
-const SCORES_TTL = 3 * 60 * 1000; // 3-min client cache (edge cache is 2 min)
 
 // ── App ───────────────────────────────────────────────────────────────────────
 function App() {
-  const [results, setResults] = useState(null);
+  const s = useSettings();
+  const [live, setLive] = useState(null);
+  const [scoresErr, setScoresErr] = useState("");
+  const [scoresTs, setScoresTs] = useState(null);
+  const [kal, setKal] = useState(null);
+  const [kalErr, setKalErr] = useState("");
+  const [kalTs, setKalTs] = useState(null);
+  const [sim, setSim] = useState(null);
+  const [state, setState] = useState(null);
   const [running, setRunning] = useState(false);
-  const [oddsMap, setOddsMap] = useState({});
-  const [lastOddsFetch, setLastOddsFetch] = useState(null);
-  const [liveScores, setLiveScores] = useState(null);
-  const [scoresStatus, setScoresStatus] = useState("loading"); // loading | live | error | pretournament
-  const [lastScoresFetch, setLastScoresFetch] = useState(null);
-  const betLogger = useBetLogger();
+  const [tab, setTab] = useState("win");
+  const liveRef = useRef(null);
 
+  async function refreshScores() {
+    try { const d = await loadScores(); liveRef.current = d; setLive(d); setScoresErr(""); setScoresTs(Date.now()); }
+    catch (e) { setScoresErr(String(e.message || e)); if (!liveRef.current) setLive(false); }
+  }
+  async function refreshPrices() {
+    const espnName = liveRef.current ? liveRef.current.eventName : "";
+    try { const k = await loadKalshi(espnName); setKal(k); setKalErr(""); setKalTs(Date.now()); }
+    catch (e) { setKalErr(String(e.message || e)); }
+  }
   useEffect(() => {
-    loadOdds();
-    loadScores();
-    const interval = setInterval(loadScores, SCORES_TTL);
-    return () => clearInterval(interval);
+    refreshScores();
+    const a = setInterval(refreshScores, SCORES_TTL);
+    return () => clearInterval(a);
   }, []);
+  // prices once the tournament is known (so the right Kalshi event is picked), then every minute
+  useEffect(() => {
+    if (live === null) return;
+    refreshPrices();
+    const b = setInterval(refreshPrices, PRICES_TTL);
+    return () => clearInterval(b);
+  }, [live === null ? null : (live ? live.eventId : "none")]);
 
-  async function loadScores(force) {
-    if (!force) {
-      try {
-        const cached = JSON.parse(localStorage.getItem(SCORES_CACHE_KEY)||"null");
-        if (cached && Date.now()-cached.ts < SCORES_TTL) {
-          setLiveScores(cached.data);
-          setScoresStatus(cached.data?.eventStatus === "scheduled" ? "pretournament" : "live");
-          setLastScoresFetch(cached.ts);
-          return;
-        }
-      } catch(e) {}
-    }
-    try {
-      const res = await fetch("/api/golf-scores");
-      if (!res.ok) { setScoresStatus("error"); return; }
-      const data = await res.json();
-      if (data.error) { setScoresStatus("error"); return; }
-      const ts = Date.now();
-      try { localStorage.setItem(SCORES_CACHE_KEY, JSON.stringify({ ts, data })); } catch(e) {}
-      setLiveScores(data);
-      setLastScoresFetch(ts);
-      setScoresStatus(data.eventStatus === "scheduled" ? "pretournament" : "live");
-    } catch(e) { setScoresStatus("error"); }
-  }
+  // Field: ESPN's leaderboard; if ESPN is down, the golfers Kalshi lists
+  const field = useMemo(() => {
+    if (live && live.players && Object.keys(live.players).length) return Object.keys(live.players);
+    if (live === false && kal && kal.markets.win) return Object.keys(kal.markets.win);
+    return null;
+  }, [live, kal && !live ? Object.keys(kal.markets.win || {}).length : 0]);
 
-  async function loadOdds(force) {
-    if (!force) {
-      try {
-        const cached = JSON.parse(localStorage.getItem(ODDS_CACHE_KEY)||"null");
-        if (cached && Date.now()-cached.ts < CACHE_TTL) {
-          setOddsMap(buildOddsMap(cached.data));
-          setLastOddsFetch(cached.ts);
-          return;
-        }
-      } catch(e) {}
-    }
-    try {
-      const res = await fetch("/api/odds?sport=golf_us_open_winner&markets=outrights");
-      if (!res.ok) return;
-      const data = await res.json();
-      const ts = Date.now();
-      localStorage.setItem(ODDS_CACHE_KEY, JSON.stringify({ ts, data }));
-      setOddsMap(buildOddsMap(data));
-      setLastOddsFetch(ts);
-    } catch(e) { console.error(e); }
-  }
-
-  function runSim(scores) {
+  function runSim() {
+    if (!field) return;
     setRunning(true);
-    const sc = scores !== undefined ? scores : liveScores;
     setTimeout(() => {
-      setResults(runTournamentSim(UNIQUE_FIELD, sc));
+      const st = buildSimState(field, live || null);
+      setState(st);
+      setSim(simulate(st, SIM_N).results.sort((x, y) => y.win - x.win));
       setRunning(false);
     }, 20);
   }
+  // re-run whenever new scores arrive
+  useEffect(() => { if (field) runSim(); }, [field, live && live.fetchedAt]);
 
-  // Auto-run once scores and bet logger are both ready
-  const autoSimRan = React.useRef(false);
+  const pos = useMemo(() => state ? positions(state.golfers) : {}, [state]);
+  const eventName = (live && live.eventName) || (kal && kal.event && kal.event.name) || "PGA Tour";
+  const avail = MARKETS.filter(m => kal && kal.markets[m.key] && !(m.key === "cut" && state && state.cutKnown));
+  const tables = useMemo(() => {
+    const o = {};
+    avail.forEach(m => { o[m.key] = buildRows(m.key, sim, kal, pos, s); });
+    return o;
+  }, [sim, kal, pos, s]);
+  const allRows = Object.values(tables).flatMap(t => t.rows);
+  const unmatched = [...new Set(Object.values(tables).flatMap(t => t.unmatched))];
+
+  // Track STRONG / GOOD picks in the shared record (dedupes by ticker)
+  const logged = useRef(new Set());
   useEffect(() => {
-    if (!autoSimRan.current && betLogger.loaded && (liveScores !== null || scoresStatus === "error" || scoresStatus === "pretournament")) {
-      autoSimRan.current = true;
-      runSim(liveScores);
-    }
-  }, [betLogger.loaded, liveScores, scoresStatus]);
+    const today = new Date().toLocaleDateString("en-CA");
+    const picks = allRows.filter(r => r.g && (r.g.key === "STRONG" || r.g.key === "GOOD") && !logged.current.has(r.key)).map(r => {
+      logged.current.add(r.key);
+      return { sport:"golf", gameId: r.m.eventTicker, gameDate: today, home: r.golfer, away: eventName,
+        market: MARKETS.find(m => m.key === r.mkey).label, ticker: r.m.ticker, side:"yes", chance: r.chance, price: r.price, tier: r.g.key };
+    });
+    if (picks.length) SB.logPicks(picks);
+  }, [allRows.map(r => r.key + (r.g ? r.g.key : "")).join(",")]);
 
-  const sp = betLogger.stats.bySport && betLogger.stats.bySport["GOLF"];
-  const currentRound = liveScores?.currentRound || 1;
-  const roundsConditioned = scoresStatus === "live" ? Math.max(0, currentRound - 1) : 0;
+  useEffect(() => { if (avail.length && !avail.some(m => m.key === tab)) setTab(avail[0].key); }, [avail.map(m => m.key).join(",")]);
+
+  const statusLine = !live ? "" : live.eventStatus === "scheduled" ? "Starts soon · pre-tournament" : live.eventStatus === "final" ? "Final" : `Round ${live.currentRound} in progress`;
+  const tbl = tables[tab];
 
   return (
     <div style={S.wrap}>
-      {/* Topbar */}
       <div style={{ background:T.navy, borderBottom:"1px solid "+T.border, padding:"8px 16px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
         <a href="index.html" style={{ fontSize:9, color:T.muted, letterSpacing:"1px" }}>← Sharp Sim</a>
         <div style={{ flex:1 }}/>
-        {sp && (sp.wins+sp.losses) > 0 && (
-          <div style={{ fontSize:10, color:T.muted }}>
-            Golf: <span style={{ color:T.green }}>{sp.wins}W</span>-<span style={{ color:T.red }}>{sp.losses}L</span>
-            <span style={{ color:sp.units>=0?T.green:T.red, marginLeft:6 }}>{sp.units>=0?"+":""}{sp.units.toFixed(1)}u</span>
-          </div>
-        )}
-        {scoresStatus === "live" && lastScoresFetch && (
-          <span style={{ fontSize:8, color:T.accent }}>
-            ● LIVE R{currentRound} · {formatAge(lastScoresFetch)}
-          </span>
-        )}
-        {scoresStatus === "loading" && <span style={{ fontSize:8, color:T.muted }}>loading scores...</span>}
-        {scoresStatus === "error" && <span style={{ fontSize:8, color:T.red }}>scores unavailable</span>}
-        {lastOddsFetch && <span style={{ fontSize:8, color:T.muted }}>odds {formatAge(lastOddsFetch)}</span>}
-        <button onClick={() => { loadScores(true); loadOdds(true); }}
-          style={{ background:"none", border:"1px solid "+T.border, color:T.muted, fontSize:9, padding:"4px 10px", borderRadius:3, cursor:"pointer", fontFamily:"inherit" }}>
-          ⟳ Refresh
-        </button>
+        {live && scoresTs && <span style={{ fontSize:8, color: live.eventStatus === "in_progress" ? T.accent : T.muted }}>{live.eventStatus === "in_progress" ? "● LIVE R" + live.currentRound + " · " : "scores "}{formatAge(scoresTs)}</span>}
+        {scoresErr && <span style={{ fontSize:8, color:T.red }}>scores unavailable</span>}
+        {kalTs && <span style={{ fontSize:8, color:T.muted }}>Kalshi {formatAge(kalTs)}</span>}
+        <a href="settings.html" style={{ fontSize:9, color:T.muted, letterSpacing:1 }}>⚙ SETTINGS</a>
+        <button onClick={() => { refreshScores().then(refreshPrices); }} style={{ background:"none", border:"1px solid "+T.border, color:T.muted, fontSize:9, padding:"4px 10px", borderRadius:3, cursor:"pointer", fontFamily:"inherit" }}>⟳ Refresh</button>
       </div>
 
-      {/* Header */}
       <div style={S.header}>
         <div style={S.glow}/>
-        <div style={{ display:"inline-block", background:"rgba(74,222,128,0.1)", border:"1px solid rgba(74,222,128,0.25)", color:T.accent, fontSize:"9px", letterSpacing:"3px", padding:"3px 12px", borderRadius:2, marginBottom:14 }}>
-          ⛳ US OPEN · SHINNECOCK HILLS
-        </div>
-        <div style={{ fontSize:"clamp(22px,4vw,36px)", fontWeight:700, letterSpacing:"-1px", background:"linear-gradient(135deg,#4ade80 0%,#dde5f0 60%)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", backgroundClip:"text", marginBottom:6 }}>
-          {TOURNAMENT}
-        </div>
-        <div style={{ fontSize:10, color:T.muted, letterSpacing:"1px", marginBottom:6 }}>{COURSE}</div>
-        <div style={{ fontSize:9, color:T.muted, letterSpacing:"1px", marginBottom:16 }}>{COURSE_LOC}</div>
+        <div style={{ display:"inline-block", background:"rgba(74,222,128,0.1)", border:"1px solid rgba(74,222,128,0.25)", color:T.accent, fontSize:"9px", letterSpacing:"3px", padding:"3px 12px", borderRadius:2, marginBottom:14 }}>⛳ PGA TOUR · PRICED ON KALSHI</div>
+        <div style={{ fontSize:"clamp(22px,4vw,36px)", fontWeight:700, letterSpacing:"-1px", background:"linear-gradient(135deg,#4ade80 0%,#dde5f0 60%)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", backgroundClip:"text", marginBottom:6 }}>{eventName}</div>
+        <div style={{ fontSize:10, color:T.muted, letterSpacing:"1px", marginBottom:12 }}>{statusLine}{field ? ` · ${field.length} golfers` : ""}</div>
         <div style={{ display:"inline-block", background:"rgba(167,139,250,0.08)", border:"1px solid rgba(167,139,250,0.2)", color:T.purple, fontSize:"8px", letterSpacing:"2px", padding:"2px 10px", borderRadius:2 }}>
-          SG-BASED MONTE CARLO · {SIM_N.toLocaleString()} ITERATIONS · CUT TOP {CUT_SPOTS}+TIES
-          {roundsConditioned > 0 && ` · CONDITIONED ON R${roundsConditioned} SCORES`}
+          {SIM_N.toLocaleString()} SIMULATIONS · {state && state.cutKnown ? "CUT MADE" : state && state.cutSpots ? `CUT TOP ${state.cutSpots}+TIES` : "NO CUT"}{state && state.curRound > 1 ? " · USES LIVE SCORES" : ""}
         </div>
-        <div style={{ marginTop:20 }}>
-          <button onClick={runSim} disabled={running}
-            style={{ background:running?"none":T.accent, color:running?T.muted:"#070b14", border:"1px solid "+(running?T.border:T.accent), borderRadius:4, padding:"10px 28px", fontSize:11, fontWeight:700, cursor:running?"default":"pointer", fontFamily:"inherit", letterSpacing:"1px" }}>
-            {running ? "⟳ Running Tournament Sim..." : results ? "↻ Re-Run Simulation" : "▶ Run Tournament Simulation"}
+        <div style={{ marginTop:16 }}>
+          <button onClick={runSim} disabled={running || !field} style={{ background:running ? "none" : T.accent, color:running ? T.muted : "#070b14", border:"1px solid "+(running ? T.border : T.accent), borderRadius:4, padding:"8px 22px", fontSize:10, fontWeight:700, cursor:running ? "default" : "pointer", fontFamily:"inherit", letterSpacing:"1px" }}>
+            {running ? "⟳ Simulating..." : !field ? "Loading field..." : "↻ Re-run simulation"}
           </button>
         </div>
       </div>
 
       <div style={S.body}>
-        {!results && !running && (
-          <div style={{ textAlign:"center", padding:"48px 24px", color:T.muted, fontSize:11, lineHeight:2 }}>
-            <div style={{ fontSize:28, marginBottom:12 }}>⛳</div>
-            Click "Run Tournament Simulation" to generate win probabilities, top finish %, and make cut % for the {UNIQUE_FIELD.length}-player field.
-            <div style={{ marginTop:12, fontSize:9, color:T.muted }}>
-              Player params: 2026 PGA Tour SG:Total (through Jun 14) · LIV/DP World Tour players estimated
-            </div>
-          </div>
-        )}
-
-        {results && (
-          <>
-            <div style={S.sec}>
-              <div style={S.secLabel}>Top Signals — {liveScores?.currentRound ? "Round "+liveScores.currentRound : "Pre-Tournament"}</div>
-              <GolfTopSignals results={results} oddsMap={oddsMap} liveScores={liveScores} betLogger={betLogger}/>
-            </div>
-
-            <div style={S.sec}>
-              <div style={S.secLabel}>Tournament Probabilities — {UNIQUE_FIELD.length} Players · {SIM_N.toLocaleString()} Simulations · Click column to sort</div>
-              <div style={S.card}>
-                <TournamentTable results={results} oddsMap={oddsMap} betLogger={betLogger} liveScores={liveScores}/>
-              </div>
-            </div>
-
-            {extractGroups(liveScores).length > 0 && (
-              <div style={S.sec}>
-                <div style={S.secLabel}>Today's Playing Groups</div>
-                <DailyGroupsView liveScores={liveScores}/>
-              </div>
-            )}
-
-            <div style={{ ...S.sec, background:"#0a0f1a", border:"1px solid "+T.purple+"33", borderRadius:6, padding:"11px 14px", fontSize:"10px", color:T.muted, marginTop:24, lineHeight:1.8 }}>
-              <div style={{ color:T.purple, fontWeight:700, fontSize:"9px", letterSpacing:"2px", marginBottom:7 }}>MODEL METHODOLOGY</div>
-              <div><span style={{ color:T.text }}>Strokes Gained Model:</span> Each player's expected round score = field average ({FIELD_AVG}) − SG:Total. Field average calibrated for US Open difficulty at Shinnecock Hills (par {PAR}).</div>
-              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Round Variance:</span> Per-round scores drawn from N(expected, sigma), where sigma reflects individual player consistency (range: 2.55–3.00).</div>
-              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Cut Rule:</span> Top {CUT_SPOTS} + ties advance after 36 holes. {SIM_N.toLocaleString()} iterations per run.</div>
-              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Tiers:</span> Win Outright: edge vs book implied (≥5% = LOCK, ≥2% = HIGH). Top 10 / Make Cut: model threshold (no book comparison).</div>
-              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>H2H Matrix:</span> Single shared 50k sim computes all pairings simultaneously. Cut logic applied — missed-cut players lose to all cut-makers.</div>
-            </div>
-            <div style={S.disclaimer}>
-              Simulation parameters from publicly available 2026 PGA Tour statistics. LIV and DP World Tour player ratings are estimates. Not professional betting advice. Gamble responsibly.
-            </div>
-          </>
-        )}
-
-        <div style={{ marginTop: results ? 20 : 32 }}>
-          <div style={S.secLabel}>Head-to-Head Matchup Calculator</div>
-          <H2HMatchup liveScores={liveScores}/>
+        <div style={{ marginTop:16 }}>
+          <GradeLegend sport="golf"/>
+          <RecordCard sport="golf"/>
         </div>
 
-        {betLogger.bets.filter(b=>b.sport==="GOLF").length > 0 && (
+        {kalErr && <div style={{ ...S.card, color:T.gold, fontSize:10, marginTop:12 }}>Kalshi prices can't load right now ({kalErr}). The model's chances are below, but there's nothing to grade until prices come back.</div>}
+        {kal && !kal.event && <div style={{ ...S.card, color:T.gold, fontSize:10, marginTop:12, lineHeight:1.7 }}>Kalshi has no open winner market for {eventName} yet{kal.events.length ? ` (open now: ${kal.events.join(", ")})` : ""}. Model chances are below; grades appear once Kalshi lists this event.</div>}
+
+        {sim && kal && kal.event && (
           <div style={S.sec}>
-            <div style={S.secLabel}>Bet Log — Golf ({betLogger.bets.filter(b=>b.sport==="GOLF").length} bets)</div>
-            <div style={S.card}>
-              {betLogger.bets.filter(b=>b.sport==="GOLF").slice().reverse().map(b => {
-                const rc = b.result==="win"?T.green:b.result==="loss"?T.red:T.muted;
-                return (
-                  <div key={b.id} style={{ display:"flex", gap:10, padding:"7px 0", borderBottom:"1px solid "+T.border+"44", flexWrap:"wrap", fontSize:10 }}>
-                    <div style={{ fontSize:9, color:T.muted, minWidth:90 }}>{b.gameDate}</div>
-                    <div style={{ flex:2, color:T.text }}>{b.homeTeam}</div>
-                    <div style={{ color:T.muted, fontSize:9 }}>{b.market}</div>
-                    <div style={{ fontSize:9, color:T.gold }}>{b.bookOdds}</div>
-                    <div style={{ fontSize:9, color:T.muted }}>{b.simPct}</div>
-                    <span style={{ background:rc+"22", border:"1px solid "+rc+"44", color:rc, fontSize:"8px", fontWeight:700, padding:"1px 6px", borderRadius:2 }}>
-                      {b.result==="pending"?"PENDING":b.result.toUpperCase()}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+            <div style={S.secLabel}>Best bets right now</div>
+            <BestBets rows={allRows} eventName={eventName}/>
+            <div style={{ fontSize:9, color:T.muted, marginTop:8, lineHeight:1.7 }}>Golf bets are long shots: even a good one usually loses. Most will grade SMALL EDGE, and that's honest. Bet small.</div>
           </div>
         )}
+
+        {sim && avail.length > 0 && (
+          <div style={S.sec}>
+            <div style={S.secLabel}>Every Kalshi price · tap a column to sort</div>
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:10 }}>
+              {avail.map(m => <button key={m.key} onClick={() => setTab(m.key)} style={S.btn(tab === m.key)}>{m.label.toUpperCase()} ({(tables[m.key] || { rows: [] }).rows.length})</button>)}
+            </div>
+            <div style={S.card}>
+              {tbl && <BetsTable key={tab} rows={tbl.rows} mkey={tab} eventName={eventName} hidden={tbl.hidden} cutKnown={state && state.cutKnown}/>}
+            </div>
+            {unmatched.length > 0 && <div style={{ fontSize:8, color:T.muted, marginTop:6 }}>On Kalshi but not on ESPN's leaderboard (not graded): {unmatched.slice(0, 12).join(", ")}{unmatched.length > 12 ? "…" : ""}</div>}
+          </div>
+        )}
+
+        {!sim && (
+          <div style={{ textAlign:"center", padding:"40px 24px", color:T.muted, fontSize:11 }}>
+            {live === null || running ? "Loading the leaderboard and running the simulation…" : "Couldn't load the field (ESPN and Kalshi both unavailable)."}
+          </div>
+        )}
+
+        {sim && (
+          <div style={S.sec}>
+            <div style={S.secLabel}>Model chances for every golfer</div>
+            <div style={S.card}><SimTable sim={sim} pos={pos} curRound={state ? state.curRound : 1} cutKnown={state && state.cutKnown}/></div>
+          </div>
+        )}
+
+        {sim && (
+          <div style={S.sec}>
+            <div style={S.secLabel}>Head-to-head</div>
+            <H2HMatchup state={state} sim={sim}/>
+          </div>
+        )}
+
+        <div style={{ ...S.sec, background:"#0a0f1a", border:"1px solid "+T.purple+"33", borderRadius:6, padding:"11px 14px", fontSize:"10px", color:T.muted, marginTop:24, lineHeight:1.8 }}>
+          <div style={{ color:T.purple, fontWeight:700, fontSize:"9px", letterSpacing:"2px", marginBottom:7 }}>HOW THE MODEL WORKS</div>
+          <div><span style={{ color:T.text }}>Skill:</span> each golfer's expected round is this week's field average minus his strokes gained per round (2026 PGA Tour SG:Total; LIV / DP World Tour players estimated). Golfers without stats play like an average tour pro and are marked *.</div>
+          <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Live scores:</span> holes already played count as played (ESPN leaderboard). Only the holes left are simulated, so a golfer 5 shots clear with 9 holes left is a big favorite.</div>
+          <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Cut:</span> top 65 and ties after 36 holes, simulated until ESPN shows the real cut. Top 5/10/20 count ties, the way Kalshi settles them. Tied leaders split the win like a playoff.</div>
+          <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Prices:</span> Kalshi's YES ask for each golfer (winner, top 5/10/20, make cut). Edge = model chance − price. Golfers Kalshi has already settled (missed cut, out of contention) are skipped.</div>
+        </div>
+        <div style={S.disclaimer}>Model inputs are public 2026 PGA Tour stats; ratings for some players are estimates. Not professional betting advice. Gamble responsibly.</div>
       </div>
     </div>
   );

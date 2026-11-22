@@ -85,7 +85,7 @@ export async function onRequest(context) {
       const made_cut = !statusName.toLowerCase().includes("cut");
       const withdrew = statusName.toLowerCase().includes("wd") || statusName.toLowerCase().includes("disqualified");
 
-      const position = comp.status?.position?.displayValue || "";
+      const position = comp.status?.position?.displayName || comp.status?.position?.displayValue || "";
 
       // teeTime is used to reconstruct playing groups
       const teeTime = (comp.linescores || [])[0]?.teeTime || comp.status?.teeTime || null;
