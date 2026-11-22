@@ -135,6 +135,7 @@ function App() {
   const [sims, setSims] = useState({});       // gameId -> sim summary
   const [tab, setTab] = useState("picks");
   const [kx, setKx] = useState(null);
+  const [kxDown, setKxDown] = useState(false);   // Kalshi prices unreachable (site API over Cloudflare's daily limit)
 
   useEffect(() => { (async () => {
     try {
@@ -147,7 +148,7 @@ function App() {
       fetch("/api/kx/_status").then(r => r.json()).then(setKx).catch(() => {});
       const r = await loadRatings(setStatus); setRt(r);
       setStatus("Matching Kalshi markets…");
-      const ev = await getJSON("/api/kx/events?series_ticker=KXNCAAFGAME&status=open&limit=200").catch(() => ({ events: [] }));
+      const ev = await getJSON("/api/kx/events?series_ticker=KXNCAAFGAME&status=open&limit=200").catch(() => { setKxDown(true); return { events: [] }; });
       for (const g of list) {
         const x = {};
         try { const s = await getJSON(`${ESPN}/summary?event=${g.id}`); const p = s.predictor; if (p && p.homeTeam && p.homeTeam.gameProjection) x.fpiHome = parseFloat(p.homeTeam.gameProjection) / 100; } catch (e) {}
@@ -237,7 +238,9 @@ function App() {
       <div style={{ maxWidth: 1000, margin: "0 auto", padding: "16px 16px 60px" }}>
         {status && <div style={{ ...card, fontSize: 10, color: T.muted, marginBottom: 12 }}>{status}</div>}
         {rt && <div style={{ fontSize: 8, color: T.dim, marginBottom: 10 }}>Ratings fit on {rt.nGames} completed {SEASON} games.</div>}
-        {tab === "picks" && <Picks picks={picks} kx={kx} />}
+        {tab === "picks" && (kxDown
+          ? <div style={{ ...card, fontSize: 10, color: T.gold }}>Kalshi prices couldn't be loaded, so there's nothing to compare the model with. The site's data service is over Cloudflare's free daily request limit; it resets at 7 PM Eastern. The model's own lines are still on each game tab.</div>
+          : <Picks picks={picks} kx={kx} />)}
         {active && <GameView g={active} s={sims[active.id]} x={extra[active.id]} rt={rt} kx={kx} />}
         <div style={{ fontSize: 9, color: T.muted, marginTop: 16, padding: 10, borderTop: "1px solid " + T.border, lineHeight: 1.7 }}>
           Edges are model fair value minus Kalshi's ask, after the taker fee. The market carries most of the weight, so a big edge usually means a thin or stale quote: check the book before buying. Not betting advice.
