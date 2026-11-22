@@ -91,7 +91,7 @@ function toOrder(type, side, cents, count) {
 
 // ── Main app ─────────────────────────────────────────────────────────────────
 function App() {
-  const [cfg, setCfg] = useState(() => { const c = { ...CFB.DEFAULT_CONFIG, ...load(LS.cfg, {}) }; if (!c.feedV2) { c.liveFeed = "auto"; c.feedV2 = true; } return c; });
+  const [cfg, setCfg] = useState(() => { const c = { ...CFB.DEFAULT_CONFIG, ...load(LS.cfg, {}) }; if (!c.feedV2) { c.liveFeed = "auto"; c.feedV2 = true; } if (!c.cfgV3) { c.sims = CFB.DEFAULT_CONFIG.sims; c.cfgV3 = true; } return c; });
   const [mode, setMode] = useState(() => load(LS.mode, "paper") === "live" ? "paper" : "paper"); // always boot in paper
   const [running, setRunning] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -391,7 +391,7 @@ function App() {
       const next = { ...prev, positions: { ...prev.positions }, trades: [...(prev.trades || [])] };
       const fee = CFB.feeCents(a.limit, a.count, cfgNow.feeRate) / 100;
       if (a.type === "buy") {
-        next.positions[a.ticker] = { side: a.side, count: a.count, avgCost: a.limit, peakBid: a.limit, openedAt: Date.now(), gameId: a.gameId, fees: fee, botOwned: true, label };
+        next.positions[a.ticker] = { side: a.side, count: a.count, avgCost: a.limit, peakBid: a.limit, openedAt: Date.now(), gameId: a.gameId, fees: fee, botOwned: true, label, lead: !!a.lead, tpPrice: a.takeProfitPrice };
         next.realized = (next.realized || 0) - fee;
         addLog("buy", `PAPER BUY ${a.count}× ${label} ${a.side.toUpperCase()} @ ${a.limit}¢ — ${a.reason}`, { ticker: a.ticker });
       } else {
@@ -419,7 +419,7 @@ function App() {
       if (!(filled > 0)) { addLog("info", `No fill: ${label} ${a.side.toUpperCase()} @ ${a.limit}¢ (book moved)`); return; }
       const avg = res.average_fill_price != null ? Math.round(parseFloat(res.average_fill_price) * 100) : a.limit;
       const avgSide = a.side === "yes" ? avg : (res.average_fill_price != null ? 100 - avg : a.limit);
-      st.meta[a.ticker] = { botOwned: true, avgCost: avgSide, peakBid: avgSide, openedAt: Date.now(), gameId: a.gameId, label };
+      st.meta[a.ticker] = { botOwned: true, avgCost: avgSide, peakBid: avgSide, openedAt: Date.now(), gameId: a.gameId, label, lead: !!a.lead, tpPrice: a.takeProfitPrice };
       addLog("buy", `LIVE BUY ${filled}× ${label} ${a.side.toUpperCase()} @ ${avgSide}¢ — ${a.reason}`, { ticker: a.ticker });
       if (cfgNow.restingTakeProfit) {
         const tp = Math.min(99, avgSide + cfgNow.takeProfit);
@@ -491,7 +491,7 @@ function App() {
     }
   }
 
-  async function decideAndAct({ exitsOnly }) {
+  async function decideAndAct({ exitsOnly, fast }) {
     if (decidingRef.current) return;
     decidingRef.current = true;
     const st = S.current, cfgNow = R.current.cfg;
@@ -533,13 +533,15 @@ function App() {
         for (const a of ordered) {
           if (a.type === "buy") {
             seen[a.ticker] = (st.candSeen[a.ticker] || 0) + 1;
-            if (seen[a.ticker] < (cfgNow.confirmTicks || 1)) continue;
+            // feed-lead entries are a race against the market: no multi-tick confirmation
+            if (!a.lead && seen[a.ticker] < (cfgNow.confirmTicks || 1)) continue;
             if (Date.now() - st.sessionStart < 15000) continue;
           }
           if (exitsOnly) addLog("info", `Stream: ${a.ticker} price moved — acting immediately`);
+          else if (fast) addLog("info", `Fresh score on the core feed — acting before the next tick`);
           await execute(a, gamesById()[a.gameId]);
         }
-        if (!exitsOnly) st.candSeen = seen;
+        if (!exitsOnly && !fast) st.candSeen = seen;
         if (!exitsOnly && st.killed && !res.actions.some(a => a.type === "sell") && Object.keys(input.positions).length === 0) {
           st.killed = false; setRunning(false); addLog("info", "Kill switch complete: all bot positions closed, auto mode stopped.");
         }
@@ -658,8 +660,10 @@ function App() {
           pass++;
           await Promise.all([refreshCore(pass).catch(() => {}), pass % 2 === 0 ? refreshKalshiLive().catch(() => {}) : null]);
           mergeGames();
-          const changed = st.games.some(g => before[g.id] && before[g.id] !== (st.gameState[g.id] || {}).scoreSig && hasPositionInGame(g.id));
-          if (changed) decideAndAct({ exitsOnly: true }).catch(() => {});
+          // a fresh score in a game we hold or have on auto: decide right away (exits, and feed-lead entries) instead of waiting for the tick
+          const changed = st.games.filter(g => before[g.id] && before[g.id] !== (st.gameState[g.id] || {}).scoreSig);
+          if (changed.some(g => hasPositionInGame(g.id) || R.current.enabled[g.id]))
+            decideAndAct({ exitsOnly: !R.current.running || R.current.paused, fast: true }).catch(() => {});
         } catch (e) {}
         await sleep(Math.max(300, 1500 - (Date.now() - t0)));
       }
@@ -985,7 +989,7 @@ const CFG_FIELDS = [
     ["entryEdge", "Min edge after fees (¢)"], ["minPrice", "Min contract price (¢)"], ["maxPrice", "Max contract price (¢)"],
     ["maxQuoteWidth", "Max bid/ask width (¢)"], ["minVolume", "Min market volume"], ["noEntryLastSecs", "No entries in final (sec)"],
     ["cooldownSecs", "Re-entry cooldown (sec)"], ["gameTimeoutSecs", "Game timeout after stop-loss (sec)"], ["maxStopsPerGame", "Done with a game after N stop-losses"], ["blowoutMargin", "No 2nd-half entries when lead ≥"], ["reentryEdgeBonus", "Extra edge to re-enter (¢)"], ["maxPositionsPerGame", "Max positions per game"],
-    ["freezeAfterScoreSecs", "Pause after a score (sec)"], ["confirmTicks", "Edge must hold for N ticks"], ["marketJumpCents", "Market-jump freeze trigger (¢)"], ["alpha", "Weight on own model (0 = pure market)", 0.05],
+    ["freezeAfterScoreSecs", "Pause after a score (sec)"], ["confirmTicks", "Edge must hold for N ticks"], ["leadEntryEdge", "Feed-lead entry edge (¢)"], ["marketJumpCents", "Market-jump freeze trigger (¢)"], ["alpha", "Weight on own model (0 = pure market)", 0.05],
   ]],
   ["Cash-out rules", [
     ["takeProfit", "Take profit at +¢"], ["takeProfitPct", "…or at +% of cost", 0.05], ["stopLoss", "Stop loss at -¢"],

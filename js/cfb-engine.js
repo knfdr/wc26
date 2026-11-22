@@ -335,9 +335,17 @@ function simRemaining(g, homePts, awayPts, n, opts) {
 function makeDist(margins, totals) {
   const n = margins.length;
   let hw = 0, sm = 0, st = 0; for (let i = 0; i < n; i++) { if (margins[i] > 0) hw++; sm += margins[i]; st += totals[i]; }
+  // cumulative tables so each probability lookup is O(1): gtM[x+OFF] = #margins > x, gtT[x] = #totals > x
+  const OFF = 400, gtM = new Int32Array(2 * OFF + 2), gtT = new Int32Array(OFF + 2);
+  const cm = new Int32Array(2 * OFF + 2), ct = new Int32Array(OFF + 2);
+  for (let i = 0; i < n; i++) { cm[clamp(margins[i], -OFF, OFF) + OFF]++; ct[clamp(totals[i], 0, OFF)]++; }
+  for (let x = 2 * OFF; x >= 0; x--) gtM[x] = gtM[x + 1] + cm[x + 1];
+  for (let x = OFF; x >= 0; x--) gtT[x] = gtT[x + 1] + ct[x + 1];
+  const gtMargin = (L) => { const x = Math.floor(L); if (x < -OFF) return n; if (x > OFF) return 0; return gtM[x + OFF]; };   // #margins > L
+  const ltMargin = (L) => { const x = Math.ceil(L) - 1; return n - gtMargin(x); };                                          // #margins < L
   return { n, margins, totals, pHome: hw / n, meanMargin: sm / n, meanTotal: st / n,
-    pCover(side, line) { let k = 0; for (let i = 0; i < n; i++) { const m = side === "home" ? margins[i] : -margins[i]; if (m > line) k++; } return k / n; },
-    pOver(line) { let k = 0; for (let i = 0; i < n; i++) if (totals[i] > line) k++; return k / n; } };
+    pCover(side, line) { return (side === "home" ? gtMargin(line) : ltMargin(-line)) / n; },
+    pOver(line) { const x = Math.floor(line); if (x < 0) return 1; if (x > OFF) return 0; return gtT[x] / n; } };
 }
 
 // Points per team implied by a spread (expected home margin) and total.
@@ -350,7 +358,7 @@ function teamPoints(pre) {
 // Calibrate (delta, kappa) so the sim reproduces the market's own liquid prices:
 //   delta (strength tilt) matches the moneyline; kappa (scoring rate) matches the total strike
 //   nearest 50%. Then blend probabilities: alpha * our pregame-anchored sim + (1-alpha) * calibrated sim.
-const _calCache = new Map();
+const _calCache = new Map(), _lastCal = new Map();
 function liveDistribution(g, pre, markets, cfg) {
   cfg = cfg || {};
   const alpha = cfg.alpha != null ? cfg.alpha : 0.35;
@@ -401,26 +409,23 @@ function liveDistribution(g, pre, markets, cfg) {
 
   const cal = { delta: 0, kappa: 1 };
   if (!ot && g.state !== "post") {
-    for (let round = 0; round < (target.pHome != null && target.totalLine != null ? 2 : 1); round++) {
-      if (target.pHome != null) {
-        let lo = -2.5, hi = 2.5;
-        for (let it = 0; it < 10; it++) {
-          const m = (lo + hi) / 2;
-          const d = simRemaining(g, tp.home, tp.away, N_CAL, { delta: m, kappa: cal.kappa, seed });
-          if (d.pHome < target.pHome) lo = m; else hi = m;
-        }
-        cal.delta = (lo + hi) / 2;
-      }
-      if (target.totalLine != null) {
-        let lo = 0.25, hi = 3;
-        for (let it = 0; it < 9; it++) {
-          const m = (lo + hi) / 2;
-          const d = simRemaining(g, tp.home, tp.away, N_CAL, { delta: cal.delta, kappa: m, seed });
-          if (d.pOver(target.totalLine) < target.pOver) lo = m; else hi = m;
-        }
-        cal.kappa = (lo + hi) / 2;
+    // warm start from this game's last calibration: a narrow bracket and one round is enough between ticks
+    const prev = _lastCal.get(g.id);
+    const bisect = (lo, hi, iters, f) => { for (let it = 0; it < iters; it++) { const m = (lo + hi) / 2; if (f(m)) lo = m; else hi = m; } return (lo + hi) / 2; };
+    const fitDelta = (lo, hi, iters) => bisect(lo, hi, iters, m => simRemaining(g, tp.home, tp.away, N_CAL, { delta: m, kappa: cal.kappa, seed }).pHome < target.pHome);
+    const fitKappa = (lo, hi, iters) => bisect(lo, hi, iters, m => simRemaining(g, tp.home, tp.away, N_CAL, { delta: cal.delta, kappa: m, seed }).pOver(target.totalLine) < target.pOver);
+    const edge = (v, lo, hi) => Math.abs(v - lo) < 0.02 * (hi - lo) || Math.abs(v - hi) < 0.02 * (hi - lo);
+    if (prev) {
+      cal.delta = prev.delta; cal.kappa = prev.kappa;
+      if (target.pHome != null) { const lo = prev.delta - 0.4, hi = prev.delta + 0.4; cal.delta = fitDelta(lo, hi, 6); if (edge(cal.delta, lo, hi)) cal.delta = fitDelta(-2.5, 2.5, 10); }
+      if (target.totalLine != null) { const lo = prev.kappa * 0.8, hi = prev.kappa * 1.25; cal.kappa = fitKappa(lo, hi, 6); if (edge(cal.kappa, lo, hi)) cal.kappa = fitKappa(0.25, 3, 9); }
+    } else {
+      for (let round = 0; round < (target.pHome != null && target.totalLine != null ? 2 : 1); round++) {
+        if (target.pHome != null) cal.delta = fitDelta(-2.5, 2.5, 10);
+        if (target.totalLine != null) cal.kappa = fitKappa(0.25, 3, 9);
       }
     }
+    _lastCal.set(g.id, { delta: cal.delta, kappa: cal.kappa });
   }
   const calibrated = simRemaining(g, tp.home, tp.away, N, { ...cal, seed: seed + 1 });
   const model = alpha > 0 ? simRemaining(g, tp.home, tp.away, N, { delta: 0, kappa: 1, seed: seed + 2 }) : calibrated;
@@ -688,6 +693,12 @@ const DEFAULT_CONFIG = {
   cooldownSecs: 60,        // wait after exiting a market before re-entering it
   anchorHoldSecs: 20,      // after a score/possession change, price the new state with the pre-change calibration this long
   leadEntries: true,       // allow entries in that window when the market hasn't moved yet (paper-test first)
+  leadEntryEdge: 6,        // edge needed for a feed-lead entry (¢, after fee)
+  leadTargetFrac: 0.8,     // feed-lead take-profit = this share of the entry edge...
+  leadMinTarget: 4,        // ...but at least this many ¢
+  leadMaxHoldSecs: 180,    // the catch-up is over by then: flatten a lead trade unless it's down more than leadMaxGiveBack
+  leadMaxGiveBack: 6,
+  modelEntries: false,     // also enter on plain model-vs-market disagreement (lost money in paper; off by default)
   leadMaxPreMove: 2,       // ...and only if the moneyline hadn't already moved this many ¢ before our feed showed it
   maxStopsPerGame: 2,      // after this many stop-losses in one game, stop entering it
   gameTimeoutSecs: 300,    // after a stop-loss, no new entries in that game for this long
@@ -697,7 +708,7 @@ const DEFAULT_CONFIG = {
   alpha: 0.25,             // weight on our pregame-anchored model vs the market-calibrated one
   marketJumpCents: 6,      // if the moneyline moves this much while ESPN shows no change, freeze entries
   marketJumpFreezeSecs: 30,
-  sims: 12000,
+  sims: 6000,
   feeRate: 0.07,
   kinds: { win: true, spread: true, total: true },
   includeHalf: false,
@@ -792,7 +803,9 @@ function decide(input) {
         let reason = null;
         if (input.killed) reason = "kill switch";
         else if (q.bid >= cfg.holdToSettleAt) { ev.note = "holding to settle"; continue; }
+        else if (pos.lead && pos.tpPrice && q.bid >= pos.tpPrice) reason = `lead target hit +${gain}¢`;
         else if (gain >= cfg.takeProfit || (pos.avgCost > 0 && gain / pos.avgCost >= cfg.takeProfitPct)) reason = `take profit +${gain}¢`;
+        else if (pos.lead && pos.openedAt && (now - pos.openedAt) / 1000 > cfg.leadMaxHoldSecs && gain >= -cfg.leadMaxGiveBack) reason = `lead window over (${gain >= 0 ? "+" : ""}${gain}¢)`;
         else if (-gain >= cfg.stopLoss || (peak - pos.avgCost >= cfg.trailArm && peak - q.bid >= cfg.trailGive)) {
           // Don't dump into a pulled book: during a weather delay, or when the quote is wide and the model says the bid is far too low.
           const width = q.ask != null ? q.ask - q.bid : 99;
@@ -830,7 +843,10 @@ function decide(input) {
       if (cd && cd.until > now) { ev.note = "cooldown"; continue; }
       if ((gamePosCount[g.id] || 0) >= cfg.maxPositionsPerGame) { ev.note = "max positions"; continue; }
 
-      const need = cfg.entryEdge + (cd && cd.exits ? cfg.reentryEdgeBonus : 0);
+      // Tonight's paper log: feed-lead entries 5W-2L +$3.72, model-disagreement entries 8W-14L -$21.48. So by default
+      // the bot only enters on a fresh score the market hasn't priced; model entries are opt-in.
+      if (!leadOk && !cfg.modelEntries) { ev.note = "waiting for a fresh score (lead-only)"; continue; }
+      const need = (leadOk ? cfg.leadEntryEdge : cfg.entryEdge) + (cd && cd.exits ? cfg.reentryEdgeBonus : 0);
       let best = null;
       for (const side of ["yes", "no"]) {
         const q = sideQuotes(mk, side);
@@ -856,7 +872,7 @@ function decide(input) {
       cands.push({ type: "buy", ticker: mk.ticker, side: best.side, count, limit: best.q.ask, kind: mk.kind,
                    reason: `${leadOk ? "FEED LEAD " : ""}edge ${best.edge.toFixed(1)}¢ (fair ${best.fairSide.toFixed(0)}¢ vs ask ${best.q.ask}¢)`, lead: leadOk,
                    gameId: g.id, fair: best.fairSide, edge: best.edge, cost: count * c,
-                   takeProfitPrice: Math.min(99, best.q.ask + cfg.takeProfit) });
+                   takeProfitPrice: Math.min(99, best.q.ask + (leadOk ? Math.max(cfg.leadMinTarget, Math.round(best.edge * cfg.leadTargetFrac)) : cfg.takeProfit)) });
     }
     // At most one new entry per game per tick (the best edge): the ladders are highly correlated,
     // and "LSU wins YES" and "Tennessee wins NO" are the same bet.

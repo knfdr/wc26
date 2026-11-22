@@ -81,7 +81,7 @@ test("decide: one entry per game, no entries when paused/stale/frozen/late/delay
   const markets = [mk("win", "home", 0, 69, 71), mk("win", "away", 0, 29, 31), mk("total", "over", 49.5, 49, 51),
                    mk("spread", "home", 0.5, 40, 42), mk("spread", "home", 1.5, 39, 41)];
   const G = { g, pre: { spreadHome: 3, total: 50 }, dataTs: Date.now(), markets, enabled: true };
-  const run = (over, gOver) => CFB.decide({ now: Date.now(), cfg: { alpha: 0, entryEdge: 5 }, positions: {}, games: [{ ...G, ...gOver }], ...over }).actions.filter(a => a.type === "buy");
+  const run = (over, gOver) => CFB.decide({ now: Date.now(), cfg: { alpha: 0, entryEdge: 5, modelEntries: true }, positions: {}, games: [{ ...G, ...gOver }], ...over }).actions.filter(a => a.type === "buy");
   const buys = run({});
   assert.equal(buys.length, 1, JSON.stringify(buys));
   assert.equal(run({ paused: true }).length, 0);
@@ -156,4 +156,17 @@ test("decide: feed lead — a fresh score the market hasn't priced yet is tradab
   const moved = markets.map(m => m.kind === "win" ? { ...m, yesBid: m.side === "home" ? 74 : 24, yesAsk: m.side === "home" ? 76 : 26 } : m);
   const b2 = run("L2", { home: team("h", "TENN", "Tennessee", "Tennessee", 21), possession: "away", yardsToGoal: 75 }, moved, t0 + 26000);
   assert.equal(b2.filter(a => /FEED LEAD/.test(a.reason)).length, 0);
+  // lead-only mode (default): no entry without a fresh score
+  run("L3", {}, markets, t0); assert.equal(run("L3", {}, markets, t0 + 25000).length, 0);
+});
+
+test("decide: feed-lead positions exit at their own target or when the lead window is over", () => {
+  const g = game({ id: "X1" });
+  const m = mk("spread", "home", 3.5, 50, 52);
+  const run = (pos, now) => CFB.decide({ now, cfg: { alpha: 0 }, positions: { [m.ticker]: { gameId: "X1", side: "yes", count: 10, lead: true, ...pos } },
+    games: [{ g, pre: { spreadHome: 3, total: 50 }, dataTs: now, markets: [m], enabled: true }] }).actions.filter(a => a.type === "sell");
+  const t = Date.now();
+  assert.match(run({ avgCost: 45, tpPrice: 50, openedAt: t }, t)[0].reason, /lead target/);
+  assert.match(run({ avgCost: 49, tpPrice: 56, openedAt: t - 200000 }, t)[0].reason, /lead window over/);
+  assert.equal(run({ avgCost: 49, tpPrice: 56, openedAt: t - 30000 }, t).length, 0);
 });
