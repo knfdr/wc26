@@ -698,6 +698,8 @@ const DEFAULT_CONFIG = {
   leadMinTarget: 4,        // ...but at least this many ¢
   leadMaxHoldSecs: 180,    // the catch-up is over by then: flatten a lead trade unless it's down more than leadMaxGiveBack
   leadMaxGiveBack: 6,
+  maxMarketAgeSecs: 6,     // no entries on quotes older than this
+  maxEdge: 25,             // an "edge" bigger than this is almost always stale or bad data, not opportunity
   modelEntries: false,     // also enter on plain model-vs-market disagreement (lost money in paper; off by default)
   leadMaxPreMove: 2,       // ...and only if the moneyline hadn't already moved this many ¢ before our feed showed it
   maxStopsPerGame: 2,      // after this many stop-losses in one game, stop entering it
@@ -773,7 +775,9 @@ function decide(input) {
       _anchors.set(g.id, { cal: live.cal, corr: live.corr, keySig, mid: mlMid, ts: now });
     // the market hadn't already moved before our feed showed the change (otherwise it's the market leading, not us)
     const scoreMoved = anchor && anchor.keySig.split("|").slice(0, 2).join("|") !== keySig.split("|").slice(0, 2).join("|");
-    const leadOk = holding && scoreMoved && cfg.leadEntries && feedFast(g) && !g.reviewPending;
+    // quotes must be fresh: after a stall (a frozen background tab), old quotes next to a new score look like huge fake edges
+    const marketFresh = !G.marketTs || (now - G.marketTs) / 1000 <= cfg.maxMarketAgeSecs;
+    const leadOk = holding && scoreMoved && cfg.leadEntries && feedFast(g) && !g.reviewPending && marketFresh;
     // a key change we can't trade on: block entries until the hold window passes (data / market catching up)
     const catchingUp = anchor && anchor.keySig !== keySig && sinceKey < cfg.anchorHoldSecs && !leadOk;
     const proj = live.dist; proj.cal = live.cal; proj.eff = live.eff; proj.target = live.target; proj.held = holding;
@@ -845,6 +849,7 @@ function decide(input) {
 
       // Tonight's paper log: feed-lead entries 5W-2L +$3.72, model-disagreement entries 8W-14L -$21.48. So by default
       // the bot only enters on a fresh score the market hasn't priced; model entries are opt-in.
+      if (!marketFresh) { ev.note = "quotes stale"; continue; }
       if (!leadOk && !cfg.modelEntries) { ev.note = "waiting for a fresh score (lead-only)"; continue; }
       const need = (leadOk ? cfg.leadEntryEdge : cfg.entryEdge) + (cd && cd.exits ? cfg.reentryEdgeBonus : 0);
       let best = null;
@@ -859,6 +864,7 @@ function decide(input) {
       if (!best) { ev.note = "price out of band"; continue; }
       ev.edge = best.edge; ev.bestSide = best.side;
       if (best.edge < need) { ev.note = `edge ${best.edge.toFixed(1)}¢`; continue; }
+      if (best.edge > cfg.maxEdge) { ev.note = `edge ${best.edge.toFixed(0)}¢ too big to trust (stale data?)`; continue; }
 
       // Kelly sizing for a binary contract: f* = (p - c) / (1 - c)
       const p = best.fairSide / 100, c = best.q.ask / 100;

@@ -505,7 +505,7 @@ function App() {
         if (exitsOnly && !Object.values(input.positions).some(p => p.gameId === g.id)) continue;
         const gs = st.gameState[g.id] || {};
         input.games.push({ g, pre: st.pre[g.id], dataTs: gs.dataTs, lastScoreChangeTs: gs.lastScoreChangeTs, freezeUntil: gs.freezeUntil,
-                           markets: st.markets[g.id] || [], enabled: !!R.current.enabled[g.id] });
+                           markets: st.markets[g.id] || [], marketTs: st.marketTs[g.id] || 0, enabled: !!R.current.enabled[g.id] });
       }
       const res = CFB.decide(input);
       // peak tracking for trailing stops
