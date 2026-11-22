@@ -155,12 +155,103 @@ a{text-decoration:none;color:inherit}
   <div class="site-title">Sharp Sim</div>
   <div class="site-sub">Monte Carlo · Dixon-Coles · Markov Chain · xG · FIP · Park Factors</div>
   <div class="site-model-tag">GOLD-STANDARD SIMULATION MODELS · 100,000 ITERATIONS</div>
+  <a href="settings.html" style="display:inline-block;margin-top:12px;font-size:10px;letter-spacing:2px;color:#7a8ca8;border:1px solid #1a2a3e;border-radius:4px;padding:5px 12px">⚙ SETTINGS</a>
 </div>
 
 <div class="body">
 
   <div class="section-label">Select Sport</div>
   <div class="cards">
+    <a href="nfl.html" class="sport-card" style="--accent:#3b82f6">
+      <span class="card-badge">⚡ LIVE</span>
+      <span class="card-icon">🏈</span>
+      <div class="card-sport">NFL</div>
+      <div class="card-title">NFL Sim</div>
+      <div id="perf-NFL"><div class="skel" style="width:130px;height:11px;margin:7px 0 10px"></div></div>
+      <div style="margin:7px 0 10px;font-size:10px;color:#3b82f6;font-weight:700">Drive-by-drive · key numbers · every Kalshi strike</div>
+      <div class="card-desc">100,000 drive-level game simulations calibrated to a blend of results ratings, ESPN FPI and the closing line, with late-game play-calling and 2025 overtime rules so margins land on 3, 7 and 10 the way real NFL games do.</div>
+      <div class="card-tags">
+        <span class="card-tag">Drive Sim</span>
+        <span class="card-tag">Key Numbers</span>
+        <span class="card-tag">FPI Blend</span>
+        <span class="card-tag">Market-Anchored</span>
+        <span class="card-tag">Live Auto</span>
+        <span class="card-tag">Kalshi</span>
+      </div>
+      <span class="card-arrow">→</span>
+    </a>
+
+    <a href="cfb.html" class="sport-card" style="--accent:#f97316">
+      <span class="card-badge">⚡ LIVE</span>
+      <span class="card-icon">🏈</span>
+      <div class="card-sport">NCAA Football · FBS</div>
+      <div class="card-title">College Football Sim</div>
+      <div id="perf-CFB"><div class="skel" style="width:130px;height:11px;margin:7px 0 10px"></div></div>
+      <div style="margin:7px 0 10px;font-size:10px;color:#f97316;font-weight:700">Priced against every Kalshi strike</div>
+      <div class="card-desc">Opponent-adjusted offense/defense ratings fit on this season's results, blended with ESPN FPI and the closing line. 100,000-iteration correlated margin/total sim against Kalshi moneyline, spread and total ladders.</div>
+      <div class="card-tags">
+        <span class="card-tag">Ridge Ratings</span>
+        <span class="card-tag">FPI Blend</span>
+        <span class="card-tag">Market-Anchored</span>
+        <span class="card-tag">Spread Ladder</span>
+        <span class="card-tag">Totals</span>
+        <span class="card-tag">Kalshi</span>
+      </div>
+      <span class="card-arrow">→</span>
+    </a>
+
+    <a href="live.html" class="sport-card" style="--accent:#ef4444">
+      <span class="card-badge" style="background:rgba(239,68,68,0.12);border-color:rgba(239,68,68,0.3);color:#ef4444">● AUTO</span>
+      <span class="card-icon">⚡</span>
+      <div class="card-sport">Live Auto · CFB first</div>
+      <div class="card-title">Auto Cash-Out Trader</div>
+      <div style="margin:7px 0 10px;font-size:10px;color:#ef4444;font-weight:700">Paper mode by default</div>
+      <div class="card-desc">Watches every position's Kalshi cash-out value in-game and sells on take-profit, stop-loss, trailing stop or when the edge is gone, then re-enters for the rest of the game. Drive-by-drive live sim calibrated to Kalshi's own ladder.</div>
+      <div class="card-tags">
+        <span class="card-tag">In-Game</span>
+        <span class="card-tag">Take Profit</span>
+        <span class="card-tag">Stop Loss</span>
+        <span class="card-tag">Trailing Stop</span>
+        <span class="card-tag">Re-Entry</span>
+        <span class="card-tag">Kill Switch</span>
+      </div>
+      <span class="card-arrow">→</span>
+    </a>
+
+    <a href="golf.html" class="sport-card" style="--accent:#4ade80">
+      <span class="card-badge">⚡ LIVE</span>
+      <span class="card-icon">⛳</span>
+      <div class="card-sport">PGA Tour · US Open</div>
+      <div class="card-title">Golf Sim</div>
+      <div id="perf-GOLF"><div class="skel" style="width:130px;height:11px;margin:7px 0 10px"></div></div>
+      <div class="card-desc">Strokes Gained Monte Carlo tournament simulation. 25,000-iteration field sim with cut logic, H2H matchup calculator, and outright winner odds from The Odds API.</div>
+      <div class="card-tags">
+        <span class="card-tag">SG:Total Model</span>
+        <span class="card-tag">Cut Simulation</span>
+        <span class="card-tag">Win / Top 10</span>
+        <span class="card-tag">Make Cut %</span>
+        <span class="card-tag">H2H Matchups</span>
+        <span class="card-tag">Outright Odds</span>
+      </div>
+      <span class="card-arrow">→</span>
+    </a>
+
+    <a href="parlays.html" class="sport-card" style="--accent:#a78bfa">
+      <span class="card-badge">⚡ LIVE</span>
+      <span class="card-icon">🎰</span>
+      <div class="card-sport">Multi-Sport</div>
+      <div class="card-title">Cross-Sport Parlays</div>
+      <div style="margin:7px 0 10px;font-size:10px;color:#a78bfa;font-weight:700">MLB · WNBA · WC 2026</div>
+      <div class="card-desc">Combined parlay builder across all three sports. Pulls qualifying signals from MLB, WNBA, and FIFA World Cup simulations and builds 2–5 leg cross-sport combos ranked by joint probability.</div>
+      <div class="card-tags">
+        <span class="card-tag">Cross-Sport</span>
+        <span class="card-tag">2/3/4/5-Leg</span>
+        <span class="card-tag">Joint Probability</span>
+        <span class="card-tag">Fair Odds</span>
+        <span class="card-tag">Signal Pool</span>
+      </div>
+      <span class="card-arrow">→</span>
+    </a>
 
     <a href="mlb.html" class="sport-card" style="--accent:#22c55e">
       <span class="card-badge">⚡ LIVE</span>
@@ -200,113 +291,6 @@ a{text-decoration:none;color:inherit}
       <span class="card-arrow">→</span>
     </a>
 
-    <a href="wc26.html" class="sport-card" style="--accent:#e8c547">
-      <span class="card-badge">⚡ LIVE</span>
-      <span class="card-icon">⚽</span>
-      <div class="card-sport">FIFA World Cup 2026</div>
-      <div class="card-title">WC 2026 Sim</div>
-      <div id="perf-WC"><div class="skel" style="width:130px;height:11px;margin:7px 0 10px"></div></div>
-      <div class="card-desc">Dixon-Coles team strength model with xG shot simulation, Negative Binomial card model, 1H splits, corner markets, and parlay builder across all June 14 matches.</div>
-      <div class="card-tags">
-        <span class="card-tag">Dixon-Coles</span>
-        <span class="card-tag">xG Shot Sim</span>
-        <span class="card-tag">NegBin Cards</span>
-        <span class="card-tag">Corners</span>
-        <span class="card-tag">1H Markets</span>
-        <span class="card-tag">Parlay Builder</span>
-      </div>
-      <span class="card-arrow">→</span>
-    </a>
-
-    <a href="nfl.html" class="sport-card" style="--accent:#3b82f6">
-      <span class="card-badge">⚡ LIVE</span>
-      <span class="card-icon">🏈</span>
-      <div class="card-sport">NFL</div>
-      <div class="card-title">NFL Sim</div>
-      <div style="margin:7px 0 10px;font-size:10px;color:#3b82f6;font-weight:700">Drive-by-drive · key numbers · every Kalshi strike</div>
-      <div class="card-desc">100,000 drive-level game simulations calibrated to a blend of results ratings, ESPN FPI and the closing line, with late-game play-calling and 2025 overtime rules so margins land on 3, 7 and 10 the way real NFL games do.</div>
-      <div class="card-tags">
-        <span class="card-tag">Drive Sim</span>
-        <span class="card-tag">Key Numbers</span>
-        <span class="card-tag">FPI Blend</span>
-        <span class="card-tag">Market-Anchored</span>
-        <span class="card-tag">Live Auto</span>
-        <span class="card-tag">Kalshi</span>
-      </div>
-      <span class="card-arrow">→</span>
-    </a>
-
-    <a href="cfb.html" class="sport-card" style="--accent:#f97316">
-      <span class="card-badge">⚡ LIVE</span>
-      <span class="card-icon">🏈</span>
-      <div class="card-sport">NCAA Football · FBS</div>
-      <div class="card-title">College Football Sim</div>
-      <div style="margin:7px 0 10px;font-size:10px;color:#f97316;font-weight:700">Priced against every Kalshi strike</div>
-      <div class="card-desc">Opponent-adjusted offense/defense ratings fit on this season's results, blended with ESPN FPI and the closing line. 100,000-iteration correlated margin/total sim against Kalshi moneyline, spread and total ladders.</div>
-      <div class="card-tags">
-        <span class="card-tag">Ridge Ratings</span>
-        <span class="card-tag">FPI Blend</span>
-        <span class="card-tag">Market-Anchored</span>
-        <span class="card-tag">Spread Ladder</span>
-        <span class="card-tag">Totals</span>
-        <span class="card-tag">Kalshi</span>
-      </div>
-      <span class="card-arrow">→</span>
-    </a>
-
-    <a href="live.html" class="sport-card" style="--accent:#ef4444">
-      <span class="card-badge" style="background:rgba(239,68,68,0.12);border-color:rgba(239,68,68,0.3);color:#ef4444">● AUTO</span>
-      <span class="card-icon">⚡</span>
-      <div class="card-sport">Live Auto · CFB first</div>
-      <div class="card-title">Auto Cash-Out Trader</div>
-      <div style="margin:7px 0 10px;font-size:10px;color:#ef4444;font-weight:700">Paper mode by default</div>
-      <div class="card-desc">Watches every position's Kalshi cash-out value in-game and sells on take-profit, stop-loss, trailing stop or when the edge is gone, then re-enters for the rest of the game. Drive-by-drive live sim calibrated to Kalshi's own ladder.</div>
-      <div class="card-tags">
-        <span class="card-tag">In-Game</span>
-        <span class="card-tag">Take Profit</span>
-        <span class="card-tag">Stop Loss</span>
-        <span class="card-tag">Trailing Stop</span>
-        <span class="card-tag">Re-Entry</span>
-        <span class="card-tag">Kill Switch</span>
-      </div>
-      <span class="card-arrow">→</span>
-    </a>
-
-    <a href="parlays.html" class="sport-card" style="--accent:#a78bfa">
-      <span class="card-badge">⚡ LIVE</span>
-      <span class="card-icon">🎰</span>
-      <div class="card-sport">Multi-Sport</div>
-      <div class="card-title">Cross-Sport Parlays</div>
-      <div style="margin:7px 0 10px;font-size:10px;color:#a78bfa;font-weight:700">MLB · WNBA · WC 2026</div>
-      <div class="card-desc">Combined parlay builder across all three sports. Pulls qualifying signals from MLB, WNBA, and FIFA World Cup simulations and builds 2–5 leg cross-sport combos ranked by joint probability.</div>
-      <div class="card-tags">
-        <span class="card-tag">Cross-Sport</span>
-        <span class="card-tag">2/3/4/5-Leg</span>
-        <span class="card-tag">Joint Probability</span>
-        <span class="card-tag">Fair Odds</span>
-        <span class="card-tag">Signal Pool</span>
-      </div>
-      <span class="card-arrow">→</span>
-    </a>
-
-    <a href="golf.html" class="sport-card" style="--accent:#4ade80">
-      <span class="card-badge">⚡ LIVE</span>
-      <span class="card-icon">⛳</span>
-      <div class="card-sport">PGA Tour · US Open</div>
-      <div class="card-title">Golf Sim</div>
-      <div id="perf-GOLF"><div class="skel" style="width:130px;height:11px;margin:7px 0 10px"></div></div>
-      <div class="card-desc">Strokes Gained Monte Carlo tournament simulation. 25,000-iteration field sim with cut logic, H2H matchup calculator, and outright winner odds from The Odds API.</div>
-      <div class="card-tags">
-        <span class="card-tag">SG:Total Model</span>
-        <span class="card-tag">Cut Simulation</span>
-        <span class="card-tag">Win / Top 10</span>
-        <span class="card-tag">Make Cut %</span>
-        <span class="card-tag">H2H Matchups</span>
-        <span class="card-tag">Outright Odds</span>
-      </div>
-      <span class="card-arrow">→</span>
-    </a>
-
   </div>
 
   <div class="section-label">Model Architecture</div>
@@ -339,7 +323,7 @@ a{text-decoration:none;color:inherit}
     <div class="stack-item">
       <div class="stack-num">06</div>
       <div class="stack-name">Parlay Builder</div>
-      <div class="stack-desc">Cross-game parlay construction from LOCK/HIGH/LEAN signals. Ranked by joint probability, fair odds shown.</div>
+      <div class="stack-desc">Cross-game parlays built from STRONG and GOOD picks. Ranked by joint probability, fair odds shown.</div>
     </div>
   </div>
 
@@ -352,93 +336,45 @@ a{text-decoration:none;color:inherit}
 
 <div class="footer">SHARP SIM · MONTE CARLO SPORTS MODELING · NOT PROFESSIONAL BETTING ADVICE</div>
 
+<script src="js/bets.js"></script>
 <script>
-const TIER_ORDER = ["LOCK","HIGH","LEAN","CONSIDER","OTHER"];
-const TIER_COLORS = { LOCK:"#ef4444", HIGH:"#22c55e", LEAN:"#e8c547", CONSIDER:"#a78bfa", OTHER:"#4b6280" };
-
+// Win/loss record of STRONG and GOOD picks per sport (older LOCK/HIGH picks count as STRONG/GOOD).
 const RESOLVE_CACHE_KEY = "sharp_resolve_cache";
 const RESOLVE_TTL = 15 * 60 * 1000;
+const B = window.SharpBets;
 
 function formatAge(ts) {
   const mins = Math.floor((Date.now() - ts) / 60000);
   if (mins < 1) return "just now";
   if (mins < 60) return mins + "m ago";
-  const hrs = Math.floor(mins / 60);
-  return hrs + "h " + (mins % 60) + "m ago";
+  return Math.floor(mins / 60) + "h " + (mins % 60) + "m ago";
 }
-
+function wl(r) {
+  return '<span style="font-size:12px;font-weight:700"><span style="color:#22c55e">' + r.w + 'W</span>-<span style="color:#ef4444">' + r.l + 'L</span>' +
+    (r.p ? '<span style="color:#4b6280;font-size:10px"> ' + r.p + 'P</span>' : '') + '</span> <span style="font-size:9px;color:#7a8ca8">' + B.winPct(r) + '</span>' +
+    (r.pending ? ' <span style="font-size:9px;color:#4b6280">' + r.pending + ' pending</span>' : '');
+}
 async function loadStats() {
-  try {
-    let bets, fetchedAt;
-    try {
-      const cached = JSON.parse(localStorage.getItem(RESOLVE_CACHE_KEY) || "null");
-      if (cached && Date.now() - cached.ts < RESOLVE_TTL) {
-        bets = cached.bets;
-        fetchedAt = cached.ts;
-      }
-    } catch(e) {}
-
-    if (!bets) {
-      const res = await fetch("/api/resolve");
-      if (!res.ok) return;
-      bets = await res.json();
-      fetchedAt = Date.now();
-      try { localStorage.setItem(RESOLVE_CACHE_KEY, JSON.stringify({ ts: fetchedAt, bets })); } catch(e) {}
+  let bets, fetchedAt;
+  try { const c = JSON.parse(localStorage.getItem(RESOLVE_CACHE_KEY) || "null"); if (c && Date.now() - c.ts < RESOLVE_TTL) { bets = c.bets; fetchedAt = c.ts; } } catch (e) {}
+  if (!bets) {
+    try { const res = await fetch("/api/resolve"); if (res.ok && (res.headers.get("content-type") || "").includes("json")) { bets = await res.json(); fetchedAt = Date.now();
+      try { localStorage.setItem(RESOLVE_CACHE_KEY, JSON.stringify({ ts: fetchedAt, bets })); } catch (e) {} } } catch (e) {}
+  }
+  const rec = B.record(bets || []);
+  document.querySelectorAll('[id^="perf-"]').forEach(slot => {
+    const r = rec.bySport[slot.id.slice(5).toLowerCase()];
+    if (!r || !(r.w + r.l + r.p + r.pending)) { slot.innerHTML = '<div style="font-size:9px;color:#4b6280;margin:7px 0 10px">No graded picks yet</div>'; return; }
+    let html = '<div style="margin:7px 0 10px">';
+    for (const k of ["STRONG", "GOOD"]) {
+      const t = r[k]; if (!(t.w + t.l + t.p + t.pending)) continue;
+      const c = B.COLORS[k];
+      html += '<div style="display:flex;align-items:center;gap:8px;padding:2px 0 2px 10px;border-left:2px solid ' + c + '44">' +
+        '<span style="background:' + c + '22;border:1px solid ' + c + '44;color:' + c + ';font-size:7px;font-weight:700;padding:1px 4px;border-radius:2px;letter-spacing:1px;min-width:62px;text-align:center">' + B.LABELS[k] + '</span>' + wl(t) + '</div>';
     }
-
-    if (!bets.length) return;
-
-    const resolved = bets.filter(b => b.result !== "pending");
-    const bySport = {};
-    const bySportTier = {};
-    resolved.forEach(b => {
-      const tier = b.tier || "OTHER";
-      if (!bySport[b.sport]) bySport[b.sport] = { wins:0, losses:0, pushes:0, units:0 };
-      bySport[b.sport].units += b.result==="win"?b.units:b.result==="loss"?-b.units:0;
-      if (b.result==="win") bySport[b.sport].wins++;
-      else if (b.result==="loss") bySport[b.sport].losses++;
-      else bySport[b.sport].pushes++;
-      if (!bySportTier[b.sport]) bySportTier[b.sport] = {};
-      if (!bySportTier[b.sport][tier]) bySportTier[b.sport][tier] = { wins:0, losses:0, pushes:0, units:0 };
-      bySportTier[b.sport][tier].units += b.result==="win"?b.units:b.result==="loss"?-b.units:0;
-      if (b.result==="win") bySportTier[b.sport][tier].wins++;
-      else if (b.result==="loss") bySportTier[b.sport][tier].losses++;
-      else bySportTier[b.sport][tier].pushes++;
-    });
-
-    Object.entries(bySport).forEach(([sport, sp]) => {
-      const slot = document.getElementById("perf-" + sport);
-      if (!slot) return;
-      const su = sp.units.toFixed(1);
-      const sc = parseFloat(su)>=0?"#22c55e":"#ef4444";
-      const swp = (sp.wins+sp.losses)>0?((sp.wins/(sp.wins+sp.losses))*100).toFixed(0)+"%" : "—";
-      const tiers = bySportTier[sport] || {};
-      const activeTiers = TIER_ORDER.filter(t => tiers[t]);
-
-      let html = '<div style="margin:7px 0 10px">';
-      html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px">';
-      html += '<span style="font-size:12px;font-weight:700"><span style="color:#22c55e">'+sp.wins+'W</span>-<span style="color:#ef4444">'+sp.losses+'L</span>'+(sp.pushes>0?'<span style="color:#4b6280;font-size:10px"> '+sp.pushes+'P</span>':'')+'</span>';
-      html += '<span style="font-size:9px;color:'+sc+'">'+(parseFloat(su)>=0?"+":"")+su+'u</span>';
-      html += '<span style="font-size:9px;color:#4b6280">'+swp+'</span>';
-      html += '</div>';
-      activeTiers.forEach(tier => {
-        const s = tiers[tier];
-        const tc = TIER_COLORS[tier];
-        const tu = s.units.toFixed(1);
-        const tuc = parseFloat(tu)>=0?"#22c55e":"#ef4444";
-        const twp = (s.wins+s.losses)>0?((s.wins/(s.wins+s.losses))*100).toFixed(0)+"%" : "—";
-        html += '<div style="display:flex;align-items:center;gap:8px;padding:2px 0 2px 10px;border-left:2px solid '+tc+'44">';
-        html += '<span style="background:'+tc+'22;border:1px solid '+tc+'44;color:'+tc+';font-size:7px;font-weight:700;padding:1px 4px;border-radius:2px;letter-spacing:1px;min-width:48px;text-align:center">'+tier+'</span>';
-        html += '<span style="font-size:11px;font-weight:700"><span style="color:#22c55e">'+s.wins+'W</span>-<span style="color:#ef4444">'+s.losses+'L</span></span>';
-        html += '<span style="font-size:9px;color:#4b6280">'+twp+'</span>';
-        html += '<span style="font-size:9px;color:'+tuc+'">'+(parseFloat(tu)>=0?"+":"")+tu+'u</span>';
-        html += '</div>';
-      });
-      html += '<div style="font-size:8px;color:#2a3a52;margin-top:5px;letter-spacing:0.5px">fetched '+formatAge(fetchedAt)+'</div>';
-      html += '</div>';
-      slot.innerHTML = html;
-    });
-  } catch(e) { console.error("Stats load error:", e); }
+    if (fetchedAt) html += '<div style="font-size:8px;color:#2a3a52;margin-top:5px;letter-spacing:0.5px">updated ' + formatAge(fetchedAt) + '</div>';
+    slot.innerHTML = html + '</div>';
+  });
 }
 loadStats();
 </script>

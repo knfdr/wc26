@@ -234,6 +234,18 @@ export async function onRequest(context) {
     return new Response(JSON.stringify(bets), { headers: { "Content-Type": "application/json" } });
   }
 
+  // Picks made against a Kalshi market settle from that market's result (no score matching needed)
+  const kxResult = {};
+  const tickers = [...new Set(pending.filter(b => b.ticker).map(b => b.ticker))].slice(0, 40);
+  await Promise.all(tickers.map(async t => {
+    try {
+      const r = await fetch("https://api.elections.kalshi.com/trade-api/v2/markets/" + encodeURIComponent(t));
+      if (!r.ok) return;
+      const m = (await r.json()).market || {};
+      if (m.result === "yes" || m.result === "no") kxResult[t] = m.result;
+    } catch (e) {}
+  }));
+
   // Fetch scores for every sport that has pending bets
   const sports = [...new Set(pending.map(b => b.sport))];
   const scoreMap = {};
@@ -301,6 +313,10 @@ export async function onRequest(context) {
   // Resolve
   const resolved = bets.map(bet => {
     if (bet.result !== "pending") return bet;
+    if (bet.ticker) {
+      const r = kxResult[bet.ticker];
+      return r ? { ...bet, result: r === (bet.side || "yes") ? "win" : "loss", resolvedAt: new Date().toISOString() } : bet;
+    }
 
     const normHome = normBetTeam(bet.homeTeam);
     const normAway = normBetTeam(bet.awayTeam);

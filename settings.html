@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sharp Sim — Settings</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="js/bets.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100vh;background:#070b14;font-family:'IBM Plex Mono','Courier New',monospace;color:#dde5f0}
+a{color:inherit;text-decoration:none}
+input{font-family:inherit}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect } = React;
+const B = window.SharpBets;
+const T = { bg:"#070b14", navy:"#101d30", border:"#1a2a3e", text:"#dde5f0", muted:"#7a8ca8", dim:"#4b6280", green:"#22c55e", red:"#ef4444", gold:"#e8c547", blue:"#38bdf8" };
+const card = { background: T.navy, border: "1px solid " + T.border, borderRadius: 8, padding: "16px 16px", marginBottom: 14 };
+const label = { fontSize: 8, color: T.muted, letterSpacing: 2, textTransform: "uppercase", marginBottom: 10 };
+const help = { fontSize: 10, color: T.muted, lineHeight: 1.6, marginBottom: 12 };
+const inp = { background: T.bg, border: "1px solid " + T.border, color: T.text, borderRadius: 4, padding: "8px 10px", fontSize: 14, width: 90 };
+
+function Num({ value, onChange, prefix, suffix, step = 1, min = 0, max }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+      {prefix && <span style={{ color: T.muted }}>{prefix}</span>}
+      <input type="number" value={value} step={step} min={min} max={max} onChange={e => onChange(e.target.value === "" ? "" : +e.target.value)} style={inp} />
+      {suffix && <span style={{ color: T.muted, fontSize: 11 }}>{suffix}</span>}
+    </span>
+  );
+}
+function Row({ name, sub, children }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "9px 0", borderTop: "1px solid " + T.border + "88", flexWrap: "wrap" }}>
+      <div><div style={{ fontSize: 12, fontWeight: 600 }}>{name}</div>{sub && <div style={{ fontSize: 9, color: T.muted, marginTop: 2 }}>{sub}</div>}</div>
+      <div>{children}</div>
+    </div>
+  );
+}
+function Toggle({ on, onChange }) {
+  return <button onClick={() => onChange(!on)} style={{ width: 46, height: 26, borderRadius: 13, border: "1px solid " + T.border, background: on ? T.green : T.bg, position: "relative", cursor: "pointer" }}>
+    <span style={{ position: "absolute", top: 2, left: on ? 22 : 2, width: 20, height: 20, borderRadius: 10, background: on ? "#04110a" : T.dim, transition: "left .15s" }} /></button>;
+}
+
+function App() {
+  const live = B.useSettings();
+  const kx = B.useKalshi();
+  const [s, setS] = useState(live);
+  const [dirty, setDirty] = useState(false);
+  const [msg, setMsg] = useState("");
+  useEffect(() => { if (!dirty) setS(live); }, [live]);
+  const set = (path, v) => { setDirty(true); setMsg(""); setS(prev => { const o = JSON.parse(JSON.stringify(prev)); let t = o; for (let i = 0; i < path.length - 1; i++) t = t[path[i]]; t[path[path.length - 1]] = v; return o; }); };
+  async function save() {
+    setMsg("Saving…");
+    try { await B.saveSettings(s); setDirty(false); setMsg("Saved. Every page uses these now, on all your devices."); }
+    catch (e) { setMsg("Saved on this device only (couldn't reach the shared store: " + e.message + ")"); setDirty(false); }
+  }
+  const ex = (sport, k) => { const g = { key: k, edge: k === "STRONG" ? s.strong.minEdge * 1.5 : k === "GOOD" ? s.good.minEdge * 1.5 : s.small.minEdge * 1.5 }; return B.money(B.stake(g, sport, s)); };
+
+  return (
+    <div style={{ maxWidth: 640, margin: "0 auto", padding: "16px 16px 80px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+        <a href="index.html" style={{ fontSize: 10, color: T.muted, letterSpacing: 1 }}>← SHARP SIM</a>
+        <div style={{ fontSize: 9, color: T.muted, letterSpacing: 2 }}>SETTINGS</div>
+      </div>
+      <div style={{ fontSize: 26, fontWeight: 700, marginBottom: 4 }}>Settings</div>
+      <div style={{ ...help, marginBottom: 18 }}>These apply to every sport page. They're saved to the site, so your phone and computer share them.</div>
+
+      <div style={card}>
+        <div style={label}>Base bet per sport</div>
+        <div style={help}>Your normal bet size for that sport. Each pick's suggested amount starts here: STRONG bets get {s.mult.STRONG}×, GOOD bets {s.mult.GOOD}×, SMALL EDGE bets {s.mult.SMALL}×, a little more or less depending on how big the edge is.</div>
+        {Object.entries(B.SPORTS).map(([k, name]) => (
+          <Row key={k} name={name} sub={s.baseBet[k] ? `STRONG ≈ ${ex(k, "STRONG")} · GOOD ≈ ${ex(k, "GOOD")} · SMALL ≈ ${ex(k, "SMALL")}` : "Set an amount"}>
+            <Num prefix="$" value={s.baseBet[k]} onChange={v => set(["baseBet", k], v)} />
+          </Row>))}
+      </div>
+
+      <div style={card}>
+        <div style={label}>Bet size by grade</div>
+        <div style={help}>How many base bets each grade gets, and the most the site will ever suggest on one bet.</div>
+        <Row name="STRONG BET" sub="× base bet"><Num value={s.mult.STRONG} step={0.25} onChange={v => set(["mult", "STRONG"], v)} suffix="×" /></Row>
+        <Row name="GOOD BET" sub="× base bet"><Num value={s.mult.GOOD} step={0.25} onChange={v => set(["mult", "GOOD"], v)} suffix="×" /></Row>
+        <Row name="SMALL EDGE" sub="× base bet (0 hides the bet button on these)"><Num value={s.mult.SMALL} step={0.25} onChange={v => set(["mult", "SMALL"], v)} suffix="×" /></Row>
+        <Row name="Largest suggestion" sub="× base bet, never more than this"><Num value={s.maxMult} step={0.5} onChange={v => set(["maxMult"], v)} suffix="×" /></Row>
+      </div>
+
+      <div style={card}>
+        <div style={label}>What counts as a strong bet</div>
+        <div style={help}>
+          <b style={{ color: T.text }}>Chance to cash</b> is how often the model's simulations say the bet wins. <b style={{ color: T.text }}>Edge</b> is that chance minus the price in cents: a 60% bet that costs 50¢ has a +10¢ edge. A bet needs both to earn a grade, so a likely winner that's already priced too high is never recommended.
+        </div>
+        <Row name="STRONG: chance at least" ><Num value={s.strong.minChance} onChange={v => set(["strong", "minChance"], v)} suffix="%" /></Row>
+        <Row name="STRONG: edge at least"><Num value={s.strong.minEdge} step={0.5} onChange={v => set(["strong", "minEdge"], v)} suffix="¢" /></Row>
+        <Row name="GOOD: chance at least"><Num value={s.good.minChance} onChange={v => set(["good", "minChance"], v)} suffix="%" /></Row>
+        <Row name="GOOD: edge at least"><Num value={s.good.minEdge} step={0.5} onChange={v => set(["good", "minEdge"], v)} suffix="¢" /></Row>
+        <Row name="SMALL EDGE: edge at least" sub="Below this it's NO EDGE; this far below zero it's AVOID"><Num value={s.small.minEdge} step={0.5} onChange={v => set(["small", "minEdge"], v)} suffix="¢" /></Row>
+      </div>
+
+      <div style={card}>
+        <div style={label}>Pages</div>
+        <Row name="Hide thin markets" sub="Skip Kalshi markets with a bid/ask gap wider than 6¢. Their prices aren't reliable."><Toggle on={s.hideWide} onChange={v => set(["hideWide"], v)} /></Row>
+        <Row name="Track the record" sub="Add STRONG and GOOD picks to the win/loss record automatically."><Toggle on={s.logPicks} onChange={v => set(["logPicks"], v)} /></Row>
+      </div>
+
+      <div style={card}>
+        <div style={label}>Kalshi connection</div>
+        {!kx ? <div style={help}>Checking…</div> : <>
+          <Row name="API key on the server" sub={kx.credentials ? "Connected" : "Add KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY in Cloudflare Pages settings"}><b style={{ color: kx.credentials ? T.green : T.red }}>{kx.credentials ? "YES" : "NO"}</b></Row>
+          <Row name="Betting switched on" sub={kx.tradingEnabled ? "Bet buttons place real orders" : "Set KALSHI_TRADING_ENABLED=1 in Cloudflare to let bet buttons place orders"}><b style={{ color: kx.tradingEnabled ? T.green : T.gold }}>{kx.tradingEnabled ? "ON" : "OFF"}</b></Row>
+          <Row name="Most per bet" sub="Server cap (KALSHI_MAX_ORDER_DOLLARS). Larger bets are trimmed to this."><b>{kx.maxOrderDollars != null ? B.money(+kx.maxOrderDollars) : "—"}</b></Row>
+        </>}
+        <div style={{ ...help, marginTop: 10, marginBottom: 0 }}>The live auto trader has its own settings on the <a href="live.html" style={{ color: T.blue }}>Live page</a>.</div>
+      </div>
+
+      <div style={{ position: "sticky", bottom: 12, display: "flex", gap: 10, alignItems: "center" }}>
+        <button onClick={save} disabled={!dirty} style={{ flex: 1, padding: 14, borderRadius: 6, border: "none", background: dirty ? T.green : T.border, color: dirty ? "#04110a" : T.muted, fontWeight: 700, fontSize: 13, letterSpacing: 1, cursor: dirty ? "pointer" : "default", fontFamily: "inherit" }}>{dirty ? "SAVE SETTINGS" : "SAVED"}</button>
+        <button onClick={() => { setS(JSON.parse(JSON.stringify(B.DEFAULTS))); setDirty(true); }} style={{ padding: 14, borderRadius: 6, border: "1px solid " + T.border, background: T.navy, color: T.muted, fontSize: 10, cursor: "pointer", fontFamily: "inherit" }}>DEFAULTS</button>
+      </div>
+      {msg && <div style={{ fontSize: 10, color: T.muted, marginTop: 8, textAlign: "center" }}>{msg}</div>}
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
