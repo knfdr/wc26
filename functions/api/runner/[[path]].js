@@ -1,4 +1,4 @@
-// Proxy from the site (already behind the SITE_PASSWORD middleware) to the server-side runner Worker.
+// Proxy from the site (owner-only, enforced by the sign-in middleware) to the server-side runner Worker.
 // Env (Pages secrets): RUNNER_URL (e.g. https://wc26-runner.<account>.workers.dev), RUNNER_TOKEN (shared with the Worker).
 export async function onRequest({ request, env, params }) {
   if (!env.RUNNER_URL || !env.RUNNER_TOKEN) return new Response(JSON.stringify({ error: "runner not configured (RUNNER_URL / RUNNER_TOKEN)" }), { status: 503, headers: { "Content-Type": "application/json" } });

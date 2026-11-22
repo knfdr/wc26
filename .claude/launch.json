@@ -4,7 +4,7 @@
     {
       "name": "pages-dev",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["--yes", "wrangler@3", "pages", "dev", ".", "--port", "8788", "--binding", "SITE_PASSWORD=dev"],
+      "runtimeArgs": ["--yes", "wrangler@3", "pages", "dev", ".", "--port", "8788", "--binding", "OWNER_EMAIL=owner@example.test", "--binding", "FRIEND_EMAILS=friend@example.test"],
       "port": 8788
     }
   ]

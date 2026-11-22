@@ -243,6 +243,7 @@
     const [open, setOpen] = useState(false);
     const [done, setDone] = useState(null);
     if (!pick || !pick.ticker || !(pick.price > 0 && pick.price < 100)) return null;
+    if (kx && kx.canTrade === false) return null; // signed in as a friend: picks are view-only
     if (done) return h("span", { className: "bet-done" }, "✓ " + done);
     const g = pick.grade || grade(pick.chance / 100, pick.price, s);
     const hot = g && (g.key === "STRONG" || g.key === "GOOD");

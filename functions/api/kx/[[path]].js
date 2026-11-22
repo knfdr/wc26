@@ -1,5 +1,6 @@
 // Signed Kalshi proxy: /api/kx/<kalshi path>  ->  https://.../trade-api/v2/<kalshi path>
-// Behind the site's password middleware. Only allow-listed paths; order writes pass a server-side guard.
+// Behind the site's sign-in middleware, which also keeps orders and /portfolio reads owner-only (lib/auth.js).
+// Only allow-listed paths; order writes pass a server-side guard.
 import { kalshiFetch, checkOrder, hasCredentials } from "../../../lib/kalshi.js";
 
 const PUBLIC_GET = [/^\/markets(\/[A-Z0-9.-]+(\/orderbook|\/trades)?)?$/, /^\/markets\/trades$/, /^\/events(\/[A-Z0-9.-]+)?$/,
@@ -11,7 +12,7 @@ const ORDER_CANCEL = /^\/portfolio\/events\/orders\/[\w-]+$/;
 const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
 const pass = (r) => new Response(r.text, { status: r.status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
 
-export async function onRequest({ request, env, params }) {
+export async function onRequest({ request, env, params, data }) {
   const url = new URL(request.url);
   const segs = Array.isArray(params.path) ? params.path : (params.path ? [params.path] : []);
   const path = "/" + segs.join("/");
@@ -22,7 +23,7 @@ export async function onRequest({ request, env, params }) {
   try {
     if (path === "/_status" && method === "GET") {
       return json({ credentials: creds, env: (env.KALSHI_ENV || "prod").toLowerCase(),
-        tradingEnabled: env.KALSHI_TRADING_ENABLED === "1", maxOrderDollars: parseFloat(env.KALSHI_MAX_ORDER_DOLLARS || "25") });
+        tradingEnabled: env.KALSHI_TRADING_ENABLED === "1", canTrade: !!(data && data.user && data.user.role === "owner"), maxOrderDollars: parseFloat(env.KALSHI_MAX_ORDER_DOLLARS || "25") });
     }
     if (method === "GET") {
       if (PUBLIC_GET.some(r => r.test(path))) return pass(await kalshiFetch(env, "GET", path + qs, null, { sign: creds }));
