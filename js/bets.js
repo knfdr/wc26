@@ -24,7 +24,9 @@
     logPicks: true,                     // add STRONG and GOOD picks to the win/loss record automatically
   };
 
-  const C = { STRONG: "#22c55e", GOOD: "#38bdf8", SMALL: "#e8c547", NONE: "#4b6280", AVOID: "#ef4444" };
+  // CSS variables from css/sharp.css, so grades follow light/dark. HEX holds plain fallbacks for code that needs a literal color.
+  const C = { STRONG: "var(--strong)", GOOD: "var(--good)", SMALL: "var(--small)", NONE: "var(--none)", AVOID: "var(--avoid)" };
+  const HEX = { STRONG: "#25c466", GOOD: "#4593f5", SMALL: "#e5b02e", NONE: "#6b7482", AVOID: "#f2546b" };
   const LABEL = { STRONG: "STRONG BET", GOOD: "GOOD BET", SMALL: "SMALL EDGE", NONE: "NO EDGE", AVOID: "AVOID" };
   const BLURB = {
     STRONG: "Likely to cash and priced well below the model's chance. The best bets on the board.",
@@ -163,9 +165,12 @@
   }
 
   // ── React UI ────────────────────────────────────────────────────────────────
+  // Styling lives in css/sharp.css (classes + tokens). Grade colors are CSS variables, so they follow light/dark.
   const R = root.React; if (!R) { root.SharpBets = api(); return; }
   const h = R.createElement, { useState, useEffect } = R;
-  const T = { bg: "#070b14", card: "#101d30", border: "#1a2a3e", text: "#dde5f0", muted: "#7a8ca8", dim: "#4b6280" };
+  const gv = (g) => ({ "--g": g && g.color ? g.color : "var(--none)" });
+  const pct = (x) => Math.round(x) + "%";
+  const signed = (x, d) => (x >= 0 ? "+" : "−") + Math.abs(x).toFixed(d == null ? 1 : d);
 
   function useSettings() {
     const [s, setS] = useState(settings);
@@ -178,47 +183,69 @@
     return k;
   }
 
-  function GradeBadge({ g, small }) {
+  function GradeBadge({ g, small, solid }) {
     if (!g) return null;
-    return h("span", { title: g.blurb, style: { display: "inline-block", background: g.color + "22", border: "1px solid " + g.color + "55", color: g.color, fontSize: small ? 8 : 9, fontWeight: 700, letterSpacing: 1, padding: small ? "1px 5px" : "2px 7px", borderRadius: 3, whiteSpace: "nowrap" } }, g.label);
+    return h("span", { title: g.blurb, className: "grade" + (small ? " sm" : "") + (solid ? " solid" : ""), style: gv(g) }, g.label);
   }
-  // "62% chance to cash" with the price, for one line under a pick
+  // "62% chance to cash · costs 55¢ · edge +7¢", for one line under a pick
   function ChanceLine({ g }) {
     if (!g) return null;
-    return h("span", { style: { fontSize: 10, color: T.muted } },
-      h("b", { style: { color: g.color } }, g.chance.toFixed(0) + "% chance to cash"), " · costs " + g.price + "¢ · edge " + (g.edge >= 0 ? "+" : "") + g.edge.toFixed(1) + "¢" + (g.longShot ? " · long shot" : ""));
+    return h("span", { className: "small text-2" },
+      h("b", { style: { color: g.color } }, pct(g.chance) + " chance to cash"), " · costs " + Math.round(g.price) + "¢ · edge " + signed(g.edge) + "¢" + (g.longShot ? " · long shot" : ""));
   }
-  // Legend card explaining the grades, for the top of every sport page
-  function GradeLegend({ sport }) {
+  // The model's chance to cash as a bar, with Kalshi's price as a tick on the same 0-100 scale.
+  // The striped gap between the tick and the end of the bar is the edge.
+  function ChanceBar({ g, compact }) {
+    if (!g) return null;
+    const c = clamp(g.chance, 0, 100), p = clamp(g.price, 0, 100);
+    const lo = Math.min(c, p), hi = Math.max(c, p);
+    const label = `Model ${pct(c)} chance to cash, Kalshi price ${Math.round(p)}¢, edge ${signed(g.edge)}¢`;
+    const track = h("div", { className: "cvp-track", role: "img", "aria-label": label },
+      h("div", { className: "cvp-fill", style: { width: lo + "%" } }),
+      g.edge > 0 && h("div", { className: "cvp-gap", style: { left: lo + "%", width: (hi - lo) + "%" } }),
+      g.edge <= 0 && h("div", { className: "cvp-fill", style: { width: hi + "%", opacity: .25 } }),
+      h("div", { className: "cvp-price", style: { left: p + "%" } }));
+    if (compact) return h("div", { className: "cvp compact", style: gv(g), title: label }, track);
+    return h("div", { className: "cvp", style: gv(g) },
+      h("div", { className: "cvp-nums" },
+        h("div", { className: "cvp-num" }, h("div", { className: "v" }, pct(c)), h("div", { className: "l" }, "Model chance")),
+        h("div", { className: "cvp-num c cvp-edge" }, h("div", { className: "v" }, signed(g.edge) + "¢"), h("div", { className: "l" }, "Edge")),
+        h("div", { className: "cvp-num r" }, h("div", { className: "v" }, Math.round(p) + "¢"), h("div", { className: "l" }, "Kalshi price"))),
+      track,
+      h("div", { className: "cvp-scale" }, h("span", null, "0"), h("span", null, "50"), h("span", null, "100")));
+  }
+  // Collapsible card explaining the grades, for the top of every sport page
+  function GradeLegend({ sport, open }) {
     const s = useSettings();
-    const row = (k, extra) => h("div", { key: k, style: { display: "flex", gap: 8, alignItems: "baseline", marginBottom: 5 } },
-      h("span", { style: { minWidth: 86 } }, h(GradeBadge, { g: { key: k, label: LABEL[k], color: C[k], blurb: BLURB[k] } })),
-      h("span", { style: { fontSize: 10, color: T.muted, lineHeight: 1.5 } }, BLURB[k] + (extra ? " " + extra : "")));
-    const sug = (k) => s.mult[k] && sport ? `Suggested bet ${money(Math.round(s.baseBet[sport] * s.mult[k]))}.` : "";
-    return h("div", { style: { background: T.card, border: "1px solid " + T.border, borderRadius: 6, padding: "12px 14px", marginBottom: 12 } },
-      h("div", { style: { fontSize: 8, color: T.muted, letterSpacing: 2, marginBottom: 8 } }, "HOW TO READ THE PICKS"),
-      row("STRONG", `Model ${s.strong.minChance}%+ to cash and ${s.strong.minEdge}¢+ under the price. ${sug("STRONG")}`),
-      row("GOOD", `Model ${s.good.minChance}%+ to cash and ${s.good.minEdge}¢+ under the price. ${sug("GOOD")}`),
-      row("SMALL", sug("SMALL")),
-      row("AVOID"),
-      h("div", { style: { fontSize: 9, color: T.dim, marginTop: 6, lineHeight: 1.5 } },
-        "\"Chance to cash\" is how often the model's simulations say the bet wins. \"Edge\" is that chance minus the price in cents: a 60% bet that costs 50¢ has a +10¢ edge. Bet amounts scale from your base bet in ",
-        h("a", { href: "settings.html", style: { color: "#38bdf8" } }, "Settings"), "."));
+    const sug = (k) => s.mult[k] && sport ? ` Suggested bet ${money(Math.round(s.baseBet[sport] * s.mult[k]))}.` : "";
+    const row = (k, extra) => h("div", { key: k, className: "grade-row" },
+      h("span", null, h(GradeBadge, { g: { key: k, label: LABEL[k], color: C[k], blurb: BLURB[k] } })),
+      h("span", null, BLURB[k] + (extra ? " " + extra : "")));
+    return h("details", { className: "explain", open: !!open, style: { marginBottom: 12 } },
+      h("summary", null, h("span", { className: "chip" }, "?"), "How to read the picks"),
+      h("div", { className: "body" },
+        h("div", { className: "note", style: { marginBottom: 12 } },
+          h(ChanceBar, { g: { color: C.GOOD, chance: 60, price: 50, edge: 10 } }),
+          h("div", { style: { marginTop: 10 } }, "The bar is how often the model's simulations say the bet wins. The white tick is what Kalshi charges for a $1 contract. When the bar reaches past the tick, the bet is cheap for how likely it is: that gap is the ", h("b", null, "edge"), ". A 60% bet that costs 50¢ has a +10¢ edge.")),
+        h("div", { className: "grade-rows" },
+          row("STRONG", `Model ${s.strong.minChance}%+ to cash and ${s.strong.minEdge}¢+ under the price.${sug("STRONG")}`),
+          row("GOOD", `Model ${s.good.minChance}%+ to cash and ${s.good.minEdge}¢+ under the price.${sug("GOOD")}`),
+          row("SMALL", sug("SMALL").trim()),
+          row("AVOID")),
+        h("div", { className: "tiny muted", style: { marginTop: 12 } }, "Bet amounts scale from your base bet in ", h("a", { href: "settings.html", className: "link" }, "Settings"), ".")));
   }
 
   // Bet button + confirm sheet. pick: { ticker, side: "yes"|"no", price (cents for that side), chance (0-100), label, sport, grade }
-  function BetButton({ pick, compact }) {
+  function BetButton({ pick, compact, block }) {
     const s = useSettings(), kx = useKalshi();
     const [open, setOpen] = useState(false);
     const [done, setDone] = useState(null);
     if (!pick || !pick.ticker || !(pick.price > 0 && pick.price < 100)) return null;
-    if (done) return h("span", { style: { fontSize: 9, color: C.STRONG, fontWeight: 700, whiteSpace: "nowrap" } }, "✓ " + done);
+    if (done) return h("span", { className: "bet-done" }, "✓ " + done);
     const g = pick.grade || grade(pick.chance / 100, pick.price, s);
-    const strong = g && (g.key === "STRONG" || g.key === "GOOD");
-    const btn = h("button", { onClick: (e) => { e.stopPropagation(); setOpen(true); }, style: {
-      background: strong ? g.color + "22" : "transparent", border: "1px solid " + (g ? g.color : T.border) + (strong ? "aa" : "55"), color: g && g.key !== "AVOID" ? g.color : T.muted,
-      fontSize: compact ? 9 : 10, fontWeight: 700, letterSpacing: 1, padding: compact ? "4px 8px" : "6px 12px", borderRadius: 4, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" } },
-      "BET " + money(stake(g, pick.sport, s) || (s.baseBet[pick.sport] || 10) * 0.5));
+    const hot = g && (g.key === "STRONG" || g.key === "GOOD");
+    const btn = h("button", { onClick: (e) => { e.stopPropagation(); setOpen(true); }, className: "bet-btn" + (hot ? " hot" : "") + (compact ? " sm" : ""), style: { ...gv(g && g.key !== "AVOID" ? g : null), ...(block ? { width: "100%" } : {}) } },
+      "Bet " + money(stake(g, pick.sport, s) || (s.baseBet[pick.sport] || 10) * 0.5));
     return h(R.Fragment, null, btn, open && h(BetSheet, { pick, g, s, kx, onClose: () => setOpen(false), onDone: (msg) => { setOpen(false); setDone(msg); } }));
   }
 
@@ -230,67 +257,92 @@
     const t = ticket(usd, pick.price);
     const ready = kx && kx.credentials && kx.tradingEnabled;
     const why = !kx ? "Checking your Kalshi connection…" : !kx.credentials ? "Kalshi isn't connected on the site's server yet (no API key)." : !kx.tradingEnabled ? "Betting is switched off on the site's server. Set KALSHI_TRADING_ENABLED=1 in Cloudflare to turn it on." : "";
+    useEffect(() => { const k = (e) => e.key === "Escape" && onClose(); window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, []);
     async function confirm() {
       setSt({ busy: true, err: "" });
       try {
         const r = await placeBet({ ticker: pick.ticker, side: pick.side, price: pick.price, count: t.count });
         if (!(r.filled > 0)) { setSt({ busy: false, err: "The price moved before your order reached Kalshi, so nothing was bought. Close this and try again." }); return; }
-        onDone(`BOUGHT ${r.filled} @ ${r.avg}¢`);
+        onDone(`Bought ${r.filled} @ ${r.avg}¢`);
       } catch (e) { setSt({ busy: false, err: e.message }); }
     }
     const step = (d) => setUsd(u => clamp(Math.round(u + d), 1, cap));
-    const pill = { background: T.bg, border: "1px solid " + T.border, color: T.text, borderRadius: 4, padding: "8px 12px", fontSize: 13, cursor: "pointer", fontFamily: "inherit" };
-    return h("div", { onClick: onClose, style: { position: "fixed", inset: 0, background: "#000a", zIndex: 1000, display: "flex", alignItems: "flex-end", justifyContent: "center" } },
-      h("div", { onClick: (e) => e.stopPropagation(), style: { background: T.card, border: "1px solid " + T.border, borderRadius: "10px 10px 0 0", width: "100%", maxWidth: 460, padding: "18px 18px 22px", fontFamily: "'JetBrains Mono','SF Mono',monospace", color: T.text, boxSizing: "border-box" } },
-        h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 } },
-          h(GradeBadge, { g }), h("button", { onClick: onClose, style: { ...pill, padding: "2px 10px", fontSize: 12 } }, "✕")),
-        h("div", { style: { fontSize: 16, fontWeight: 700, marginBottom: 4 } }, pick.label),
-        pick.sub && h("div", { style: { fontSize: 10, color: T.muted, marginBottom: 6 } }, pick.sub),
-        h("div", { style: { marginBottom: 14 } }, h(ChanceLine, { g })),
-        h("div", { style: { fontSize: 8, color: T.muted, letterSpacing: 2, marginBottom: 6 } }, "AMOUNT"),
-        h("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } },
-          h("button", { onClick: () => step(-5), style: pill }, "−5"),
-          h("input", { type: "number", min: 1, value: usd, onChange: (e) => setUsd(clamp(Math.round(+e.target.value || 0), 0, cap)), style: { ...pill, width: 90, textAlign: "center", fontSize: 18, fontWeight: 700, cursor: "text" } }),
-          h("button", { onClick: () => step(5), style: pill }, "+5"),
-          usd !== suggested && h("button", { onClick: () => setUsd(Math.min(suggested, cap)), style: { ...pill, fontSize: 10, color: T.muted } }, "suggested " + money(suggested))),
-        cap < Infinity && h("div", { style: { fontSize: 9, color: T.dim, marginBottom: 10 } }, `The site's server caps each bet at ${money(cap)}.`),
-        h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, background: T.bg, borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 10 } },
-          cell("Contracts", t.count + " @ " + pick.price + "¢"), cell("You pay", money(t.cost)), cell("Pays if it wins", money(t.payout), C.STRONG)),
-        why && h("div", { style: { fontSize: 10, color: C.SMALL, marginBottom: 10, lineHeight: 1.5 } }, why),
-        st.err && h("div", { style: { fontSize: 10, color: C.AVOID, marginBottom: 10, lineHeight: 1.5 } }, st.err),
-        h("button", { disabled: !ready || st.busy || t.count < 1, onClick: confirm, style: { width: "100%", padding: 14, borderRadius: 6, border: "none", background: ready && t.count >= 1 ? C.STRONG : T.border, color: ready ? "#04110a" : T.muted, fontSize: 13, fontWeight: 700, letterSpacing: 1, cursor: ready ? "pointer" : "default", fontFamily: "inherit" } },
-          st.busy ? "PLACING…" : t.count < 1 ? "AMOUNT TOO SMALL" : `CONFIRM ${money(t.cost)} BET ON KALSHI`),
-        h("div", { style: { fontSize: 9, color: T.dim, marginTop: 8, textAlign: "center" } }, "Buys at the current price or not at all. Nothing is left waiting on Kalshi.")));
-    function cell(l, v, c) { return h("div", null, h("div", { style: { fontSize: 8, color: T.muted, letterSpacing: 1, marginBottom: 3 } }, l.toUpperCase()), h("div", { style: { fontWeight: 700, color: c || T.text } }, v)); }
+    const cell = (l, v, c) => h("div", null, h("div", { className: "l" }, l), h("div", { className: "v", style: c ? { color: c } : null }, v));
+    return h("div", { className: "sheet-scrim", onClick: onClose },
+      h("div", { className: "sheet", role: "dialog", "aria-modal": "true", "aria-label": "Place bet", onClick: (e) => e.stopPropagation() },
+        h("div", { className: "sheet-grip" }),
+        h("div", { className: "row", style: { marginBottom: 10 } },
+          h(GradeBadge, { g }), h("span", { style: { flex: 1 } }),
+          h("button", { onClick: onClose, className: "ss-icon-btn", "aria-label": "Close" }, "✕")),
+        h("div", { style: { fontSize: 22, fontWeight: 700, letterSpacing: -0.3 } }, pick.label),
+        pick.sub && h("div", { className: "small text-2", style: { marginTop: 2 } }, pick.sub),
+        h(ChanceBar, { g }),
+        h("div", { className: "label", style: { margin: "18px 0 8px" } }, "Amount"),
+        h("div", { className: "stepper" },
+          h("button", { onClick: () => step(-5), "aria-label": "Five dollars less" }, "−"),
+          h("input", { type: "number", inputMode: "numeric", min: 1, value: usd, "aria-label": "Bet amount in dollars", onChange: (e) => setUsd(clamp(Math.round(+e.target.value || 0), 0, cap)) }),
+          h("button", { onClick: () => step(5), "aria-label": "Five dollars more" }, "+")),
+        h("div", { className: "row tiny muted", style: { marginTop: 8, minHeight: 32 } },
+          h("span", { style: { flex: 1 } }, cap < Infinity ? `The site's server caps each bet at ${money(cap)}.` : `Suggested ${money(suggested)} from your base bet.`),
+          usd !== suggested && h("button", { onClick: () => setUsd(Math.min(suggested, cap)), className: "btn btn-sm" }, "Use suggested " + money(suggested))),
+        h("div", { className: "ticket" },
+          cell("Contracts", t.count + " @ " + pick.price + "¢"), cell("You pay", money(t.cost)), cell("Pays if it wins", money(t.payout), "var(--strong)")),
+        why && h("div", { className: "note warn", style: { marginBottom: 10 } }, why),
+        st.err && h("div", { className: "note bad", style: { marginBottom: 10 } }, st.err),
+        h("button", { disabled: !ready || st.busy || t.count < 1, onClick: confirm, className: "confirm-btn" },
+          st.busy ? "Placing…" : t.count < 1 ? "Amount too small" : `Confirm ${money(t.cost)} bet on Kalshi`),
+        h("div", { className: "tiny muted", style: { marginTop: 10, textAlign: "center" } }, "Buys at the current price or not at all. Nothing is left waiting on Kalshi.")));
   }
 
   // Sortable header cell: <SortTh k="edge" sort={sort} setSort={setSort}>Edge</SortTh>
-  function SortTh({ k, sort, setSort, children, style }) {
-    const on = sort.k === k;
-    return h("th", { onClick: k ? () => setSort(on ? { k, dir: -sort.dir } : { k, dir: -1 }) : undefined, style: { textAlign: "left", color: on ? T.text : T.muted, fontSize: 8, letterSpacing: 1, padding: "8px 10px", borderBottom: "1px solid " + T.border, textTransform: "uppercase", cursor: k ? "pointer" : "default", whiteSpace: "nowrap", userSelect: "none", ...(style || {}) } },
-      children, k ? (on ? (sort.dir < 0 ? " ▼" : " ▲") : " ↕") : "");
+  function SortTh({ k, sort, setSort, children, style, right }) {
+    const on = sort && sort.k === k;
+    return h("th", { onClick: k ? () => setSort(on ? { k, dir: -sort.dir } : { k, dir: -1 }) : undefined, className: (k ? "sortable" : "") + (right ? " r" : ""),
+      "aria-sort": k ? (on ? (sort.dir < 0 ? "descending" : "ascending") : "none") : undefined, style: style || undefined },
+      children, k ? h("span", { className: "arrow" }, on ? (sort.dir < 0 ? "▼" : "▲") : "↕") : null);
   }
   function sortRows(rows, sort, get) { const g = get || ((r, k) => r[k]); return rows.slice().sort((a, b) => { const x = g(a, sort.k), y = g(b, sort.k); return x == null ? 1 : y == null ? -1 : (x > y ? 1 : x < y ? -1 : 0) * sort.dir; }); }
 
-  // Win/loss record of STRONG and GOOD picks for one sport (or all when sport is omitted)
-  function RecordCard({ sport }) {
-    const [rec, setRec] = useState(null);
-    useEffect(() => { readBets().then(b => setRec(record(b))).catch(() => setRec(false)); }, []);
-    if (!rec) return null;
-    const r = sport ? rec.bySport[sport] : rec.all;
-    if (!r || !(r.w + r.l + r.p + r.pending)) return h("div", { style: { background: T.card, border: "1px solid " + T.border, borderRadius: 6, padding: "10px 14px", marginBottom: 12, fontSize: 10, color: T.muted } }, "Record: STRONG and GOOD picks are tracked automatically once they're graded. None settled yet.");
-    const line = (k) => h("div", { key: k, style: { display: "flex", gap: 10, alignItems: "center", fontSize: 11 } },
-      h("span", { style: { minWidth: 86 } }, h(GradeBadge, { g: { key: k, label: LABEL[k], color: C[k] }, small: true })),
-      h("b", null, h("span", { style: { color: C.STRONG } }, r[k].w + "W"), "-", h("span", { style: { color: C.AVOID } }, r[k].l + "L"), r[k].p ? h("span", { style: { color: T.dim } }, " " + r[k].p + "P") : null),
-      h("span", { style: { color: T.muted } }, winPct(r[k])), r[k].pending ? h("span", { style: { color: T.dim, fontSize: 9 } }, r[k].pending + " pending") : null);
-    return h("div", { style: { background: T.card, border: "1px solid " + T.border, borderRadius: 6, padding: "10px 14px", marginBottom: 12 } },
-      h("div", { style: { fontSize: 8, color: T.muted, letterSpacing: 2, marginBottom: 6 } }, "PICK RECORD"), line("STRONG"), line("GOOD"));
+  // Settled STRONG/GOOD picks in date order, with what a flat bet on each would have made (needs the price it was logged at).
+  function history(bets, sport) {
+    const out = [];
+    for (const b of bets || []) {
+      const t = recTier(b.tier); if (!t || (b.result !== "win" && b.result !== "loss")) continue;
+      const sp = SPORT_KEY[b.sport] || String(b.sport || "").toLowerCase();
+      if (sport && sp !== sport) continue;
+      const price = +b.price;
+      out.push({ t, sp, win: b.result === "win", date: b.gameDate || (b.resolvedAt || b.loggedAt || "").slice(0, 10), price: price > 0 && price < 100 ? price : null, label: b.market || "", game: [b.awayTeam, b.homeTeam].filter(Boolean).join(" @ ") });
+    }
+    return out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   }
 
-  root.SharpBets = Object.assign(api(), { useSettings, useKalshi, GradeBadge, ChanceLine, GradeLegend, BetButton, SortTh, sortRows, RecordCard });
+  // Win/loss record of STRONG and GOOD picks for one sport (or all when sport is omitted), with a chart when there's history
+  function RecordCard({ sport, bets: given, chart }) {
+    const [bets, setBets] = useState(given || null);
+    useEffect(() => { if (!given) readBets().then(setBets).catch(() => setBets(false)); }, []);
+    if (bets === false) return h("div", { className: "note", style: { marginBottom: 12 } }, "The pick record couldn't be loaded right now.");
+    if (!bets) return null;
+    const rec = record(bets);
+    const r = sport ? rec.bySport[sport] : rec.all;
+    if (!r || !(r.w + r.l + r.p + r.pending)) return h("div", { className: "note", style: { marginBottom: 12 } }, "Your record starts here: STRONG and GOOD picks are tracked automatically once they're graded. None settled yet.");
+    const UI = root.SharpUI;
+    const hist = history(bets, sport);
+    const tier = (k) => h("div", { key: k, className: "tile" },
+      h("div", { className: "l" }, h(GradeBadge, { g: { key: k, label: LABEL[k], color: C[k] }, small: true })),
+      h("div", { className: "v num", style: { marginTop: 4 } }, r[k].w + "–" + r[k].l, r[k].p ? h("span", { className: "small muted" }, " " + r[k].p + "P") : null),
+      h("div", { className: "s" }, (r[k].w + r[k].l ? winPct(r[k]) + " won" : "none settled") + (r[k].pending ? " · " + r[k].pending + " pending" : "")));
+    return h("div", { className: "card", style: { marginBottom: 12 } },
+      h("div", { className: "row", style: { marginBottom: 12, alignItems: "baseline", flexWrap: "wrap" } },
+        h("div", { className: "num", style: { fontSize: 30, fontWeight: 700, letterSpacing: -0.8, lineHeight: 1 } }, r.w + "–" + r.l, r.p ? h("span", { className: "small muted" }, " " + r.p + " push") : null),
+        h("div", { className: "small text-2" }, r.w + r.l ? `${winPct(r)} won` : "No settled picks yet", r.pending ? h("span", { className: "muted" }, ` · ${r.pending} pending`) : null)),
+      h("div", { className: "tiles" }, tier("STRONG"), tier("GOOD")),
+      chart !== false && UI && UI.RecordChart && hist.length >= 2 && h("div", { style: { marginTop: 14 } }, h(UI.RecordChart, { hist, base: sport ? settings.baseBet[sport] : 20 })));
+  }
+
+  root.SharpBets = Object.assign(api(), { useSettings, useKalshi, GradeBadge, ChanceLine, ChanceBar, GradeLegend, BetButton, SortTh, sortRows, RecordCard, history });
 
   function api() {
-    return { SPORTS, DEFAULTS, COLORS: C, LABELS: LABEL, BLURBS: BLURB, ORDER, getSettings, onSettings, loadSettings, saveSettings, grade, stake, ticket, money,
+    return { SPORTS, DEFAULTS, COLORS: C, HEX, LABELS: LABEL, BLURBS: BLURB, ORDER, getSettings, onSettings, loadSettings, saveSettings, grade, stake, ticket, money,
       kalshiStatus, placeBet, readBets, record, winPct, logPicks, recTier, americanToCents };
   }
   // Sportsbook odds (e.g. -150, +130) to the break-even price in cents, for pages that fall back to sportsbook lines

@@ -3,380 +3,117 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Sharp Sim — Sports Betting Models</title>
+<title>Sharp Sim</title>
+<meta name="description" content="Sports betting models priced against Kalshi: the best bets, graded in plain English.">
+<meta name="theme-color" content="#0b0d10">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/sharp.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="js/bets.js"></script>
+<script src="js/ui.js"></script>
 <style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html,body{min-height:100vh;background:#070b14;font-family:'IBM Plex Mono','Courier New',monospace;color:#dde5f0;zoom:1.2}
-::-webkit-scrollbar{width:6px;height:6px}
-::-webkit-scrollbar-track{background:#0c1526}
-::-webkit-scrollbar-thumb{background:#1a2a3e;border-radius:3px}
-a{text-decoration:none;color:inherit}
-
-.header{
-  background:linear-gradient(160deg,#0c1526 0%,#070b14 100%);
-  border-bottom:1px solid #1a2a3e;
-  padding:40px 24px 36px;
-  text-align:center;
-  position:relative;
-  overflow:hidden;
-}
-.header::before{
-  content:'';position:absolute;top:0;left:0;right:0;bottom:0;
-  background:radial-gradient(ellipse at 50% -10%,rgba(232,197,71,0.07) 0%,transparent 65%);
-  pointer-events:none;
-}
-.site-badge{
-  display:inline-block;
-  background:rgba(232,197,71,0.1);
-  border:1px solid rgba(232,197,71,0.25);
-  color:#e8c547;
-  font-size:9px;letter-spacing:3px;
-  padding:3px 12px;border-radius:2px;
-  margin-bottom:18px;
-}
-.site-title{
-  font-size:clamp(28px,5vw,48px);
-  font-weight:700;
-  letter-spacing:-1px;
-  margin-bottom:8px;
-  background:linear-gradient(135deg,#e8c547 0%,#dde5f0 60%);
-  -webkit-background-clip:text;
-  -webkit-text-fill-color:transparent;
-  background-clip:text;
-}
-.site-sub{
-  font-size:11px;color:#4b6280;letter-spacing:1px;
-  margin-bottom:6px;
-}
-.site-model-tag{
-  display:inline-block;
-  background:rgba(167,139,250,0.1);
-  border:1px solid rgba(167,139,250,0.25);
-  color:#a78bfa;
-  font-size:8px;letter-spacing:2px;
-  padding:2px 10px;border-radius:2px;
-  margin-top:8px;
-}
-
-.body{max-width:960px;margin:0 auto;padding:40px 20px 60px}
-
-.section-label{
-  font-size:9px;letter-spacing:3px;color:#4b6280;
-  text-transform:uppercase;margin-bottom:16px;
-  padding-bottom:8px;border-bottom:1px solid #1a2a3e;
-}
-
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin-bottom:48px}
-
-.sport-card{
-  background:#101d30;
-  border:1px solid #1a2a3e;
-  border-radius:8px;
-  padding:24px;
-  cursor:pointer;
-  transition:border-color 0.2s,transform 0.15s,box-shadow 0.2s;
-  display:block;
-  position:relative;
-  overflow:hidden;
-}
-.sport-card::before{
-  content:'';position:absolute;top:0;left:0;right:0;height:2px;
-  background:var(--accent);
-  opacity:0.7;
-}
-.sport-card:hover{
-  border-color:var(--accent);
-  transform:translateY(-2px);
-  box-shadow:0 8px 32px rgba(0,0,0,0.4);
-}
-.card-icon{font-size:28px;margin-bottom:12px;display:block}
-.card-sport{font-size:9px;letter-spacing:2px;color:var(--accent);font-weight:700;margin-bottom:6px;text-transform:uppercase}
-.card-title{font-size:18px;font-weight:700;margin-bottom:8px}
-.card-desc{font-size:10px;color:#4b6280;line-height:1.7;margin-bottom:14px}
-.card-tags{display:flex;flex-wrap:wrap;gap:5px}
-.card-tag{
-  background:rgba(255,255,255,0.04);
-  border:1px solid #1a2a3e;
-  color:#4b6280;font-size:8px;
-  padding:2px 7px;border-radius:2px;letter-spacing:0.5px;
-}
-.card-arrow{
-  position:absolute;bottom:20px;right:20px;
-  color:var(--accent);font-size:16px;opacity:0.6;
-  transition:opacity 0.2s,transform 0.2s;
-}
-.sport-card:hover .card-arrow{opacity:1;transform:translateX(3px)}
-.card-badge{
-  display:inline-block;
-  background:rgba(34,197,94,0.12);
-  border:1px solid rgba(34,197,94,0.25);
-  color:#22c55e;font-size:8px;letter-spacing:1px;
-  padding:2px 7px;border-radius:2px;font-weight:700;
-  margin-bottom:10px;
-}
-.card-badge.coming{
-  background:rgba(75,98,128,0.15);
-  border-color:rgba(75,98,128,0.3);
-  color:#4b6280;
-}
-
-.model-stack{
-  display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;
-  margin-bottom:48px;
-}
-.stack-item{
-  background:#101d30;border:1px solid #1a2a3e;border-radius:6px;padding:14px;
-}
-.stack-num{font-size:22px;font-weight:700;color:#1a2a3e;margin-bottom:4px}
-.stack-name{font-size:10px;color:#e8c547;font-weight:700;margin-bottom:4px;letter-spacing:0.5px}
-.stack-desc{font-size:9px;color:#4b6280;line-height:1.6}
-
-.footer{
-  text-align:center;padding:24px;
-  border-top:1px solid #1a2a3e;
-  font-size:9px;color:#2a3a52;letter-spacing:1px;
-}
-
-@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
-.skel{
-  background:linear-gradient(90deg,#1a2a3e 25%,#243347 50%,#1a2a3e 75%);
-  background-size:200% 100%;
-  animation:shimmer 1.6s infinite;
-  border-radius:3px;
-}
+.sports { display: grid; gap: 10px; grid-template-columns: 1fr; }
+@media (min-width: 640px) { .sports { grid-template-columns: 1fr 1fr; } }
+@media (min-width: 980px) { .sports { grid-template-columns: 1fr 1fr 1fr; } }
+.sport { display: flex; flex-direction: column; gap: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 14px var(--pad); min-height: 128px; transition: transform .15s, border-color .15s; }
+.sport:hover { transform: translateY(-2px); border-color: var(--line-strong); }
+.sport-top { display: flex; align-items: center; gap: 10px; }
+.sport-ico { width: 36px; height: 36px; border-radius: 10px; background: var(--surface-2); display: grid; place-items: center; font-size: 19px; flex: none; }
+.sport-name { font-size: 17px; font-weight: 650; letter-spacing: -0.2px; }
+.sport-go { margin-left: auto; color: var(--muted); font-size: 18px; transition: transform .15s; }
+.sport:hover .sport-go { transform: translateX(3px); color: var(--text); }
+.sport-desc { font-size: 13.5px; color: var(--text-2); line-height: 1.45; }
+.sport-rec { margin-top: auto; padding-top: 6px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.steps { display: grid; gap: 10px; grid-template-columns: 1fr; counter-reset: s; }
+@media (min-width: 760px) { .steps { grid-template-columns: repeat(3, 1fr); } }
+.step { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 14px var(--pad); }
+.step::before { counter-increment: s; content: counter(s); display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; background: var(--surface-3); font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+.step b { display: block; font-size: 15px; margin-bottom: 3px; }
+.step span { font-size: 13.5px; color: var(--text-2); line-height: 1.45; }
 </style>
 </head>
 <body>
-
-<div class="header">
-  <div class="site-badge">⚡ SHARP SIM · SPORTS BETTING MODELS</div>
-  <div class="site-title">Sharp Sim</div>
-  <div class="site-sub">Monte Carlo · Dixon-Coles · Markov Chain · xG · FIP · Park Factors</div>
-  <div class="site-model-tag">GOLD-STANDARD SIMULATION MODELS · 100,000 ITERATIONS</div>
-  <a href="settings.html" style="display:inline-block;margin-top:12px;font-size:10px;letter-spacing:2px;color:#7a8ca8;border:1px solid #1a2a3e;border-radius:4px;padding:5px 12px">⚙ SETTINGS</a>
-</div>
-
-<div class="body">
-
-  <div class="section-label">Select Sport</div>
-  <div class="cards">
-    <a href="nfl.html" class="sport-card" style="--accent:#3b82f6">
-      <span class="card-badge">⚡ LIVE</span>
-      <span class="card-icon">🏈</span>
-      <div class="card-sport">NFL</div>
-      <div class="card-title">NFL Sim</div>
-      <div id="perf-NFL"><div class="skel" style="width:130px;height:11px;margin:7px 0 10px"></div></div>
-      <div style="margin:7px 0 10px;font-size:10px;color:#3b82f6;font-weight:700">Drive-by-drive · key numbers · every Kalshi strike</div>
-      <div class="card-desc">100,000 drive-level game simulations calibrated to a blend of results ratings, ESPN FPI and the closing line, with late-game play-calling and 2025 overtime rules so margins land on 3, 7 and 10 the way real NFL games do.</div>
-      <div class="card-tags">
-        <span class="card-tag">Drive Sim</span>
-        <span class="card-tag">Key Numbers</span>
-        <span class="card-tag">FPI Blend</span>
-        <span class="card-tag">Market-Anchored</span>
-        <span class="card-tag">Live Auto</span>
-        <span class="card-tag">Kalshi</span>
-      </div>
-      <span class="card-arrow">→</span>
-    </a>
-
-    <a href="cfb.html" class="sport-card" style="--accent:#f97316">
-      <span class="card-badge">⚡ LIVE</span>
-      <span class="card-icon">🏈</span>
-      <div class="card-sport">NCAA Football · FBS</div>
-      <div class="card-title">College Football Sim</div>
-      <div id="perf-CFB"><div class="skel" style="width:130px;height:11px;margin:7px 0 10px"></div></div>
-      <div style="margin:7px 0 10px;font-size:10px;color:#f97316;font-weight:700">Priced against every Kalshi strike</div>
-      <div class="card-desc">Opponent-adjusted offense/defense ratings fit on this season's results, blended with ESPN FPI and the closing line. 100,000-iteration correlated margin/total sim against Kalshi moneyline, spread and total ladders.</div>
-      <div class="card-tags">
-        <span class="card-tag">Ridge Ratings</span>
-        <span class="card-tag">FPI Blend</span>
-        <span class="card-tag">Market-Anchored</span>
-        <span class="card-tag">Spread Ladder</span>
-        <span class="card-tag">Totals</span>
-        <span class="card-tag">Kalshi</span>
-      </div>
-      <span class="card-arrow">→</span>
-    </a>
-
-    <a href="live.html" class="sport-card" style="--accent:#ef4444">
-      <span class="card-badge" style="background:rgba(239,68,68,0.12);border-color:rgba(239,68,68,0.3);color:#ef4444">● AUTO</span>
-      <span class="card-icon">⚡</span>
-      <div class="card-sport">Live Auto · CFB first</div>
-      <div class="card-title">Auto Cash-Out Trader</div>
-      <div style="margin:7px 0 10px;font-size:10px;color:#ef4444;font-weight:700">Paper mode by default</div>
-      <div class="card-desc">Watches every position's Kalshi cash-out value in-game and sells on take-profit, stop-loss, trailing stop or when the edge is gone, then re-enters for the rest of the game. Drive-by-drive live sim calibrated to Kalshi's own ladder.</div>
-      <div class="card-tags">
-        <span class="card-tag">In-Game</span>
-        <span class="card-tag">Take Profit</span>
-        <span class="card-tag">Stop Loss</span>
-        <span class="card-tag">Trailing Stop</span>
-        <span class="card-tag">Re-Entry</span>
-        <span class="card-tag">Kill Switch</span>
-      </div>
-      <span class="card-arrow">→</span>
-    </a>
-
-    <a href="golf.html" class="sport-card" style="--accent:#4ade80">
-      <span class="card-badge">⚡ LIVE</span>
-      <span class="card-icon">⛳</span>
-      <div class="card-sport">PGA Tour · every event</div>
-      <div class="card-title">Golf Sim</div>
-      <div id="perf-GOLF"><div class="skel" style="width:130px;height:11px;margin:7px 0 10px"></div></div>
-      <div class="card-desc">Strokes Gained Monte Carlo tournament simulation. Live field sim from each golfer's current score with cut logic, priced against Kalshi's win, top 5/10/20 and make-cut markets.</div>
-      <div class="card-tags">
-        <span class="card-tag">SG:Total Model</span>
-        <span class="card-tag">Cut Simulation</span>
-        <span class="card-tag">Win / Top 10</span>
-        <span class="card-tag">Make Cut %</span>
-        <span class="card-tag">H2H Matchups</span>
-        <span class="card-tag">Outright Odds</span>
-      </div>
-      <span class="card-arrow">→</span>
-    </a>
-
-    <a href="parlays.html" class="sport-card" style="--accent:#a78bfa">
-      <span class="card-badge">⚡ LIVE</span>
-      <span class="card-icon">🎰</span>
-      <div class="card-sport">Multi-Sport</div>
-      <div class="card-title">Cross-Sport Parlays</div>
-      <div style="margin:7px 0 10px;font-size:10px;color:#a78bfa;font-weight:700">MLB · WNBA · WC 2026</div>
-      <div class="card-desc">Cross-sport parlays built only from STRONG and GOOD picks on every sport page, ranked by combined chance to cash.</div>
-      <div class="card-tags">
-        <span class="card-tag">Cross-Sport</span>
-        <span class="card-tag">2/3/4/5-Leg</span>
-        <span class="card-tag">Joint Probability</span>
-        <span class="card-tag">Fair Odds</span>
-        <span class="card-tag">Signal Pool</span>
-      </div>
-      <span class="card-arrow">→</span>
-    </a>
-
-    <a href="mlb.html" class="sport-card" style="--accent:#22c55e">
-      <span class="card-badge">⚡ LIVE</span>
-      <span class="card-icon">⚾</span>
-      <div class="card-sport">MLB Baseball</div>
-      <div class="card-title">MLB Sim</div>
-      <div id="perf-MLB"><div class="skel" style="width:130px;height:11px;margin:7px 0 10px"></div></div>
-      <div class="card-desc">Markov Chain at-bat simulation driven by FIP/xFIP pitcher strength, team wRC+ offense, park-adjusted run expectancy, priced against Kalshi's game, spread and total markets.</div>
-      <div class="card-tags">
-        <span class="card-tag">Markov Chain</span>
-        <span class="card-tag">FIP / xFIP</span>
-        <span class="card-tag">wRC+</span>
-        <span class="card-tag">Park Factors</span>
-        <span class="card-tag">Kalshi</span>
-        <span class="card-tag">F5 / NRFI</span>
-        <span class="card-tag">Run Line</span>
-        <span class="card-tag">Parlay Builder</span>
-      </div>
-      <span class="card-arrow">→</span>
-    </a>
-
-    <a href="wnba.html" class="sport-card" style="--accent:#e879f9">
-      <span class="card-badge">⚡ LIVE</span>
-      <span class="card-icon">🏀</span>
-      <div class="card-sport">WNBA Basketball</div>
-      <div class="card-title">WNBA Sim</div>
-      <div id="perf-WNBA"><div class="skel" style="width:130px;height:11px;margin:7px 0 10px"></div></div>
-      <div class="card-desc">Possession-by-possession simulation using team offensive/defensive ratings and pace. Quarter-by-quarter model with home court adjustment across all markets.</div>
-      <div class="card-tags">
-        <span class="card-tag">Off/Def Rtg</span>
-        <span class="card-tag">Pace</span>
-        <span class="card-tag">Moneyline</span>
-        <span class="card-tag">Spread</span>
-        <span class="card-tag">Totals</span>
-        <span class="card-tag">1H Markets</span>
-      </div>
-      <span class="card-arrow">→</span>
-    </a>
-
-  </div>
-
-  <div class="section-label">Model Architecture</div>
-  <div class="model-stack">
-    <div class="stack-item">
-      <div class="stack-num">01</div>
-      <div class="stack-name">Team Strength Parameters</div>
-      <div class="stack-desc">FIP/xFIP for pitchers, wRC+ for offenses, Dixon-Coles α/β for soccer. All park and league adjusted.</div>
-    </div>
-    <div class="stack-item">
-      <div class="stack-num">02</div>
-      <div class="stack-name">Game State Simulation</div>
-      <div class="stack-desc">Markov chain for MLB (24 base-out states), Poisson xG shot-by-shot for soccer. Models sequential structure correctly.</div>
-    </div>
-    <div class="stack-item">
-      <div class="stack-num">03</div>
-      <div class="stack-name">Low-Score Correction</div>
-      <div class="stack-desc">Dixon-Coles ρ correction for soccer scorelines. Bullpen handoff model and fatigue curves for MLB starters.</div>
-    </div>
-    <div class="stack-item">
-      <div class="stack-num">04</div>
-      <div class="stack-name">Contextual Adjustments</div>
-      <div class="stack-desc">Park factors, platoon splits (L/R), injury modifiers, home field advantage, weather and stadium type.</div>
-    </div>
-    <div class="stack-item">
-      <div class="stack-num">05</div>
-      <div class="stack-name">Monte Carlo Output</div>
-      <div class="stack-desc">100,000 iterations per game. Full probability distributions across moneyline, spread, totals, props, and 1H markets.</div>
-    </div>
-    <div class="stack-item">
-      <div class="stack-num">06</div>
-      <div class="stack-name">Parlay Builder</div>
-      <div class="stack-desc">Cross-game parlays built from STRONG and GOOD picks. Ranked by joint probability, fair odds shown.</div>
-    </div>
-  </div>
-
-  <div class="section-label">Disclaimer</div>
-  <div style="background:#101d30;border:1px solid #1a2a3e;border-radius:6px;padding:14px;font-size:9px;color:#2a3a52;line-height:1.8">
-    All simulations are for informational and analytical purposes only. Model outputs are probabilistic estimates derived from publicly available statistical data and are not guarantees of future results. This is not professional betting advice. Always gamble responsibly. Never bet more than you can afford to lose.
-  </div>
-
-</div>
-
-<div class="footer">SHARP SIM · MONTE CARLO SPORTS MODELING · NOT PROFESSIONAL BETTING ADVICE</div>
-
-<script src="js/bets.js"></script>
-<script>
-// Win/loss record of STRONG and GOOD picks per sport (older LOCK/HIGH picks count as STRONG/GOOD).
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect } = React;
+const SB = window.SharpBets, UI = window.SharpUI;
+// The record of STRONG and GOOD picks comes from /api/resolve (which also settles finished Kalshi markets), cached 15 minutes.
 const RESOLVE_CACHE_KEY = "sharp_resolve_cache";
 const RESOLVE_TTL = 15 * 60 * 1000;
-const B = window.SharpBets;
 
-function formatAge(ts) {
-  const mins = Math.floor((Date.now() - ts) / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return mins + "m ago";
-  return Math.floor(mins / 60) + "h " + (mins % 60) + "m ago";
+const SPORTS = [
+  { k: "nfl", href: "nfl.html", ico: "🏈", name: "NFL", desc: "Every game simulated drive by drive, priced on every Kalshi spread, total and winner." },
+  { k: "cfb", href: "cfb.html", ico: "🏟️", name: "College football", desc: "Every FBS game rated from this season's results and priced on Kalshi." },
+  { k: "golf", href: "golf.html", ico: "⛳", name: "Golf", desc: "Each PGA Tour event simulated from strokes gained: win, top 5/10/20 and make the cut." },
+  { k: "parlays", href: "parlays.html", ico: "🧩", name: "Parlays", desc: "Two to five of the best picks from every sport, combined and ranked by chance to cash." },
+  { k: "live", href: "live.html", ico: "⚡", name: "Live trader", desc: "Watches your bets during the game and cashes out on the rules you set. Paper mode by default." },
+  { k: "mlb", href: "mlb.html", ico: "⚾", name: "MLB", desc: "Pitch-by-pitch style game sims from starters, lineups and ballparks, priced on Kalshi." },
+  { k: "wnba", href: "wnba.html", ico: "🏀", name: "WNBA", desc: "Possession-by-possession sims from team ratings and pace, priced on Kalshi." },
+];
+
+function ago(ts) { const m = Math.floor((Date.now() - ts) / 60000); return m < 1 ? "just now" : m < 60 ? m + "m ago" : Math.floor(m / 60) + "h ago"; }
+
+function App() {
+  const [bets, setBets] = useState(null);
+  const [at, setAt] = useState(null);
+  useEffect(() => { (async () => {
+    try { const c = JSON.parse(localStorage.getItem(RESOLVE_CACHE_KEY) || "null"); if (c && Date.now() - c.ts < RESOLVE_TTL) { setBets(c.bets); setAt(c.ts); return; } } catch (e) {}
+    try {
+      const res = await fetch("/api/resolve");
+      if (res.ok && (res.headers.get("content-type") || "").includes("json")) {
+        const b = await res.json(), ts = Date.now(); setBets(b); setAt(ts);
+        try { localStorage.setItem(RESOLVE_CACHE_KEY, JSON.stringify({ ts, bets: b })); } catch (e) {}
+        return;
+      }
+    } catch (e) {}
+    setBets(false);
+  })(); }, []);
+  const rec = bets ? SB.record(bets) : null;
+
+  return (
+    <UI.Shell active="index">
+      <UI.PageHead eyebrow="Sports betting models · priced on Kalshi" title="Find the bets the market has priced too cheap"
+        sub="Each game is simulated thousands of times. When the model's chance to cash is higher than Kalshi's price, the bet gets a grade and a suggested amount. Tap Bet to place it." />
+
+      <UI.H2 aside={at ? "updated " + ago(at) : null}>Your pick record</UI.H2>
+      {bets === null ? <div className="card"><div className="skel" style={{ height: 22, width: 160, marginBottom: 10 }} /><div className="skel" style={{ height: 120 }} /></div>
+        : bets === false ? <div className="note">The pick record couldn't be loaded right now.</div>
+        : <SB.RecordCard bets={bets} />}
+
+      <UI.H2>Pick a sport</UI.H2>
+      <div className="sports">
+        {SPORTS.map(s => {
+          const r = rec && rec.bySport[s.k];
+          return (
+            <a key={s.k} href={s.href} className="sport">
+              <div className="sport-top"><span className="sport-ico" aria-hidden="true">{s.ico}</span><span className="sport-name">{s.name}</span><span className="sport-go" aria-hidden="true">→</span></div>
+              <div className="sport-desc">{s.desc}</div>
+              {r && r.w + r.l + r.pending > 0 && <div className="sport-rec">
+                {["STRONG", "GOOD"].filter(k => r[k].w + r[k].l + r[k].pending).map(k => (
+                  <span key={k} className="row" style={{ gap: 6 }}><SB.GradeBadge g={{ key: k, label: SB.LABELS[k], color: SB.COLORS[k] }} small /><b className="num" style={{ color: "var(--text)" }}>{r[k].w}–{r[k].l}</b></span>))}
+                {r.pending > 0 && <span>{r.pending} pending</span>}
+              </div>}
+            </a>
+          );
+        })}
+      </div>
+
+      <UI.H2>How it works</UI.H2>
+      <div className="steps">
+        <div className="step"><b>The model plays the game</b><span>Team and player ratings, blended with the betting market, feed a simulation that plays each game thousands of times.</span></div>
+        <div className="step"><b>It compares with Kalshi</b><span>A Kalshi contract pays $1 if it wins. If the model says 60% and the price is 50¢, that's a +10¢ edge.</span></div>
+        <div className="step"><b>You get a grade and an amount</b><span>STRONG and GOOD bets are the ones worth making. The amount scales from your base bet in <a className="link" href="settings.html">Settings</a>.</span></div>
+      </div>
+
+      <div className="ss-foot">Model outputs are estimates from public data, not guarantees. This is not professional betting advice. Never bet more than you can afford to lose.</div>
+    </UI.Shell>
+  );
 }
-function wl(r) {
-  return '<span style="font-size:12px;font-weight:700"><span style="color:#22c55e">' + r.w + 'W</span>-<span style="color:#ef4444">' + r.l + 'L</span>' +
-    (r.p ? '<span style="color:#4b6280;font-size:10px"> ' + r.p + 'P</span>' : '') + '</span> <span style="font-size:9px;color:#7a8ca8">' + B.winPct(r) + '</span>' +
-    (r.pending ? ' <span style="font-size:9px;color:#4b6280">' + r.pending + ' pending</span>' : '');
-}
-async function loadStats() {
-  let bets, fetchedAt;
-  try { const c = JSON.parse(localStorage.getItem(RESOLVE_CACHE_KEY) || "null"); if (c && Date.now() - c.ts < RESOLVE_TTL) { bets = c.bets; fetchedAt = c.ts; } } catch (e) {}
-  if (!bets) {
-    try { const res = await fetch("/api/resolve"); if (res.ok && (res.headers.get("content-type") || "").includes("json")) { bets = await res.json(); fetchedAt = Date.now();
-      try { localStorage.setItem(RESOLVE_CACHE_KEY, JSON.stringify({ ts: fetchedAt, bets })); } catch (e) {} } } catch (e) {}
-  }
-  const rec = B.record(bets || []);
-  document.querySelectorAll('[id^="perf-"]').forEach(slot => {
-    const r = rec.bySport[slot.id.slice(5).toLowerCase()];
-    if (!r || !(r.w + r.l + r.p + r.pending)) { slot.innerHTML = '<div style="font-size:9px;color:#4b6280;margin:7px 0 10px">No graded picks yet</div>'; return; }
-    let html = '<div style="margin:7px 0 10px">';
-    for (const k of ["STRONG", "GOOD"]) {
-      const t = r[k]; if (!(t.w + t.l + t.p + t.pending)) continue;
-      const c = B.COLORS[k];
-      html += '<div style="display:flex;align-items:center;gap:8px;padding:2px 0 2px 10px;border-left:2px solid ' + c + '44">' +
-        '<span style="background:' + c + '22;border:1px solid ' + c + '44;color:' + c + ';font-size:7px;font-weight:700;padding:1px 4px;border-radius:2px;letter-spacing:1px;min-width:62px;text-align:center">' + B.LABELS[k] + '</span>' + wl(t) + '</div>';
-    }
-    if (fetchedAt) html += '<div style="font-size:8px;color:#2a3a52;margin-top:5px;letter-spacing:0.5px">updated ' + formatAge(fetchedAt) + '</div>';
-    slot.innerHTML = html + '</div>';
-  });
-}
-loadStats();
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 </script>
 </body>
 </html>
