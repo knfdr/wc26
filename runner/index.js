@@ -17,10 +17,17 @@ import CFB from "../js/cfb-engine.js";
 import { kalshiFetch, hasCredentials, checkOrder } from "../lib/kalshi.js";
 
 const K = "https://api.elections.kalshi.com/trade-api/v2";
-const SB = "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=80&limit=300";
-const SUMMARY = "https://site.api.espn.com/apis/site/v2/sports/football/college-football/summary?event=";
-const CORE = "https://sports.core.api.espn.com/v2/sports/football/leagues/college-football/events/";
-const SERIES = ["KXNCAAFGAME", "KXNCAAFSPREAD", "KXNCAAFTOTAL"];
+// College football and NFL run side by side; each game carries its sport (g.sport) into the engine.
+const ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/", ESPN_CORE = "https://sports.core.api.espn.com/v2/sports/football/leagues/";
+const LEAGUES = {
+  cfb: { sb: ESPN + "college-football/scoreboard?groups=80&limit=300", summary: ESPN + "college-football/summary?event=", core: ESPN_CORE + "college-football/events/",
+         series: ["KXNCAAFGAME", "KXNCAAFSPREAD", "KXNCAAFTOTAL"], game: "KXNCAAFGAME" },
+  nfl: { sb: ESPN + "nfl/scoreboard?limit=40", summary: ESPN + "nfl/summary?event=", core: ESPN_CORE + "nfl/events/",
+         series: ["KXNFLGAME", "KXNFLSPREAD", "KXNFLTOTAL"], game: "KXNFLGAME" },
+};
+const TICKER_RE = /^KX(NCAAF|NFL)(GAME|SPREAD|TOTAL)-/;
+const sportOfTicker = (t) => /^KXNFL/.test(t) ? "nfl" : "cfb";
+const MAX_CORE_GAMES = 10;   // the free plan allows 50 outside fetches per tick
 const TICK_MS = 2000, IDLE_MS = 60000;
 // Feed fetches time out after 6s so a hung request can't stall a tick.
 
@@ -107,7 +114,7 @@ export class Runner {
     if (path === "config") { if (body.cfg) this.s.cfg = sanitizeCfg(body.cfg); if (body.enabled) this.s.enabled = body.enabled; await this.save(); return json(this.status(false)); }
     if (path === "manage") {
       const t = String(body.ticker || "");
-      if (!/^KXNCAAF(GAME|SPREAD|TOTAL)-[A-Z0-9-]+$/.test(t)) return json({ error: "not a college football market" }, 400);
+      if (!/^KX(NCAAF|NFL)(GAME|SPREAD|TOTAL)-[A-Z0-9-]+$/.test(t)) return json({ error: "not a college football or NFL game, spread or total market" }, 400);
       if (!body.rules) { this.s.managed[t] = undefined; this.s.shadow.done[t] = undefined; this.prune(); this.log("info", `Stopped managing ${t}`); }
       else {
         const c = (v) => v == null || v === "" || !isFinite(+v) || +v <= 0 ? null : Math.min(99, Math.max(1, Math.round(+v)));
@@ -174,30 +181,40 @@ export class Runner {
   // ── feeds ────────────────────────────────────────────────────────────────
   async refreshEvents() {
     const m = this.mem; if (Date.now() - m.eventsTs < 300000 && m.events.length) return;
-    m.events = (await J(K + "/events?series_ticker=KXNCAAFGAME&status=open&limit=200")).events || []; m.eventsTs = Date.now();
+    const lists = await Promise.all(Object.entries(LEAGUES).map(([sport, L]) => J(K + `/events?series_ticker=${L.game}&status=open&limit=200`).then(d => (d.events || []).map(e => ({ ...e, sport })))));
+    m.events = lists.flat(); m.eventsTs = Date.now();
   }
   async refreshScoreboard() {
     const m = this.mem; if (Date.now() - m.sbTs < 5000) return;
-    const d = await J(SB + "&_=" + Date.now());
-    m.sbGames = (d.events || []).map(CFB.parseEspnEvent).filter(g => g && (g.state === "in" || (g.state === "pre" && new Date(g.date) - Date.now() < 3600e3) || (g.state === "post" && Date.now() - new Date(g.date) < 6 * 3600e3)));
+    const boards = await Promise.all(Object.entries(LEAGUES).map(([sport, L]) => J(L.sb + "&_=" + Date.now()).then(d => (d.events || []).map(e => CFB.parseEspnEvent(e, sport))).catch(() => null)));
+    if (boards.every(b => b === null)) throw new Error("ESPN scoreboards unavailable");
+    const keep = (g) => g && (g.state === "in" || (g.state === "pre" && new Date(g.date) - Date.now() < 3600e3) || (g.state === "post" && Date.now() - new Date(g.date) < 6 * 3600e3));
+    // a league whose scoreboard failed this time keeps its last games
+    m.sbGames = Object.keys(LEAGUES).flatMap((sport, i) => boards[i] ? boards[i].filter(keep) : m.sbGames.filter(g => g.sport === sport));
     m.sbTs = Date.now();
     for (const g of m.sbGames) {
       const gs = m.gs[g.id] = m.gs[g.id] || {}; gs.sbTs = m.sbTs;
       if (!gs.suffix) {
-        let best = null; for (const e of m.events) { const sc = CFB.matchEventScore(e.title, g); if (!best || sc > best.sc) best = { sc, e }; }
+        let best = null; for (const e of m.events) { if (e.sport !== g.sport) continue; const sc = CFB.matchEventScore(e.title, g); if (!best || sc > best.sc) best = { sc, e }; }
         if (best && best.sc >= 0.6) gs.suffix = best.e.event_ticker.split("-").slice(1).join("-");
       }
+      gs.sport = g.sport;
       if (!this.s.pre[g.id] && g.state !== "post") {
         if (g.spreadHome != null && g.total != null) this.s.pre[g.id] = { spreadHome: g.spreadHome, total: g.total };
-        else try { const s = await J(SUMMARY + g.id); const pc = (s.pickcenter || [])[0];
+        else try { const s = await J(LEAGUES[g.sport].summary + g.id); const pc = (s.pickcenter || [])[0];
           this.s.pre[g.id] = pc && pc.spread != null ? { spreadHome: -Number(pc.spread), total: Number(pc.overUnder) } : { spreadHome: null, total: null }; } catch (e) {}
       }
     }
   }
   async refreshCore() {
     const m = this.mem;
-    await Promise.all(m.sbGames.filter(g => g.state === "in").map(async g => {
-      const base = CORE + g.id + "/competitions/" + g.id + "/";
+    // ESPN's play-by-play feed showed no edge over the market, so it's only fetched for games that matter: ones with a
+    // position (bot or managed) or, when new trades are on, games picked for them
+    const held = new Set(Object.values({ ...(m.myPositions || {}), ...this.s.paper.positions }).map(p => p.gameId));
+    const en = this.s.enabled || {};
+    const want = m.sbGames.filter(g => g.state === "in" && (held.has(g.id) || (this.s.entries && (en.all || en[g.id])))).slice(0, MAX_CORE_GAMES);
+    await Promise.all(want.map(async g => {
+      const base = LEAGUES[g.sport].core + g.id + "/competitions/" + g.id + "/";
       try {
         const [status, situation] = await Promise.all([J(base + "status"), J(base + "situation")]);
         const prev = m.core[g.id] || {}; let play = prev.play, playRef = prev.playRef;
@@ -209,7 +226,9 @@ export class Runner {
   }
   async refreshMarkets() {
     const m = this.mem; if (Date.now() - m.mkTs < 2500) return;
-    const lists = await Promise.all(SERIES.map(s => J(`${K}/markets?series_ticker=${s}&status=open&limit=1000`)));
+    // only the leagues that have games on now (each series call is an outside fetch)
+    const sports = [...new Set(m.sbGames.map(g => g.sport))];
+    const lists = await Promise.all(sports.flatMap(sp => LEAGUES[sp].series).map(s => J(`${K}/markets?series_ticker=${s}&status=open&limit=1000`)));
     const by = {}; for (const x of lists.flatMap(l => l.markets || [])) { const suf = x.event_ticker.split("-").slice(1).join("-"); (by[suf] = by[suf] || []).push(x); }
     const now = Date.now(), cfg = this.cfg(); m.mkTs = now;
     for (const g of m.sbGames) {
@@ -229,7 +248,7 @@ export class Runner {
     if (r.status !== 200) throw new Error("positions HTTP " + r.status);
     const d = JSON.parse(r.text), out = {}, meta = this.s.live.meta, cfg = this.cfg();
     for (const p of d.market_positions || []) {
-      const t = p.ticker; if (!/^KXNCAAF(GAME|SPREAD|TOTAL)-/.test(t)) continue;
+      const t = p.ticker; if (!TICKER_RE.test(t)) continue;
       const pos = parseFloat(p.position_fp != null ? p.position_fp : p.position || 0); if (!pos) continue;
       const count = Math.abs(pos), mt = meta[t] || {};
       const exposure = parseFloat(p.market_exposure_dollars != null ? p.market_exposure_dollars : (p.market_exposure || 0) / 100);
@@ -243,8 +262,8 @@ export class Runner {
     m.livePositions = out; m.myPositions = out; m.posTs = Date.now();
   }
   gameIdForTicker(t) {
-    const suf = t.split("-").slice(1, 2).join("");
-    for (const [id, gs] of Object.entries(this.mem.gs)) if (gs.suffix === suf) return id;
+    const suf = t.split("-").slice(1, 2).join(""), sport = sportOfTicker(t);
+    for (const [id, gs] of Object.entries(this.mem.gs)) if (gs.suffix === suf && (gs.sport || "cfb") === sport) return id;
     return null;
   }
   merged() {

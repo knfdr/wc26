@@ -28,9 +28,14 @@ const { useState, useEffect, useRef, useCallback, useMemo } = React;
 const CFB = window.CFB;
 
 // ── Constants ────────────────────────────────────────────────────────────────
-const ESPN_SB = "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=80&limit=300";
-const ESPN_SUMMARY = "https://site.api.espn.com/apis/site/v2/sports/football/college-football/summary?event=";
-const SERIES = ["KXNCAAFGAME", "KXNCAAFSPREAD", "KXNCAAFTOTAL"];
+// This page shows one league at a time (live.html?sport=nfl); the server auto trader watches both.
+const SPORT = new URLSearchParams(location.search).get("sport") === "nfl" ? "nfl" : "cfb";
+const LEAGUE = SPORT === "nfl"
+  ? { espn: "nfl", sb: "nfl/scoreboard?limit=40", series: ["KXNFLGAME", "KXNFLSPREAD", "KXNFLTOTAL"], game: "KXNFLGAME", label: "NFL", sim: "nfl.html", tickerRe: /^KXNFL(GAME|SPREAD|TOTAL)-/ }
+  : { espn: "college-football", sb: "college-football/scoreboard?groups=80&limit=300", series: ["KXNCAAFGAME", "KXNCAAFSPREAD", "KXNCAAFTOTAL"], game: "KXNCAAFGAME", label: "COLLEGE FOOTBALL", sim: "cfb.html", tickerRe: /^KXNCAAF(GAME|SPREAD|TOTAL)-/ };
+const ESPN_SB = "https://site.api.espn.com/apis/site/v2/sports/football/" + LEAGUE.sb;
+const ESPN_SUMMARY = "https://site.api.espn.com/apis/site/v2/sports/football/" + LEAGUE.espn + "/summary?event=";
+const SERIES = LEAGUE.series;
 const LS = { cfg: "sharp_live_cfg_v1", paper: "sharp_live_paper_v1", meta: "sharp_live_meta_v1", log: "sharp_live_log_v1",
              enabled: "sharp_live_enabled_v1", pre: "sharp_live_pre_v1", mode: "sharp_live_mode_v1" };
 const TICK_MS = 3000, ESPN_MS = 5000, EVENTS_MS = 5 * 60000, IDLE_MARKET_MS = 20000;
@@ -156,7 +161,7 @@ function App() {
   async function refreshEvents(force) {
     const st = S.current;
     if (!force && Date.now() - st.eventsTs < EVENTS_MS && st.events.length) return;
-    const d = await getJSON("/api/kx/events?series_ticker=KXNCAAFGAME&status=open&limit=200");
+    const d = await getJSON("/api/kx/events?series_ticker=" + LEAGUE.game + "&status=open&limit=200");
     st.events = d.events || []; st.eventsTs = Date.now();
   }
 
@@ -165,7 +170,7 @@ function App() {
     if (!force && Date.now() - st.espnTs < ESPN_MS) return;
     const d = await getJSON(ESPN_SB + "&_=" + Date.now());
     const today = new Date();
-    const parsed = (d.events || []).map(CFB.parseEspnEvent).filter(Boolean)
+    const parsed = (d.events || []).map(e => CFB.parseEspnEvent(e, SPORT)).filter(Boolean)
       .filter(g => g.state === "in" || (g.state === "pre" && new Date(g.date) - today < 14 * 3600e3) || (g.state === "post" && today - new Date(g.date) < 8 * 3600e3));
     const ts = Date.now();
     for (const g of parsed) {
@@ -235,7 +240,7 @@ function App() {
   }
 
   // ESPN core API: /status + /situation every pass for games we care about, the play only when lastPlay changes.
-  const CORE = "https://sports.core.api.espn.com/v2/sports/football/leagues/college-football/events/";
+  const CORE = "https://sports.core.api.espn.com/v2/sports/football/leagues/" + LEAGUE.espn + "/events/";
   async function refreshCore(pass) {
     const st = S.current, en = R.current.enabled || {};
     const live = (st.espnGames || []).filter(g => g.state === "in" || (g.state === "pre" && new Date(g.date) - Date.now() < 900e3));
@@ -263,7 +268,7 @@ function App() {
       if (gs.milestone !== undefined && !(gs.milestone === null && Date.now() - (gs.milestoneTs || 0) > 120000)) continue;
       gs.milestoneTs = Date.now();
       try {
-        const r = await getJSON("/api/kx/milestones?limit=5&related_event_ticker=KXNCAAFGAME-" + gs.suffix);
+        const r = await getJSON("/api/kx/milestones?limit=5&related_event_ticker=" + LEAGUE.game + "-" + gs.suffix);
         const m = (r.milestones || []).find(x => x.type === "football_game") || null;
         gs.milestone = m;
         if (m) { const parts = String(m.title || "").split(/\s+at\s+/i); gs.flip = parts.length === 2 && CFB.nameScore(parts[1], g.away) > CFB.nameScore(parts[1], g.home); }
@@ -354,7 +359,7 @@ function App() {
     const d = await getJSON("/api/kx/portfolio/positions?count_filter=position&limit=1000");
     const out = {};
     for (const p of d.market_positions || []) {
-      const t = p.ticker; if (!/^KXNCAAF(GAME|SPREAD|TOTAL)-/.test(t)) continue;
+      const t = p.ticker; if (!LEAGUE.tickerRe.test(t)) continue;
       const pos = parseFloat(p.position_fp != null ? p.position_fp : p.position || 0);
       if (!pos) continue;
       const count = Math.abs(pos);
@@ -751,7 +756,11 @@ function App() {
       {/* Nav */}
       <div style={{ background: T.navy, borderBottom: "1px solid " + T.border, padding: "10px 16px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <a href="index.html" style={{ fontSize: 9, color: T.muted, letterSpacing: 1 }}>← SHARP SIM</a>
-        <a href="cfb.html" style={{ fontSize: 9, color: T.muted, letterSpacing: 1 }}>CFB SIM</a>
+        <a href={LEAGUE.sim} style={{ fontSize: 9, color: T.muted, letterSpacing: 1 }}>{SPORT === "nfl" ? "NFL SIM" : "CFB SIM"}</a>
+        <div style={{ display: "flex", border: "1px solid " + T.border, borderRadius: 4, overflow: "hidden" }}>
+          {[["cfb", "COLLEGE"], ["nfl", "NFL"]].map(([k, l]) => (
+            <a key={k} href={k === "nfl" ? "live.html?sport=nfl" : "live.html"} style={{ fontSize: 9, letterSpacing: 1, padding: "4px 10px", fontWeight: 700, background: SPORT === k ? T.accent + "33" : "transparent", color: SPORT === k ? T.accent : T.muted }}>{l}</a>))}
+        </div>
         <div style={{ flex: 1 }} />
         <ServerBadge server={server} />
         <StreamBadge info={streamInfo} s={stream.current} />
@@ -761,7 +770,7 @@ function App() {
 
       {/* Header */}
       <div style={{ background: "linear-gradient(160deg,#0c1526 0%,#070b14 100%)", borderBottom: "1px solid " + T.border, padding: "22px 16px 18px", textAlign: "center", position: "relative" }}>
-        <div style={{ display: "inline-block", background: T.accent + "1a", border: "1px solid " + T.accent + "44", color: T.accent, fontSize: 9, letterSpacing: 2, padding: "2px 10px", borderRadius: 2, marginBottom: 10 }}>⚡ LIVE AUTO · COLLEGE FOOTBALL · KALSHI</div>
+        <div style={{ display: "inline-block", background: T.accent + "1a", border: "1px solid " + T.accent + "44", color: T.accent, fontSize: 9, letterSpacing: 2, padding: "2px 10px", borderRadius: 2, marginBottom: 10 }}>⚡ LIVE AUTO · {LEAGUE.label} · KALSHI</div>
         <div style={{ fontSize: "clamp(20px,4vw,30px)", fontWeight: 700, letterSpacing: -0.5 }}>Auto Cash-Out Trader</div>
         <div style={{ fontSize: 10, color: T.muted, marginTop: 6 }}>Drive-by-drive live sim calibrated to Kalshi's own ladder · take-profit / stop-loss / trailing exits · re-entry for the rest of the game</div>
       </div>
@@ -1052,7 +1061,9 @@ function ServerRunner({ cfg, enabled, liveGames, nEnabled, browserRunning, onSta
     const go = () => getJSON("/api/runner/account").then(a => alive && setAcct(a)).catch(e => alive && setAcct({ connected: false, error: e.message }));
     go(); const id = setInterval(go, 30000); return () => { alive = false; clearInterval(id); };
   }, [isLive]);
-  const enabledMap = () => Object.fromEntries(Object.keys(enabled).filter(k => enabled[k]).map(k => [k, true]));
+  // this page only knows one league's games: merge its picks over the server's so the other league's picks survive
+  const enabledMap = () => { const out = { ...((st && st.enabled) || {}) }; Reflect.deleteProperty(out, "all");
+    for (const [k, v] of Object.entries(enabled)) { if (v) out[k] = true; else Reflect.deleteProperty(out, k); } return out; };
   // while running, rule and game changes on this page go to the server automatically
   const sig = JSON.stringify([cfg, enabledMap()]);
   const lastSent = useRef(null);

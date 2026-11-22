@@ -328,7 +328,7 @@ function simRemaining(g, homePts, awayPts, n, opts) {
     while (t > 0) {
       const lead = poss === "H" ? h - a : a - h;
       // leading team with the ball late just runs the clock out
-      if (lead > 0 && t <= 110 && rnd() < 0.85) break;
+      if (lead > 0 && t <= (nfl ? 130 : 110) && rnd() < (nfl ? 0.88 : 0.85)) break;   // NFL: two-minute warning + one first down
       const pr = first ? DP(g.yardsToGoal, g.down, g.distance, poss === "H" ? sH : sA) : fresh[poss];
       // clock management: trailing team hurries late; leading team grinds in the 4th quarter
       const hurry = lead < 0 && t < 480;
@@ -344,6 +344,7 @@ function simRemaining(g, homePts, awayPts, n, opts) {
         else if (lead === 0 && t < 200) { pFG = Math.min(0.55, pFG * 2.0); pTD *= 0.85; }
         else if (lead <= -4 && lead >= -8) { pTD = Math.min(0.62, pTD * 1.45); pFG = 0.02; }
         else if (lead > 0) { pTD *= 0.85; pFG *= 1.2; }   // leading: run the ball, take the points
+        if (t < 90) { pTD *= Math.max(0.25, t / 90); pFG *= Math.max(0.4, t / 90); }   // not much time left to move the ball
       }
       if (u < pTD) {
         const x = rnd();

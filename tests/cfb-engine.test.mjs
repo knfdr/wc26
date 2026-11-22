@@ -211,3 +211,21 @@ test("NFL pregame drive sim: median on the spread and total, key numbers, favour
   assert.equal(CFB.sideForName("New York J", g), "away");
   assert.ok(CFB.nameScore("Los Angeles R", g.home) < 0.1);
 });
+
+test("NFL live: drive sim from a game state, calibrated to the market; OT ties possible", () => {
+  const nflGame = (over) => ({ sport: "nfl", id: "n1", state: "in", statusName: "STATUS_IN_PROGRESS", period: 4, clock: "2:00", secondsLeft: 120,
+    home: team("h", "KC", "Kansas City", "Chiefs", 20), away: team("a", "BUF", "Buffalo", "Bills", 17), possession: "home", down: 1, distance: 10, yardsToGoal: 60, ...over });
+  // up 3 with the ball and 2:00 left: a big favourite
+  const late = CFB.simRemaining(nflGame(), 24, 22, 20000, { seed: 1 });
+  assert.ok(late.pHome > 0.85, "leader with the ball late wins most of the time: " + late.pHome);
+  // tied at the end of regulation: OT, both teams get the ball; some ties in the regular season
+  const ot = CFB.simRemaining(nflGame({ period: 5, secondsLeft: 0, home: team("h", "KC", "Kansas City", "Chiefs", 20), away: team("a", "BUF", "Buffalo", "Bills", 20) }), 24, 22, 20000, { seed: 2 });
+  const ties = Array.from(ot.margins).filter(m => m === 0).length / ot.n;
+  assert.ok(ties > 0.01 && ties < 0.2, "OT ties: " + ties);
+  assert.ok(ot.pHome > 0.35 && ot.pHome < 0.65);
+  // calibration hits the market's moneyline
+  const mkts = [mk("win", "home", 0, 63, 65), mk("total", "over", 44.5, 48, 52)];
+  const g = nflGame({ period: 2, secondsLeft: 2400, home: team("h", "KC", "Kansas City", "Chiefs", 7), away: team("a", "BUF", "Buffalo", "Bills", 3) });
+  const live = CFB.liveDistribution(g, { spreadHome: 2.5, total: 46.5 }, mkts, { alpha: 0, sims: 6000, ladderCorrection: false });
+  assert.ok(Math.abs(live.dist.pHome - 0.64) < 0.04, "calibrated pHome " + live.dist.pHome);
+});
