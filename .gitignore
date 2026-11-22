@@ -3,3 +3,5 @@ node_modules/
 tools/paper-log.jsonl
 tools/paper-run.log
 tools/paper-run-*.log
+tools/feedrace.jsonl
+tools/feedrace.log
