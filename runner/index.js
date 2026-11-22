@@ -21,7 +21,7 @@ const SB = "https://site.api.espn.com/apis/site/v2/sports/football/college-footb
 const SUMMARY = "https://site.api.espn.com/apis/site/v2/sports/football/college-football/summary?event=";
 const CORE = "https://sports.core.api.espn.com/v2/sports/football/leagues/college-football/events/";
 const SERIES = ["KXNCAAFGAME", "KXNCAAFSPREAD", "KXNCAAFTOTAL"];
-const TICK_MS = 1500, IDLE_MS = 60000;
+const TICK_MS = 2000, IDLE_MS = 60000;
 // Feed fetches time out after 6s so a hung request can't stall a tick.
 
 const J = async (u) => { const r = await fetch(u, { headers: { Accept: "application/json", "User-Agent": "sharp-sim-runner" }, signal: AbortSignal.timeout(6000) }); if (!r.ok) throw new Error(r.status + " " + u.split("?")[0]); return r.json(); };
@@ -160,8 +160,13 @@ export class Runner {
     this.s.lastTick = Date.now(); this.s.tickMs = Date.now() - t0;
     await this.save();
     if (this.s.running) {
-      const anyLive = this.mem.sbGames.some(g => g.state === "in" || (g.state === "pre" && new Date(g.date) - Date.now() < 900e3));
-      const hasPos = Object.keys(this.s.mode === "live" ? this.s.live.meta : this.s.paper.positions).length > 0;
+      // Tick fast only when there's work: each alarm is a billed request (free plan: 100k/day for the whole account).
+      const soon = (g) => g.state === "in" || (g.state === "pre" && new Date(g.date) - Date.now() < 900e3);
+      const en = this.s.enabled || {};
+      const anyLive = this.s.entries && this.mem.sbGames.some(g => soon(g) && (en.all || en[g.id]));
+      const mine = this.mem.myPositions || {};
+      const managedLive = Object.keys(this.s.managed).some(t => { const p = mine[t]; const g = p && this.mem.sbGames.find(x => x.id === p.gameId); return g && soon(g) && !(this.s.mode !== "live" && this.s.shadow.done[t]); });
+      const hasPos = managedLive || Object.keys(this.s.mode === "live" ? this.s.live.meta : this.s.paper.positions).length > 0;
       await this.state.storage.setAlarm(Date.now() + (anyLive || hasPos || this.s.killed ? Math.max(200, TICK_MS - this.s.tickMs) : IDLE_MS));
     }
   }
