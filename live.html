@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sharp Sim — Live Auto</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="js/cfb-engine.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100vh;background:#070b14;font-family:'IBM Plex Mono','Courier New',monospace;color:#dde5f0}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:#0c1526}
+::-webkit-scrollbar-thumb{background:#1a2a3e;border-radius:3px}
+a{color:inherit;text-decoration:none}
+input,select{font-family:inherit}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+const CFB = window.CFB;
+
+// ── Constants ────────────────────────────────────────────────────────────────
+const ESPN_SB = "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=80&limit=300";
+const ESPN_SUMMARY = "https://site.api.espn.com/apis/site/v2/sports/football/college-football/summary?event=";
+const SERIES = ["KXNCAAFGAME", "KXNCAAFSPREAD", "KXNCAAFTOTAL"];
+const LS = { cfg: "sharp_live_cfg_v1", paper: "sharp_live_paper_v1", meta: "sharp_live_meta_v1", log: "sharp_live_log_v1",
+             enabled: "sharp_live_enabled_v1", pre: "sharp_live_pre_v1", mode: "sharp_live_mode_v1" };
+const TICK_MS = 3000, ESPN_MS = 5000, EVENTS_MS = 5 * 60000, IDLE_MARKET_MS = 20000;
+
+const T = { bg:"#070b14", navy:"#101d30", navy2:"#0c1526", border:"#1a2a3e", text:"#dde5f0", muted:"#4b6280", dim:"#2a3a52",
+  green:"#22c55e", red:"#ef4444", gold:"#e8c547", purple:"#a78bfa", blue:"#3b82f6", orange:"#f97316", accent:"#f97316" };
+
+function load(key, dflt) { try { const v = JSON.parse(localStorage.getItem(key) || "null"); return v == null ? dflt : v; } catch (e) { return dflt; } }
+function save(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) {} }
+const fmt$ = (x) => (x < 0 ? "-$" : "$") + Math.abs(x).toFixed(2);
+const fmtSigned$ = (x) => (x >= 0 ? "+" : "-") + "$" + Math.abs(x).toFixed(2);
+const nowStr = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Kalshi allows ~20 reads/s per key (and an IP bucket for unsigned reads): pace our calls.
+const kxQueue = { next: 0, gap: 110, backoffUntil: 0 };
+async function kxPace() {
+  // reserve the next slot so concurrent callers queue up ~9 requests/second
+  const now = Date.now();
+  const at = Math.max(now, kxQueue.next, kxQueue.backoffUntil);
+  kxQueue.next = at + kxQueue.gap;
+  if (at > now) await sleep(at - now);
+}
+async function getJSON(url) {
+  if (url.startsWith("/api/kx")) await kxPace();
+  const r = await fetch(url, { cache: "no-store" });
+  if (r.status === 429 && url.startsWith("/api/kx")) kxQueue.backoffUntil = Date.now() + 2000;
+  const text = await r.text();
+  let d; try { d = JSON.parse(text); } catch (e) { d = { error: text.slice(0, 200) }; }
+  if (!r.ok) { const err = new Error((d && (d.error && (d.error.message || d.error)) || d.message) || ("HTTP " + r.status)); err.status = r.status; err.body = d; throw err; }
+  return d;
+}
+async function sendJSON(method, url, body) {
+  await kxPace();
+  const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body == null ? undefined : JSON.stringify(body) });
+  const text = await r.text();
+  let d; try { d = JSON.parse(text); } catch (e) { d = { raw: text }; }
+  if (!r.ok) { const msg = d && (typeof d.error === "string" ? d.error : d.error && (d.error.message || d.error.code)) || d.message || ("HTTP " + r.status); const err = new Error(msg); err.body = d; throw err; }
+  return d;
+}
+
+// Order translation. Kalshi v2 quotes every order on the YES leg:
+//   buy YES at c  -> side:"bid", price c        buy NO at c  -> side:"ask", price 100-c
+//   sell YES at c -> side:"ask", price c        sell NO at c -> side:"bid", price 100-c
+function toOrder(type, side, cents, count) {
+  const yesPrice = side === "yes" ? cents : 100 - cents;
+  const book = (type === "buy") === (side === "yes") ? "bid" : "ask";
+  return { side: book, price: (Math.min(99, Math.max(1, yesPrice)) / 100).toFixed(2), count: String(count) };
+}
+
+// ── Main app ─────────────────────────────────────────────────────────────────
+function App() {
+  const [cfg, setCfg] = useState(() => ({ ...CFB.DEFAULT_CONFIG, ...load(LS.cfg, {}) }));
+  const [mode, setMode] = useState(() => load(LS.mode, "paper") === "live" ? "paper" : "paper"); // always boot in paper
+  const [running, setRunning] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [server, setServer] = useState(null);
+  const [balance, setBalance] = useState(null);
+  const [games, setGames] = useState([]);            // parsed ESPN games
+  const [enabled, setEnabled] = useState(() => load(LS.enabled, {}));
+  const [view, setView] = useState({});              // per game: {markets, evals, proj, eventSuffix}
+  const [positions, setPositions] = useState({});    // ticker -> position (mode-dependent)
+  const [paper, setPaper] = useState(() => load(LS.paper, { positions: {}, realized: 0, trades: [], startBankroll: null }));
+  const [log, setLog] = useState(() => load(LS.log, []));
+  const [showCfg, setShowCfg] = useState(false);
+  const [err, setErr] = useState("");
+  const [lastTick, setLastTick] = useState(null);
+  const [tickMs, setTickMs] = useState(0);
+
+  // refs mirror state for the async loop
+  const R = useRef({});
+  R.current.cfg = cfg; R.current.mode = mode; R.current.running = running; R.current.paused = paused;
+  R.current.enabled = enabled; R.current.paper = paper;
+  const S = useRef({ events: [], eventsTs: 0, espnTs: 0, games: [], pre: load(LS.pre, {}), meta: load(LS.meta, {}),
+                     marketTs: {}, markets: {}, gameState: {}, cooldowns: {}, inflight: {}, killed: false, sessionStart: Date.now(),
+                     sessionRealized: 0, livePositions: {}, candSeen: {} });
+
+  const addLog = useCallback((kind, msg, extra) => {
+    setLog(prev => { const next = [{ t: nowStr(), ts: Date.now(), kind, msg, ...extra }, ...prev].slice(0, 300); save(LS.log, next); return next; });
+  }, []);
+
+  useEffect(() => save(LS.cfg, cfg), [cfg]);
+  useEffect(() => save(LS.enabled, enabled), [enabled]);
+  useEffect(() => save(LS.paper, paper), [paper]);
+  useEffect(() => save(LS.mode, mode), [mode]);
+
+  // server status
+  useEffect(() => { getJSON("/api/kx/_status").then(setServer).catch(e => setServer({ error: e.message })); }, []);
+
+  // keep the screen awake while running
+  useEffect(() => {
+    let lock = null;
+    if (running && navigator.wakeLock) navigator.wakeLock.request("screen").then(l => { lock = l; }).catch(() => {});
+    return () => { if (lock) lock.release().catch(() => {}); };
+  }, [running]);
+
+  // warn before closing while live
+  useEffect(() => {
+    const h = (e) => { if (R.current.running && R.current.mode === "live") { e.preventDefault(); e.returnValue = ""; } };
+    window.addEventListener("beforeunload", h); return () => window.removeEventListener("beforeunload", h);
+  }, []);
+
+  // ── Data fetching ──────────────────────────────────────────────────────────
+  async function refreshEvents(force) {
+    const st = S.current;
+    if (!force && Date.now() - st.eventsTs < EVENTS_MS && st.events.length) return;
+    const d = await getJSON("/api/kx/events?series_ticker=KXNCAAFGAME&status=open&limit=200");
+    st.events = d.events || []; st.eventsTs = Date.now();
+  }
+
+  async function refreshEspn(force) {
+    const st = S.current;
+    if (!force && Date.now() - st.espnTs < ESPN_MS) return;
+    const d = await getJSON(ESPN_SB + "&_=" + Date.now());
+    const today = new Date();
+    const parsed = (d.events || []).map(CFB.parseEspnEvent).filter(Boolean)
+      .filter(g => g.state === "in" || (g.state === "pre" && new Date(g.date) - today < 14 * 3600e3) || (g.state === "post" && today - new Date(g.date) < 8 * 3600e3));
+    const ts = Date.now();
+    for (const g of parsed) {
+      const prev = st.gameState[g.id] || {};
+      const sig = [g.home.score, g.away.score, g.period, g.clock, g.possession, g.down, g.distance, g.yardsToGoal].join("|");
+      const scoreSig = g.home.score + "-" + g.away.score;
+      const next = { ...prev, dataTs: ts };
+      if (prev.sig !== sig) { next.sig = sig; next.stateChangeTs = ts; next.midAtChange = prev.lastMid; }
+      if (prev.scoreSig && prev.scoreSig !== scoreSig) next.lastScoreChangeTs = ts;
+      next.scoreSig = scoreSig;
+      st.gameState[g.id] = next;
+      // capture the pregame line while ESPN still shows it
+      if (g.spreadHome != null && g.total != null && g.state === "pre") st.pre[g.id] = { spreadHome: g.spreadHome, total: g.total, src: "espn" };
+      // match to a Kalshi event once
+      if (!st.gameState[g.id].suffix) {
+        let best = null;
+        for (const e of st.events) {
+          const sc = CFB.matchEventScore(e.title, g);
+          const dayOk = Math.abs(new Date(g.date) - kalshiDate(e.event_ticker)) < 36 * 3600e3;
+          if (dayOk && (!best || sc > best.sc)) best = { sc, e };
+        }
+        if (best && best.sc >= 0.6) st.gameState[g.id].suffix = best.e.event_ticker.split("-").slice(1).join("-");
+      }
+    }
+    st.games = parsed; st.espnTs = ts;
+    setGames(parsed);
+    // pregame lines for games already live (ESPN summary pickcenter), fetched once per game
+    for (const g of parsed) {
+      if (st.pre[g.id] || g.state === "post") continue;
+      try {
+        const s = await getJSON(ESPN_SUMMARY + g.id);
+        const pc = (s.pickcenter || [])[0];
+        if (pc && pc.spread != null && pc.overUnder != null) st.pre[g.id] = { spreadHome: -Number(pc.spread), total: Number(pc.overUnder), src: "espn-pickcenter" };
+        else st.pre[g.id] = { spreadHome: null, total: null, src: "none" };
+      } catch (e) {}
+    }
+    save(LS.pre, st.pre);
+  }
+
+  function kalshiDate(eventTicker) {
+    // KXNCAAFGAME-26NOV21XXXYYY -> 2026-11-21
+    const m = /-(\d\d)([A-Z]{3})(\d\d)/.exec(eventTicker || ""); if (!m) return new Date(0);
+    const mon = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"].indexOf(m[2]);
+    return new Date(2000 + +m[1], mon, +m[3], 18);
+  }
+
+  async function refreshMarkets(g, force) {
+    const st = S.current, gs = st.gameState[g.id]; if (!gs || !gs.suffix) return;
+    const hot = R.current.enabled[g.id] || hasPositionInGame(g.id);
+    const age = Date.now() - (st.marketTs[g.id] || 0);
+    if (!force && !hot && (g.state === "pre" || age < IDLE_MARKET_MS)) return;
+    if (!force && g.state === "post" && age < 60000) return;
+    const lists = await Promise.all(SERIES.map(s => getJSON("/api/kx/markets?limit=200&event_ticker=" + s + "-" + gs.suffix).catch(() => ({ markets: [] }))));
+    const raw = lists.flatMap(l => l.markets || []);
+    st.markets[g.id] = raw.map(m => CFB.parseKalshiMarket(m, g)).filter(Boolean);
+    st.marketTs[g.id] = Date.now();
+    // market-jump detection on the moneyline
+    const win = st.markets[g.id].find(m => m.kind === "win" && m.side === "home");
+    const md = win ? CFB.mid(win) : null;
+    if (md != null) {
+      const cfgNow = R.current.cfg;
+      if (gs.midAtChange != null && Math.abs(md - gs.midAtChange) >= cfgNow.marketJumpCents && Date.now() - (gs.freezeUntil || 0) > 0) {
+        const moved = Math.round(Math.abs(md - gs.midAtChange));
+        gs.freezeUntil = Date.now() + cfgNow.marketJumpFreezeSecs * 1000;
+        gs.midAtChange = md;
+        if (R.current.enabled[g.id]) addLog("info", `${g.shortName}: moneyline moved ${moved}¢ with no change in ESPN's feed — freezing entries ${cfgNow.marketJumpFreezeSecs}s`);
+      }
+      if (gs.midAtChange == null) gs.midAtChange = md;
+      gs.lastMid = md;
+    }
+  }
+
+  function hotScore(g) { return (R.current.enabled[g.id] ? 2 : 0) + (hasPositionInGame(g.id) ? 4 : 0) + (g.state === "in" ? 1 : 0); }
+  function hasPositionInGame(gameId) {
+    const st = S.current;
+    return Object.values(currentPositions()).some(p => p.gameId === gameId && p.count > 0);
+  }
+
+  // positions for the active mode, as engine-ready objects
+  function currentPositions() {
+    const st = S.current;
+    if (R.current.mode === "paper") return R.current.paper.positions || {};
+    return st.livePositions;
+  }
+
+  async function refreshLivePositions() {
+    const st = S.current;
+    const d = await getJSON("/api/kx/portfolio/positions?count_filter=position&limit=1000");
+    const out = {};
+    for (const p of d.market_positions || []) {
+      const t = p.ticker; if (!/^KXNCAAF(GAME|SPREAD|TOTAL)-/.test(t)) continue;
+      const pos = parseFloat(p.position_fp != null ? p.position_fp : p.position || 0);
+      if (!pos) continue;
+      const count = Math.abs(pos);
+      const exposure = parseFloat(p.market_exposure_dollars != null ? p.market_exposure_dollars : (p.market_exposure || 0) / 100);
+      const meta = st.meta[t] || {};
+      const botOwned = !!meta.botOwned;
+      if (!botOwned && !R.current.cfg.manageManual) { out[t] = { ...meta, side: pos > 0 ? "yes" : "no", count, avgCost: Math.round(exposure / count * 100), unmanaged: true, gameId: meta.gameId || gameIdForTicker(t) }; continue; }
+      out[t] = { ...meta, side: pos > 0 ? "yes" : "no", count, avgCost: meta.avgCost || Math.round(exposure / count * 100),
+                 gameId: meta.gameId || gameIdForTicker(t), peakBid: meta.peakBid || 0, openedAt: meta.openedAt || Date.now() };
+    }
+    st.livePositions = out;
+    setPositions(out);
+    try { const b = await getJSON("/api/kx/portfolio/balance"); setBalance(b.balance_dollars != null ? parseFloat(b.balance_dollars) : b.balance / 100); } catch (e) {}
+  }
+
+  function gameIdForTicker(t) {
+    const st = S.current; const suffix = t.split("-").slice(1, 2)[0];
+    for (const [id, gs] of Object.entries(st.gameState)) if (gs.suffix === suffix) return id;
+    return null;
+  }
+
+  // ── Execution ──────────────────────────────────────────────────────────────
+  async function execute(a, g) {
+    const st = S.current, cfgNow = R.current.cfg;
+    if (st.inflight[a.ticker]) return;
+    st.inflight[a.ticker] = true;
+    const label = labelFor(a.ticker, g);
+    try {
+      if (R.current.mode === "paper") paperFill(a, label);
+      else await liveExecute(a, label, cfgNow);
+    } catch (e) {
+      addLog("error", `${a.type.toUpperCase()} ${label} failed: ${e.message}`);
+    } finally { st.inflight[a.ticker] = false; }
+  }
+
+  function paperFill(a, label) {
+    const cfgNow = R.current.cfg;
+    setPaper(prev => {
+      const next = { ...prev, positions: { ...prev.positions }, trades: [...(prev.trades || [])] };
+      const fee = CFB.feeCents(a.limit, a.count, cfgNow.feeRate) / 100;
+      if (a.type === "buy") {
+        next.positions[a.ticker] = { side: a.side, count: a.count, avgCost: a.limit, peakBid: a.limit, openedAt: Date.now(), gameId: a.gameId, fees: fee, botOwned: true, label };
+        next.realized = (next.realized || 0) - fee;
+        addLog("buy", `PAPER BUY ${a.count}× ${label} ${a.side.toUpperCase()} @ ${a.limit}¢ — ${a.reason}`, { ticker: a.ticker });
+      } else {
+        const p = next.positions[a.ticker]; if (!p) return prev;
+        const pnl = (a.limit - p.avgCost) * p.count / 100 - fee;
+        next.realized = (next.realized || 0) + (a.limit - p.avgCost) * p.count / 100 - fee;
+        next.trades.unshift({ ticker: a.ticker, label, side: p.side, count: p.count, entry: p.avgCost, exit: a.limit, pnl: pnl - (p.fees || 0), reason: a.reason, ts: Date.now() });
+        next.trades = next.trades.slice(0, 200);
+        delete next.positions[a.ticker];
+        addLog(pnl >= 0 ? "win" : "loss", `PAPER CASH OUT ${p.count}× ${label} @ ${a.limit}¢ (cost ${p.avgCost}¢) ${fmtSigned$(pnl - (p.fees || 0))} — ${a.reason}`, { ticker: a.ticker });
+        S.current.cooldowns[a.ticker] = { until: Date.now() + cfgNow.cooldownSecs * 1000, exits: ((S.current.cooldowns[a.ticker] || {}).exits || 0) + 1 };
+        if (/^stop loss/.test(a.reason)) S.current.cooldowns["game:" + a.gameId] = { until: Date.now() + cfgNow.gameTimeoutSecs * 1000 };
+      }
+      R.current.paper = next;
+      return next;
+    });
+  }
+
+  async function liveExecute(a, label, cfgNow) {
+    const st = S.current;
+    if (a.type === "buy") {
+      const o = toOrder("buy", a.side, a.limit, a.count);
+      const res = await sendJSON("POST", "/api/kx/portfolio/events/orders", { ticker: a.ticker, ...o, time_in_force: "immediate_or_cancel" });
+      const filled = parseFloat(res.fill_count || res.fill_count_fp || 0);
+      if (!(filled > 0)) { addLog("info", `No fill: ${label} ${a.side.toUpperCase()} @ ${a.limit}¢ (book moved)`); return; }
+      const avg = res.average_fill_price != null ? Math.round(parseFloat(res.average_fill_price) * 100) : a.limit;
+      const avgSide = a.side === "yes" ? avg : (res.average_fill_price != null ? 100 - avg : a.limit);
+      st.meta[a.ticker] = { botOwned: true, avgCost: avgSide, peakBid: avgSide, openedAt: Date.now(), gameId: a.gameId, label };
+      addLog("buy", `LIVE BUY ${filled}× ${label} ${a.side.toUpperCase()} @ ${avgSide}¢ — ${a.reason}`, { ticker: a.ticker });
+      if (cfgNow.restingTakeProfit) {
+        const tp = Math.min(99, avgSide + cfgNow.takeProfit);
+        try {
+          const to = toOrder("sell", a.side, tp, Math.floor(filled));
+          if (Math.floor(filled) >= 1) {
+            const r2 = await sendJSON("POST", "/api/kx/portfolio/events/orders", { ticker: a.ticker, ...to, time_in_force: "good_till_canceled", closing: true });
+            st.meta[a.ticker].tpOrderId = r2.order_id;
+            addLog("info", `Resting take-profit on Kalshi: sell ${Math.floor(filled)}× ${label} @ ${tp}¢`);
+          }
+        } catch (e) { addLog("error", `Resting take-profit not placed: ${e.message}`); }
+      }
+      save(LS.meta, st.meta);
+      await refreshLivePositions();
+    } else {
+      const meta = st.meta[a.ticker] || {};
+      if (meta.tpOrderId) {
+        try { await sendJSON("DELETE", `/api/kx/portfolio/events/orders/${meta.tpOrderId}?market_ticker=${a.ticker}`); } catch (e) {}
+        meta.tpOrderId = null;
+      }
+      const limit = Math.max(1, a.limit - (cfgNow.exitSlippage || 1));
+      const o = toOrder("sell", a.side, limit, a.count);
+      const res = await sendJSON("POST", "/api/kx/portfolio/events/orders", { ticker: a.ticker, ...o, time_in_force: "immediate_or_cancel", reduce_only: true });
+      const filled = parseFloat(res.fill_count || 0);
+      const avg = res.average_fill_price != null ? Math.round(parseFloat(res.average_fill_price) * 100) : a.limit;
+      const avgSide = a.side === "yes" ? avg : (res.average_fill_price != null ? 100 - avg : a.limit);
+      if (!(filled > 0)) { addLog("info", `Cash-out not filled: ${label} @ ${limit}¢ — will retry`); return; }
+      const pnl = (avgSide - (meta.avgCost || avgSide)) * filled / 100;
+      st.sessionRealized += pnl;
+      addLog(pnl >= 0 ? "win" : "loss", `LIVE CASH OUT ${filled}× ${label} @ ${avgSide}¢ (cost ${meta.avgCost}¢) ${fmtSigned$(pnl)} — ${a.reason}`, { ticker: a.ticker });
+      if (filled >= a.count - 1e-9) delete st.meta[a.ticker];
+      st.cooldowns[a.ticker] = { until: Date.now() + cfgNow.cooldownSecs * 1000, exits: ((st.cooldowns[a.ticker] || {}).exits || 0) + 1 };
+      if (/^stop loss/.test(a.reason)) st.cooldowns["game:" + a.gameId] = { until: Date.now() + cfgNow.gameTimeoutSecs * 1000 };
+      save(LS.meta, st.meta);
+      await refreshLivePositions();
+    }
+  }
+
+  function labelFor(ticker, g) {
+    const st = S.current;
+    for (const ms of Object.values(st.markets)) { const m = ms.find(x => x.ticker === ticker); if (m) return marketLabel(m, gamesById()[gameIdForTicker(ticker)] || g); }
+    return ticker;
+  }
+  function gamesById() { const o = {}; for (const g of S.current.games) o[g.id] = g; return o; }
+
+  // ── The loop ───────────────────────────────────────────────────────────────
+  const tickingRef = useRef(false);
+  async function tick() {
+    if (tickingRef.current) return;
+    tickingRef.current = true;
+    const t0 = performance.now();
+    const st = S.current, cfgNow = R.current.cfg;
+    try {
+      await refreshEvents();
+      await refreshEspn();
+      // hot games (auto on / holding a position) first, then the rest
+      const order = [...st.games].sort((a, b) => (hotScore(b) - hotScore(a)));
+      await Promise.all(order.map(g => refreshMarkets(g).catch(e => {})));
+      if (R.current.mode === "live") await refreshLivePositions();
+      // update peak bids
+      const pos = currentPositions();
+      const now = Date.now();
+      const input = { now, cfg: cfgNow, paused: R.current.paused, killed: st.killed, positions: {}, cooldowns: st.cooldowns,
+                      dailyPnl: sessionPnl(), games: [] };
+      for (const [t, p] of Object.entries(pos)) if (!p.unmanaged) input.positions[t] = p;
+      for (const g of st.games) {
+        const gs = st.gameState[g.id] || {};
+        input.games.push({ g, pre: st.pre[g.id], dataTs: gs.dataTs, lastScoreChangeTs: gs.lastScoreChangeTs, freezeUntil: gs.freezeUntil,
+                           markets: st.markets[g.id] || [], enabled: !!R.current.enabled[g.id] });
+      }
+      const res = CFB.decide(input);
+      // peak tracking for trailing stops
+      for (const ev of res.evals) {
+        const p = pos[ev.ticker]; if (!p) continue;
+        const mk = (st.markets[ev.gameId] || []).find(m => m.ticker === ev.ticker); if (!mk) continue;
+        const bid = CFB.sideQuotes(mk, p.side).bid;
+        if (bid != null && bid > (p.peakBid || 0)) {
+          if (R.current.mode === "paper") setPaper(prev => { if (!prev.positions[ev.ticker]) return prev; const n = { ...prev, positions: { ...prev.positions, [ev.ticker]: { ...prev.positions[ev.ticker], peakBid: bid } } }; R.current.paper = n; return n; });
+          else if (st.meta[ev.ticker]) { st.meta[ev.ticker].peakBid = bid; p.peakBid = bid; }
+        }
+      }
+      const v = {};
+      for (const G of input.games) v[G.g.id] = { markets: G.markets, proj: G.proj, evals: res.evals.filter(e => e.gameId === G.g.id) };
+      setView(v);
+      if (R.current.running) {
+        // exits first, then entries
+        const ordered = [...res.actions].sort((x, y) => (x.type === "sell" ? 0 : 1) - (y.type === "sell" ? 0 : 1));
+        // an entry must survive confirmTicks consecutive ticks (filters one-tick stale quotes), and
+        // nothing is bought in the first warm-up seconds after starting (no state history yet)
+        const seen = {};
+        for (const a of ordered) {
+          if (a.type === "buy") {
+            seen[a.ticker] = (st.candSeen[a.ticker] || 0) + 1;
+            if (seen[a.ticker] < (cfgNow.confirmTicks || 1)) continue;
+            if (Date.now() - st.sessionStart < 15000) continue;
+          }
+          await execute(a, gamesById()[a.gameId]);
+        }
+        st.candSeen = seen;
+        if (st.killed && !res.actions.some(a => a.type === "sell") && Object.keys(input.positions).length === 0) {
+          st.killed = false; setRunning(false); addLog("info", "Kill switch complete: all bot positions closed, auto mode stopped.");
+        }
+      }
+      setErr("");
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      tickingRef.current = false;
+      setLastTick(Date.now()); setTickMs(Math.round(performance.now() - t0));
+    }
+  }
+
+  function sessionPnl() {
+    const st = S.current, pos = currentPositions();
+    let unreal = 0;
+    for (const [t, p] of Object.entries(pos)) {
+      if (p.unmanaged) continue;
+      const mk = Object.values(st.markets).flat().find(m => m.ticker === t); if (!mk) continue;
+      const bid = CFB.sideQuotes(mk, p.side).bid; if (bid == null) continue;
+      unreal += (bid - p.avgCost) * p.count / 100;
+    }
+    const realized = R.current.mode === "paper" ? (R.current.paper.realized || 0) : st.sessionRealized;
+    return realized + unreal;
+  }
+
+  useEffect(() => {
+    let alive = true;
+    (async () => { while (alive) { await tick(); await sleep(TICK_MS); } })();
+    return () => { alive = false; };
+  }, []);
+
+  // ── Controls ──────────────────────────────────────────────────────────────
+  function start() {
+    if (mode === "live") {
+      if (!server || !server.credentials) return alert("Kalshi credentials aren't configured on the server yet. See the setup panel.");
+      if (!server.tradingEnabled) return alert("KALSHI_TRADING_ENABLED is not set to 1 on the server, so orders would be rejected.");
+      const typed = prompt(`LIVE MODE places real orders on Kalshi with real money.\n\nBankroll cap: $${cfg.bankroll} · max per entry: $${cfg.maxStake} · max open: $${cfg.maxTotalExposure} · stop for the night at -$${cfg.maxDailyLoss}\n\nType LIVE to start.`);
+      if (typed !== "LIVE") return;
+    }
+    S.current.killed = false; S.current.sessionStart = Date.now();
+    setRunning(true); setPaused(false);
+    addLog("info", `Auto mode started (${mode.toUpperCase()}) on ${Object.values(enabled).filter(Boolean).length} game(s).`);
+  }
+  function stop() { setRunning(false); addLog("info", "Auto mode stopped. Open positions are left as they are (resting take-profits stay on Kalshi)."); }
+  function kill() {
+    if (!confirm("KILL: stop new entries and cash out every bot position at the current bid?")) return;
+    S.current.killed = true; setPaused(true);
+    if (!running) setRunning(true);
+    addLog("error", "KILL SWITCH: cashing out all bot positions.");
+  }
+  function switchMode(m) {
+    if (m === mode) return;
+    if (running) return alert("Stop auto mode before switching between paper and live.");
+    setMode(m); R.current.mode = m;
+    if (m === "live") refreshLivePositions().catch(e => setErr(e.message));
+    addLog("info", `Switched to ${m.toUpperCase()} mode.`);
+  }
+  async function manualCashOut(ticker) {
+    const pos = currentPositions()[ticker]; if (!pos) return;
+    const mk = Object.values(S.current.markets).flat().find(m => m.ticker === ticker);
+    if (!mk) return alert("No live quote for this market yet.");
+    const bid = CFB.sideQuotes(mk, pos.side).bid;
+    if (!bid) return alert("No bid right now.");
+    if (!confirm(`Cash out ${pos.count}× ${labelFor(ticker)} at ${bid}¢? (${fmtSigned$((bid - pos.avgCost) * pos.count / 100)})`)) return;
+    await execute({ type: "sell", ticker, side: pos.side, count: pos.count, limit: bid, reason: "manual cash out", gameId: pos.gameId }, gamesById()[pos.gameId]);
+  }
+  function resetPaper() {
+    if (!confirm("Reset the paper account (positions, P&L and history)?")) return;
+    const fresh = { positions: {}, realized: 0, trades: [], startBankroll: cfg.bankroll };
+    setPaper(fresh); R.current.paper = fresh; addLog("info", "Paper account reset.");
+  }
+
+  // ── Derived for render ─────────────────────────────────────────────────────
+  const posList = Object.entries(mode === "paper" ? paper.positions : positions).map(([t, p]) => {
+    const mk = Object.values(view).flatMap(v => v.markets || []).find(m => m.ticker === t);
+    const q = mk ? CFB.sideQuotes(mk, p.side) : {};
+    const ev = Object.values(view).flatMap(v => v.evals || []).find(e => e.ticker === t);
+    const fair = ev ? (p.side === "yes" ? ev.fairYes : 100 - ev.fairYes) : null;
+    const g = games.find(x => x.id === p.gameId);
+    return { ticker: t, ...p, bid: q.bid, fair, label: mk ? marketLabel(mk, g) : (p.label || t), game: g,
+             pnl: q.bid != null ? (q.bid - p.avgCost) * p.count / 100 : null, note: ev && ev.note };
+  });
+  const unreal = posList.filter(p => !p.unmanaged && p.pnl != null).reduce((a, p) => a + p.pnl, 0);
+  const exposure = posList.filter(p => !p.unmanaged).reduce((a, p) => a + p.count * p.avgCost / 100, 0);
+  const realized = mode === "paper" ? (paper.realized || 0) : S.current.sessionRealized;
+  const trades = mode === "paper" ? (paper.trades || []) : [];
+  const wins = trades.filter(t => t.pnl > 0).length;
+  const liveGames = games.filter(g => g.state === "in");
+  const upcoming = games.filter(g => g.state === "pre").sort((a, b) => new Date(a.date) - new Date(b.date));
+  const finals = games.filter(g => g.state === "post");
+  const nEnabled = Object.entries(enabled).filter(([id, v]) => v && games.some(g => g.id === id && g.state !== "post")).length;
+
+  return (
+    <div style={{ minHeight: "100vh", background: T.bg }}>
+      {/* Nav */}
+      <div style={{ background: T.navy, borderBottom: "1px solid " + T.border, padding: "10px 16px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <a href="index.html" style={{ fontSize: 9, color: T.muted, letterSpacing: 1 }}>← SHARP SIM</a>
+        <a href="cfb.html" style={{ fontSize: 9, color: T.muted, letterSpacing: 1 }}>CFB SIM</a>
+        <div style={{ flex: 1 }} />
+        <ServerBadge server={server} />
+        {mode === "live" && balance != null && <span style={{ fontSize: 10, color: T.muted }}>Kalshi balance <b style={{ color: T.text }}>{fmt$(balance)}</b></span>}
+        <span style={{ fontSize: 9, color: T.muted }}>{lastTick ? `tick ${tickMs}ms · ${Math.round((Date.now() - lastTick) / 1000)}s ago` : "starting…"}</span>
+      </div>
+
+      {/* Header */}
+      <div style={{ background: "linear-gradient(160deg,#0c1526 0%,#070b14 100%)", borderBottom: "1px solid " + T.border, padding: "22px 16px 18px", textAlign: "center", position: "relative" }}>
+        <div style={{ display: "inline-block", background: T.accent + "1a", border: "1px solid " + T.accent + "44", color: T.accent, fontSize: 9, letterSpacing: 2, padding: "2px 10px", borderRadius: 2, marginBottom: 10 }}>⚡ LIVE AUTO · COLLEGE FOOTBALL · KALSHI</div>
+        <div style={{ fontSize: "clamp(20px,4vw,30px)", fontWeight: 700, letterSpacing: -0.5 }}>Auto Cash-Out Trader</div>
+        <div style={{ fontSize: 10, color: T.muted, marginTop: 6 }}>Drive-by-drive live sim calibrated to Kalshi's own ladder · take-profit / stop-loss / trailing exits · re-entry for the rest of the game</div>
+      </div>
+
+      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "16px 16px 60px" }}>
+        {err && <div style={{ background: T.red + "22", border: "1px solid " + T.red + "44", color: T.red, padding: "8px 12px", fontSize: 10, borderRadius: 4, marginBottom: 12 }}>{err}</div>}
+
+        {/* Controls */}
+        <div style={{ ...card, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12, borderColor: running ? (mode === "live" ? T.red : T.green) : T.border }}>
+          <div style={{ display: "flex", border: "1px solid " + T.border, borderRadius: 4, overflow: "hidden" }}>
+            {["paper", "live"].map(m => (
+              <button key={m} onClick={() => switchMode(m)} style={{ ...btnBase, border: "none", borderRadius: 0, background: mode === m ? (m === "live" ? T.red : T.blue) + "33" : "transparent", color: mode === m ? (m === "live" ? T.red : T.blue) : T.muted }}>
+                {m === "paper" ? "PAPER" : "LIVE $"}
+              </button>
+            ))}
+          </div>
+          {!running
+            ? <button onClick={start} disabled={nEnabled === 0 && !Object.keys(mode === "paper" ? paper.positions : positions).length} style={{ ...btnBase, background: T.green + "22", borderColor: T.green, color: T.green }}>▶ START AUTO</button>
+            : <button onClick={stop} style={{ ...btnBase, background: T.gold + "22", borderColor: T.gold, color: T.gold }}>■ STOP</button>}
+          <button onClick={() => { setPaused(p => !p); addLog("info", paused ? "Entries resumed." : "Entries paused (exits still managed)."); }} style={{ ...btnBase, color: paused ? T.gold : T.muted, borderColor: paused ? T.gold : T.border }}>{paused ? "▶ RESUME ENTRIES" : "❚❚ PAUSE ENTRIES"}</button>
+          <button onClick={kill} style={{ ...btnBase, background: T.red + "22", borderColor: T.red, color: T.red }}>✕ KILL &amp; CASH OUT ALL</button>
+          <div style={{ flex: 1 }} />
+          {running && <span style={{ fontSize: 10, color: mode === "live" ? T.red : T.green, animation: "pulse 1.5s infinite", fontWeight: 700 }}>● {mode === "live" ? "LIVE — REAL MONEY" : "PAPER TRADING"}</span>}
+          <span style={{ fontSize: 9, color: T.muted }}>{nEnabled} game{nEnabled === 1 ? "" : "s"} on auto</span>
+          <button onClick={() => setShowCfg(s => !s)} style={{ ...btnBase, color: T.muted }}>⚙ RULES</button>
+        </div>
+
+        {showCfg && <ConfigPanel cfg={cfg} setCfg={setCfg} mode={mode} onResetPaper={resetPaper} server={server} />}
+
+        {/* Stats */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 10, marginBottom: 14 }}>
+          <Stat label="Session P&L" value={fmtSigned$(realized + unreal)} color={realized + unreal >= 0 ? T.green : T.red} sub={`realized ${fmtSigned$(realized)} · open ${fmtSigned$(unreal)}`} />
+          <Stat label="Open exposure" value={fmt$(exposure)} sub={`cap ${fmt$(cfg.maxTotalExposure)}`} />
+          <Stat label="Open positions" value={posList.filter(p => !p.unmanaged).length} sub={posList.some(p => p.unmanaged) ? `${posList.filter(p => p.unmanaged).length} manual (not managed)` : "bot-managed"} />
+          <Stat label="Closed trades" value={trades.length || "—"} sub={trades.length ? `${wins}W-${trades.length - wins}L` : mode === "live" ? "see Kalshi history" : ""} />
+          <Stat label="Loss limit" value={fmt$(cfg.maxDailyLoss)} color={realized + unreal <= -cfg.maxDailyLoss ? T.red : T.text} sub={realized + unreal <= -cfg.maxDailyLoss ? "HIT — entries halted" : "entries halt at this loss"} />
+        </div>
+
+        {/* Positions */}
+        <Section label={`Positions · cash-out value updates every ${TICK_MS / 1000}s`}>
+          {posList.length === 0
+            ? <div style={{ ...card, fontSize: 10, color: T.muted }}>No open positions.</div>
+            : <div style={{ ...card, padding: 0, overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+                  <thead><tr>{["Market", "Side", "Qty", "Cost", "Cash-out (bid)", "P&L", "Fair", "Exit lines", "Status", ""].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {posList.map(p => {
+                      const tp = Math.min(99, p.avgCost + cfg.takeProfit), sl = p.avgCost - cfg.stopLoss;
+                      return (
+                        <tr key={p.ticker} style={{ opacity: p.unmanaged ? 0.55 : 1 }}>
+                          <td style={td}><div style={{ fontWeight: 700 }}>{p.label}</div><div style={{ color: T.muted, fontSize: 8 }}>{p.game ? `${p.game.shortName} · ${p.game.detail}` : p.ticker}</div></td>
+                          <td style={td}>{p.side.toUpperCase()}</td>
+                          <td style={td}>{p.count}</td>
+                          <td style={td}>{p.avgCost}¢</td>
+                          <td style={{ ...td, fontWeight: 700 }}>{p.bid != null ? p.bid + "¢" : "—"}</td>
+                          <td style={{ ...td, color: (p.pnl || 0) >= 0 ? T.green : T.red, fontWeight: 700 }}>{p.pnl != null ? fmtSigned$(p.pnl) : "—"}</td>
+                          <td style={td}>{p.fair != null ? p.fair.toFixed(0) + "¢" : "—"}</td>
+                          <td style={{ ...td, fontSize: 8, color: T.muted }}>TP {tp}¢ · SL {sl}¢{p.peakBid ? ` · peak ${p.peakBid}¢` : ""}</td>
+                          <td style={{ ...td, fontSize: 8, color: T.muted }}>{p.unmanaged ? "manual — not managed" : (p.note || "")}</td>
+                          <td style={td}>{!p.unmanaged && <button onClick={() => manualCashOut(p.ticker)} style={{ ...btnBase, padding: "4px 8px", fontSize: 8, color: T.gold, borderColor: T.gold + "66" }}>CASH OUT</button>}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>}
+        </Section>
+
+        {/* Games */}
+        <Section label={`Live games (${liveGames.length})`} right={liveGames.length > 0 && <button style={{ ...btnBase, padding: "3px 8px", fontSize: 8 }} onClick={() => setEnabled(e => { const n = { ...e }; const all = liveGames.every(g => n[g.id]); liveGames.forEach(g => n[g.id] = !all); return n; })}>{liveGames.every(g => enabled[g.id]) ? "ALL OFF" : "ALL ON"}</button>}>
+          {liveGames.length === 0 && <div style={{ ...card, fontSize: 10, color: T.muted }}>No games in progress right now.</div>}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(330px,1fr))", gap: 10 }}>
+            {liveGames.map(g => <GameCard key={g.id} g={g} v={view[g.id]} pre={S.current.pre[g.id]} gs={S.current.gameState[g.id]} on={!!enabled[g.id]} toggle={() => setEnabled(e => ({ ...e, [g.id]: !e[g.id] }))} />)}
+          </div>
+        </Section>
+
+        {upcoming.length > 0 && (
+          <Section label={`Upcoming (${upcoming.length}) — switch on now and auto starts at kickoff`}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(250px,1fr))", gap: 8 }}>
+              {upcoming.map(g => (
+                <div key={g.id} style={{ ...card, display: "flex", alignItems: "center", gap: 8, padding: "8px 10px" }}>
+                  <Toggle on={!!enabled[g.id]} onClick={() => setEnabled(e => ({ ...e, [g.id]: !e[g.id] }))} />
+                  <div style={{ flex: 1, fontSize: 10 }}>
+                    <div style={{ fontWeight: 700 }}>{teamTag(g.away)} @ {teamTag(g.home)}</div>
+                    <div style={{ fontSize: 8, color: T.muted }}>{new Date(g.date).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · {g.spreadHome != null ? `${g.spreadHome > 0 ? g.home.abbr : g.away.abbr} -${Math.abs(g.spreadHome)}` : "no line"}{g.total ? ` · O/U ${g.total}` : ""}{S.current.gameState[g.id] && S.current.gameState[g.id].suffix ? " · Kalshi ✓" : " · Kalshi ?"}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Section>
+        )}
+
+        {mode === "paper" && trades.length > 0 && (
+          <Section label="Closed paper trades">
+            <div style={{ ...card, padding: 0, overflowX: "auto", maxHeight: 260, overflowY: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+                <thead><tr>{["Time", "Market", "Qty", "Entry", "Exit", "P&L", "Why"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                <tbody>{trades.map((t, i) => (
+                  <tr key={i}><td style={td}>{new Date(t.ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</td><td style={td}>{t.label} {t.side.toUpperCase()}</td><td style={td}>{t.count}</td><td style={td}>{t.entry}¢</td><td style={td}>{t.exit}¢</td>
+                    <td style={{ ...td, color: t.pnl >= 0 ? T.green : T.red, fontWeight: 700 }}>{fmtSigned$(t.pnl)}</td><td style={{ ...td, color: T.muted, fontSize: 8 }}>{t.reason}</td></tr>
+                ))}</tbody>
+              </table>
+            </div>
+          </Section>
+        )}
+
+        <Section label="Activity" right={<button style={{ ...btnBase, padding: "3px 8px", fontSize: 8 }} onClick={() => { setLog([]); save(LS.log, []); }}>CLEAR</button>}>
+          <div style={{ ...card, maxHeight: 280, overflowY: "auto", fontSize: 9, lineHeight: 1.7 }}>
+            {log.length === 0 && <div style={{ color: T.muted }}>Nothing yet.</div>}
+            {log.map((l, i) => (
+              <div key={i} style={{ color: l.kind === "error" ? T.red : l.kind === "win" ? T.green : l.kind === "loss" ? T.orange : l.kind === "buy" ? T.blue : T.muted }}>
+                <span style={{ color: T.dim }}>{l.t}</span> {l.msg}
+              </div>
+            ))}
+          </div>
+        </Section>
+
+        <div style={{ fontSize: 9, color: T.muted, marginTop: 16, padding: 10, borderTop: "1px solid " + T.border, lineHeight: 1.7 }}>
+          Runs in this browser tab: keep it open (the screen stays awake while auto is on). Resting take-profit orders live on Kalshi and still fire if the tab closes; stop-losses and trailing stops need the tab.
+          Live state comes from ESPN, which trails the TV broadcast and Kalshi's market makers by 10–30s; entries pause after scores and sudden market moves for that reason.
+          Model output is probabilistic, not a guarantee. Not betting advice. Never risk money you can't afford to lose.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Components ───────────────────────────────────────────────────────────────
+const card = { background: T.navy, border: "1px solid " + T.border, borderRadius: 6, padding: "12px 14px" };
+const btnBase = { background: T.navy, border: "1px solid " + T.border, color: T.text, padding: "8px 12px", borderRadius: 4, cursor: "pointer", fontSize: 9, fontWeight: 700, letterSpacing: 1, fontFamily: "inherit" };
+const th = { textAlign: "left", color: T.muted, fontSize: 8, letterSpacing: 1, padding: "8px 10px", borderBottom: "1px solid " + T.border, textTransform: "uppercase", whiteSpace: "nowrap" };
+const td = { padding: "7px 10px", borderBottom: "1px solid " + T.border + "66", verticalAlign: "top" };
+
+function teamTag(t) { return (t.rank ? "#" + t.rank + " " : "") + t.abbr; }
+
+function marketLabel(m, g) {
+  const nm = (side) => g ? (side === "home" ? g.home.abbr : g.away.abbr) : side;
+  if (m.kind === "win") return `${nm(m.side)} to win`;
+  if (m.kind === "spread") return `${nm(m.side)} by ${Math.ceil(m.line)}+`;
+  if (m.kind === "total") return `Over ${m.line}`;
+  return m.ticker;
+}
+
+function Section({ label, right, children }) {
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", fontSize: 8, letterSpacing: 2.5, color: T.muted, textTransform: "uppercase", marginBottom: 8, paddingBottom: 6, borderBottom: "1px solid " + T.border }}>
+        <span style={{ flex: 1 }}>{label}</span>{right}
+      </div>
+      {children}
+    </div>
+  );
+}
+function Stat({ label, value, sub, color }) {
+  return (
+    <div style={card}>
+      <div style={{ fontSize: 8, color: T.muted, letterSpacing: 1, textTransform: "uppercase", marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 700, color: color || T.text }}>{value}</div>
+      {sub && <div style={{ fontSize: 8, color: T.muted, marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
+function Toggle({ on, onClick }) {
+  return (
+    <button onClick={onClick} title={on ? "Auto on" : "Auto off"} style={{ width: 34, height: 18, borderRadius: 9, border: "1px solid " + (on ? T.green : T.border), background: on ? T.green + "44" : T.navy2, position: "relative", cursor: "pointer", flexShrink: 0 }}>
+      <span style={{ position: "absolute", top: 2, left: on ? 17 : 2, width: 12, height: 12, borderRadius: 6, background: on ? T.green : T.muted, transition: "left .15s" }} />
+    </button>
+  );
+}
+function ServerBadge({ server }) {
+  if (!server) return <span style={{ fontSize: 9, color: T.muted }}>checking server…</span>;
+  if (server.error) return <span style={{ fontSize: 9, color: T.red }}>server: {server.error}</span>;
+  const c = server.credentials && server.tradingEnabled ? T.green : server.credentials ? T.gold : T.muted;
+  return <span style={{ fontSize: 9, color: c }}>Kalshi {server.env}: {server.credentials ? "keys ✓" : "no keys"} · trading {server.tradingEnabled ? "enabled" : "off"} · cap ${server.maxOrderDollars}/order</span>;
+}
+
+function GameCard({ g, v, pre, gs, on, toggle }) {
+  const evals = (v && v.evals) || [];
+  const proj = v && v.proj;
+  const win = (v && v.markets || []).find(m => m.kind === "win" && m.side === "home");
+  const mktHome = win ? CFB.mid(win) : null;
+  const top = evals.filter(e => e.edge != null || e.held).sort((a, b) => (b.held - a.held) || ((b.edge || -99) - (a.edge || -99))).slice(0, 5);
+  const freeze = gs && gs.freezeUntil && gs.freezeUntil > Date.now();
+  const possArrow = (side) => g.possession === side ? <span style={{ color: T.gold }}> ◂</span> : null;
+  return (
+    <div style={{ ...card, borderColor: on ? T.green + "88" : T.border }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <Toggle on={on} onClick={toggle} />
+        <div style={{ flex: 1, fontSize: 9, color: T.muted }}>{g.detail}{g.broadcast ? " · " + g.broadcast : ""}</div>
+        {!gs || !gs.suffix ? <span style={{ fontSize: 8, color: T.red }}>no Kalshi match</span> : freeze ? <span style={{ fontSize: 8, color: T.gold }}>catching up…</span> : null}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", rowGap: 2, fontSize: 13, fontWeight: 700 }}>
+        <div>{teamTag(g.away)} <span style={{ fontSize: 9, color: T.muted, fontWeight: 400 }}>{g.away.short}</span>{possArrow("away")}</div><div>{g.away.score}</div>
+        <div>{teamTag(g.home)} <span style={{ fontSize: 9, color: T.muted, fontWeight: 400 }}>{g.home.short}</span>{possArrow("home")}</div><div>{g.home.score}</div>
+      </div>
+      <div style={{ fontSize: 9, color: T.muted, margin: "6px 0 8px", minHeight: 12 }}>{g.downDistanceText || g.lastPlay || ""}</div>
+      <div style={{ display: "flex", gap: 12, fontSize: 9, marginBottom: 8, flexWrap: "wrap" }}>
+        <span>Kalshi {g.home.abbr} <b>{mktHome != null ? mktHome.toFixed(0) + "%" : "—"}</b></span>
+        <span>Model <b style={{ color: T.purple }}>{proj && !proj.unreliable ? (proj.pHome * 100).toFixed(0) + "%" : "—"}</b></span>
+        {g.espnHomeWP != null && <span style={{ color: T.muted }}>ESPN {(g.espnHomeWP * 100).toFixed(0)}%</span>}
+        <span style={{ color: T.muted }}>pre {pre && pre.spreadHome != null ? `${pre.spreadHome > 0 ? g.home.abbr : g.away.abbr} -${Math.abs(pre.spreadHome)} / ${pre.total}` : "n/a"}</span>
+      </div>
+      {top.length > 0 && (
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 9 }}>
+          <tbody>
+            {top.map(e => {
+              const m = (v.markets || []).find(x => x.ticker === e.ticker);
+              const c = e.held ? T.gold : e.edge >= 0 ? T.green : T.muted;
+              return (
+                <tr key={e.ticker}>
+                  <td style={{ padding: "2px 0", color: e.held ? T.gold : T.text }}>{m ? marketLabel(m, g) : e.ticker}</td>
+                  <td style={{ padding: "2px 4px", color: T.muted }}>{e.yesBid}/{e.yesAsk}</td>
+                  <td style={{ padding: "2px 4px", color: T.purple }}>{e.fairYes.toFixed(0)}</td>
+                  <td style={{ padding: "2px 0", color: c, textAlign: "right", fontSize: 8 }}>{e.held ? e.note : e.edge != null ? `${e.bestSide.toUpperCase()} ${e.edge >= 0 ? "+" : ""}${e.edge.toFixed(1)}¢` : ""}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+const CFG_FIELDS = [
+  ["Sizing", [
+    ["bankroll", "Bankroll the bot may use ($)"], ["kellyFraction", "Kelly fraction", 0.01], ["maxStake", "Max $ per entry"],
+    ["maxGameExposure", "Max open $ per game"], ["maxTotalExposure", "Max open $ total"], ["maxDailyLoss", "Stop entries after losing ($)"],
+  ]],
+  ["Entries", [
+    ["entryEdge", "Min edge after fees (¢)"], ["minPrice", "Min contract price (¢)"], ["maxPrice", "Max contract price (¢)"],
+    ["maxQuoteWidth", "Max bid/ask width (¢)"], ["minVolume", "Min market volume"], ["noEntryLastSecs", "No entries in final (sec)"],
+    ["cooldownSecs", "Re-entry cooldown (sec)"], ["gameTimeoutSecs", "Game timeout after stop-loss (sec)"], ["blowoutMargin", "No 2nd-half entries when lead ≥"], ["reentryEdgeBonus", "Extra edge to re-enter (¢)"], ["maxPositionsPerGame", "Max positions per game"],
+    ["freezeAfterScoreSecs", "Pause after a score (sec)"], ["confirmTicks", "Edge must hold for N ticks"], ["marketJumpCents", "Market-jump freeze trigger (¢)"], ["alpha", "Weight on own model (0 = pure market)", 0.05],
+  ]],
+  ["Cash-out rules", [
+    ["takeProfit", "Take profit at +¢"], ["takeProfitPct", "…or at +% of cost", 0.05], ["stopLoss", "Stop loss at -¢"],
+    ["trailArm", "Trailing stop arms at +¢"], ["trailGive", "Trailing stop gives back ¢"], ["edgeExit", "Sell when bid beats fair by ¢"],
+    ["holdToSettleAt", "Hold to settlement above (¢)"], ["exitSlippage", "Cash-out limit below bid (¢)"],
+  ]],
+];
+
+function ConfigPanel({ cfg, setCfg, mode, onResetPaper, server }) {
+  const set = (k, v) => setCfg(c => ({ ...c, [k]: v }));
+  return (
+    <div style={{ ...card, marginBottom: 14 }}>
+      {CFG_FIELDS.map(([title, fields]) => (
+        <div key={title} style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 8, color: T.gold, letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 }}>{title}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 8 }}>
+            {fields.map(([k, label, step]) => (
+              <label key={k} style={{ fontSize: 9, color: T.muted }}>
+                {label}
+                <input type="number" step={step || 1} value={cfg[k] ?? ""} onChange={e => set(k, e.target.value === "" ? "" : Number(e.target.value))}
+                  style={{ display: "block", width: "100%", marginTop: 3, background: T.bg, border: "1px solid " + T.border, color: T.text, padding: "6px 8px", borderRadius: 4, fontSize: 10 }} />
+              </label>
+            ))}
+          </div>
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 9, color: T.muted, alignItems: "center" }}>
+        {["win", "spread", "total"].map(k => (
+          <label key={k}><input type="checkbox" checked={!!cfg.kinds[k]} onChange={e => set("kinds", { ...cfg.kinds, [k]: e.target.checked })} /> trade {k === "win" ? "moneyline" : k === "spread" ? "spreads" : "totals"}</label>
+        ))}
+        <label><input type="checkbox" checked={!!cfg.restingTakeProfit} onChange={e => set("restingTakeProfit", e.target.checked)} /> rest a take-profit sell on Kalshi after each buy</label>
+        <label><input type="checkbox" checked={!!cfg.manageManual} onChange={e => set("manageManual", e.target.checked)} /> also manage CFB positions I opened myself (live)</label>
+        <div style={{ flex: 1 }} />
+        <button style={{ ...btnBase, padding: "4px 8px", fontSize: 8 }} onClick={() => setCfg({ ...CFB.DEFAULT_CONFIG })}>RESET RULES</button>
+        {mode === "paper" && <button style={{ ...btnBase, padding: "4px 8px", fontSize: 8 }} onClick={onResetPaper}>RESET PAPER ACCOUNT</button>}
+      </div>
+      {server && !server.credentials && (
+        <div style={{ marginTop: 12, fontSize: 9, color: T.muted, lineHeight: 1.7, borderTop: "1px solid " + T.border, paddingTop: 10 }}>
+          <b style={{ color: T.gold }}>Live setup:</b> create an API key at kalshi.com → Account → API Keys, then in Cloudflare Pages → Settings → Environment variables add secrets
+          <code> KALSHI_API_KEY_ID</code>, <code>KALSHI_PRIVATE_KEY</code> (paste the whole PEM), <code>KALSHI_TRADING_ENABLED=1</code> and <code>KALSHI_MAX_ORDER_DOLLARS</code> (server-side cap per order), then redeploy.
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

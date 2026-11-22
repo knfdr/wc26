@@ -1,0 +1,706 @@
+// Sharp Sim — College football model + live auto-trader decision engine.
+// Pure functions only (no fetch, no DOM) so the same file runs in the browser
+// (window.CFB) and in node tests (require("./js/cfb-engine.js")).
+(function (root) {
+"use strict";
+
+// ── Parameters ───────────────────────────────────────────────────────────────
+const P = {
+  SIGMA_MARGIN: 15.0,   // SD of final CFB margin around the closing spread (2026 FBS sample: 14.9)
+  SIGMA_TOTAL: 15.2,    // SD of final CFB total around the closing total (2026 sample: 15.2, ~0.29*T)
+  HFA: 2.5,             // home-field advantage in points (neutral site = 0)
+  GAME_SECONDS: 3600,
+  POSS_VAR: 9,          // extra variance (pts^2) from the outcome of the current possession
+  AVG_DRIVE_PTS: 1.2,   // average points of a fresh possession (subtracted for totals)
+  OT_SD: 7,             // margin SD for an overtime period
+};
+
+// ── Math ─────────────────────────────────────────────────────────────────────
+function erf(x) {
+  // Abramowitz & Stegun 7.1.26 (|err| < 1.5e-7)
+  const s = x < 0 ? -1 : 1; x = Math.abs(x);
+  const t = 1 / (1 + 0.3275911 * x);
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  return s * y;
+}
+function Phi(z) { return 0.5 * (1 + erf(z / Math.SQRT2)); }
+function PhiInv(p) {
+  // Acklam's rational approximation
+  if (p <= 0) return -8; if (p >= 1) return 8;
+  const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.357751867269, -30.66479806614716, 2.506628277459239];
+  const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572];
+  const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+  const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
+  const pl = 0.02425;
+  let q, r;
+  if (p < pl) { q = Math.sqrt(-2 * Math.log(p)); return (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1); }
+  if (p > 1 - pl) { q = Math.sqrt(-2 * Math.log(1 - p)); return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1); }
+  q = p - 0.5; r = q * q;
+  return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1);
+}
+function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
+function median(xs) { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+function weightedMedian(pairs) {
+  // pairs: [{v, w}]
+  const s = pairs.filter(p => isFinite(p.v) && p.w > 0).sort((a, b) => a.v - b.v);
+  if (!s.length) return null;
+  const tot = s.reduce((a, p) => a + p.w, 0); let acc = 0;
+  for (const p of s) { acc += p.w; if (acc >= tot / 2) return p.v; }
+  return s[s.length - 1].v;
+}
+
+// ── Expected points of the current possession (from the offense's view) ─────
+// Rough CFB EP curve: ~0.4 at own 20, ~2.6 at midfield, ~4.9 at opp 20, ~6 at the goal line.
+function expectedPoints(yardsToGoal, down, distance) {
+  if (yardsToGoal == null || !isFinite(yardsToGoal)) return P.AVG_DRIVE_PTS;
+  let ep = 6.3 - 0.072 * clamp(yardsToGoal, 1, 99);
+  if (down >= 2) ep -= 0.3 * (down - 1);
+  if (distance > 10) ep -= 0.03 * (distance - 10);
+  if (down === 4 && distance > 3 && yardsToGoal > 35) ep = Math.min(ep, 0.0); // punt territory
+  return clamp(ep, -0.8, 6.6);
+}
+
+// ── ESPN parsing ─────────────────────────────────────────────────────────────
+function clockToSeconds(clock) {
+  if (!clock) return 0;
+  const parts = String(clock).split(":").map(Number);
+  return parts.length === 2 ? parts[0] * 60 + parts[1] : (parts[0] || 0);
+}
+
+// Parse one ESPN scoreboard event into a compact game object.
+function parseEspnEvent(e) {
+  const c = e.competitions && e.competitions[0]; if (!c) return null;
+  const home = c.competitors.find(x => x.homeAway === "home");
+  const away = c.competitors.find(x => x.homeAway === "away");
+  if (!home || !away) return null;
+  const st = e.status || c.status || {};
+  const type = st.type || {};
+  const sit = c.situation || {};
+  const period = st.period || 0;
+  const clockSec = clockToSeconds(st.displayClock);
+  let secondsLeft = period === 0 ? P.GAME_SECONDS : period <= 4 ? (4 - period) * 900 + clockSec : 0;
+  if (type.state === "post") secondsLeft = 0;
+  if (type.name === "STATUS_HALFTIME") secondsLeft = 1800;
+  let possession = null;
+  if (sit.possession) possession = sit.possession === home.id ? "home" : sit.possession === away.id ? "away" : null;
+  const odds = (c.odds || [])[0] || null;
+  let spreadHome = null, total = null;
+  if (odds) {
+    total = odds.overUnder != null ? Number(odds.overUnder) : null;
+    // details like "MIA -21" (favorite abbreviation + line) or "EVEN"
+    if (odds.details) {
+      const m = String(odds.details).match(/^(.+?)\s+(-?[\d.]+)$/);
+      if (m) {
+        const line = Math.abs(parseFloat(m[2]));
+        const fav = m[1].trim();
+        const homeIsFav = fav === home.team.abbreviation || fav === home.team.shortDisplayName;
+        spreadHome = homeIsFav ? line : -line;      // expected home margin
+      } else if (/even|pk|pick/i.test(odds.details)) spreadHome = 0;
+    } else if (odds.spread != null) spreadHome = -Number(odds.spread);
+  }
+  const team = (t) => ({
+    id: t.id, abbr: t.team.abbreviation, name: t.team.displayName, short: t.team.shortDisplayName,
+    location: t.team.location, mascot: t.team.name, score: Number(t.score || 0),
+    rank: t.curatedRank && t.curatedRank.current < 99 ? t.curatedRank.current : null,
+    logo: t.team.logo, color: t.team.color ? "#" + t.team.color : null,
+    record: (t.records && t.records[0] && t.records[0].summary) || "",
+  });
+  return {
+    id: e.id, date: e.date, name: e.name, shortName: e.shortName,
+    neutral: !!c.neutralSite, venue: c.venue && c.venue.fullName,
+    state: type.state, statusName: type.name, detail: type.shortDetail || type.detail,
+    period, clock: st.displayClock, clockSec, secondsLeft,
+    home: team(home), away: team(away),
+    possession, down: sit.down > 0 ? sit.down : null, distance: sit.distance > 0 ? sit.distance : null,
+    // ESPN yardLine is measured from the home team's goal line
+    yardsToGoal: sit.yardLine > 0 && possession ? (possession === "home" ? 100 - sit.yardLine : sit.yardLine) : null,
+    homeTimeouts: sit.homeTimeouts, awayTimeouts: sit.awayTimeouts,
+    espnHomeWP: sit.lastPlay && sit.lastPlay.probability ? sit.lastPlay.probability.homeWinPercentage : null,
+    isRedZone: !!sit.isRedZone, downDistanceText: sit.downDistanceText || sit.shortDownDistanceText || "",
+    lastPlay: sit.lastPlay && sit.lastPlay.text,
+    broadcast: (c.broadcasts && c.broadcasts[0] && c.broadcasts[0].names || []).join("/"),
+    spreadHome, total,
+  };
+}
+
+// ── Live projection ──────────────────────────────────────────────────────────
+// pre = { spreadHome (expected home margin, full game), total }
+function liveProjection(g, pre) {
+  const margin = g.home.score - g.away.score;
+  const current = g.home.score + g.away.score;
+  const spread = pre && isFinite(pre.spreadHome) ? pre.spreadHome : 0;
+  const tot = pre && isFinite(pre.total) ? pre.total : 55;
+  if (g.state === "post") return { tau: 0, meanMargin: margin, sdMargin: 0.01, meanTotal: current, sdTotal: 0.01, final: true };
+  if (g.period > 4 || (g.period === 4 && g.secondsLeft === 0 && margin === 0)) {
+    // overtime: alternate possessions; roughly a coin flip around a small edge
+    return { tau: 0.05, meanMargin: margin + spread * 0.04, sdMargin: P.OT_SD, meanTotal: current + 7, sdTotal: 6, ot: true };
+  }
+  const tau = clamp(g.secondsLeft / P.GAME_SECONDS, 0, 1);
+  const hasPoss = g.state === "in" && g.possession && g.statusName !== "STATUS_HALFTIME";
+  const ep = hasPoss ? expectedPoints(g.yardsToGoal, g.down, g.distance) : 0;
+  const epSigned = g.possession === "home" ? ep : g.possession === "away" ? -ep : 0;
+  // possession value matters most late; early its value is mostly absorbed in the rate
+  const possWeight = hasPoss ? clamp(1 - tau * 0.6, 0.4, 1) : 0;
+  const meanMargin = margin + spread * tau + epSigned * possWeight;
+  const sdMargin = Math.sqrt(P.SIGMA_MARGIN ** 2 * tau + (hasPoss ? P.POSS_VAR : 0) + 0.25);
+  const elapsed = 1 - tau;
+  const obsRate = elapsed > 0.12 ? current / elapsed : tot;
+  const w = clamp(elapsed * 0.5, 0, 0.4);           // trust observed pace up to 40%
+  const rate = (1 - w) * tot + w * obsRate;
+  const meanTotal = current + rate * tau + (hasPoss ? (ep - P.AVG_DRIVE_PTS) * possWeight : 0);
+  const sdTotal = Math.sqrt(P.SIGMA_TOTAL ** 2 * tau + (hasPoss ? P.POSS_VAR : 0) + 0.25);
+  return { tau, meanMargin, sdMargin, meanTotal, sdTotal, ep: epSigned };
+}
+
+// Probability helpers on a projection.
+function pHomeWin(pr) { return pr.final ? (pr.meanMargin > 0 ? 1 : 0) : Phi(pr.meanMargin / pr.sdMargin); }
+function pCover(pr, side, line) {
+  // side "home" wins by more than line
+  const m = side === "home" ? pr.meanMargin : -pr.meanMargin;
+  if (pr.final) return m > line ? 1 : 0;
+  return Phi((m - line) / pr.sdMargin);
+}
+function pOver(pr, line) { return pr.final ? (pr.meanTotal > line ? 1 : 0) : Phi((pr.meanTotal - line) / pr.sdTotal); }
+
+// ── Drive-level Monte Carlo of the rest of the game ─────────────────────────
+// Football scores come in 3s and 7s, so late in games a normal curve badly misprices
+// strikes near the current margin. This simulates the remaining possessions instead.
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+const DRIVES_PER_TEAM = 12;    // CFB FBS average possessions per team per game
+const DRIVE_SECS = 150;        // average possession length (3600 / 24)
+const LEAGUE_DRIVE_PTS = 2.25; // league average points per possession
+
+// Probabilities of TD / FG for a possession, given field position and the offense's strength.
+function driveProbs(ytg, down, dist, strength) {
+  // strength = team pts per drive / league avg
+  const y = ytg == null ? 72 : clamp(ytg, 1, 99);
+  let pTD = 0.235 + (75 - y) * 0.0055;
+  let pFG = y <= 35 ? 0.30 : y <= 55 ? 0.19 : 0.12;
+  if (down === 3) { pTD *= distance3(dist); }
+  if (down === 4) {
+    if (y > 38 && (dist || 10) > 2) { pTD *= 0.12; pFG = y <= 40 ? 0.35 : 0; }      // punt / long FG
+    else if (y <= 38 && (dist || 10) > 3) { pTD *= 0.35; pFG = 0.6; }              // FG attempt
+    else { pTD *= 0.75; }
+  }
+  const k = Math.pow(clamp(strength, 0.3, 2.5), 0.85);
+  pTD = clamp(pTD * k, 0.01, 0.85); pFG = clamp(pFG * Math.pow(k, 0.4), 0, 0.9 - pTD);
+  return { pTD, pFG };
+  function distance3(d) { d = d || 7; return d <= 2 ? 0.95 : d <= 6 ? 0.8 : d <= 10 ? 0.65 : 0.5; }
+}
+
+// Simulate the rest of game g. homePts/awayPts = expected full-game points for each team.
+// delta shifts strength toward home (e^delta / e^-delta); kappa scales both offenses.
+function simRemaining(g, homePts, awayPts, n, opts) {
+  opts = opts || {};
+  const delta = opts.delta || 0, kappa = opts.kappa || 1;
+  const rnd = mulberry32(opts.seed || 12345);
+  const margins = new Int16Array(n), totals = new Int16Array(n);
+  const sH = Math.max(0.2, homePts / DRIVES_PER_TEAM / LEAGUE_DRIVE_PTS * Math.exp(delta) * kappa);
+  const sA = Math.max(0.2, awayPts / DRIVES_PER_TEAM / LEAGUE_DRIVE_PTS * Math.exp(-delta) * kappa);
+  const fresh = { H: driveProbs(72, 1, 10, sH), A: driveProbs(72, 1, 10, sA) };
+  const ot = g.period > 4 || (g.period === 4 && g.secondsLeft === 0 && g.home.score === g.away.score);
+  const otProbs = { H: driveProbs(25, 1, 10, sH), A: driveProbs(25, 1, 10, sA) };
+  const halftime = g.statusName === "STATUS_HALFTIME";
+  for (let i = 0; i < n; i++) {
+    let h = g.home.score, a = g.away.score;
+    if (g.state === "post") { margins[i] = h - a; totals[i] = h + a; continue; }
+    let t = ot ? 0 : g.secondsLeft;
+    let poss = g.possession === "home" ? "H" : g.possession === "away" ? "A" : (rnd() < 0.5 ? "H" : "A");
+    let first = !halftime && !!g.possession && g.state === "in";
+    while (t > 0) {
+      const lead = poss === "H" ? h - a : a - h;
+      // leading team with the ball late just runs the clock out
+      if (lead > 0 && t <= 110 && rnd() < 0.85) break;
+      const pr = first ? driveProbs(g.yardsToGoal, g.down, g.distance, poss === "H" ? sH : sA) : fresh[poss];
+      // clock management: trailing team hurries late; leading team grinds in the 4th quarter
+      const hurry = lead < 0 && t < 480;
+      const grind = lead > 0 && t < 900 ? 1.4 : 1;
+      const dt = first ? DRIVE_SECS * 0.45 * (0.3 + rnd()) * grind : (hurry ? 95 : DRIVE_SECS * grind) * (0.4 + 1.2 * rnd());
+      const u = rnd();
+      let pts = 0, def = 0;
+      if (u < pr.pTD) { const x = rnd(); pts = x < 0.93 ? 7 : x < 0.97 ? 6 : 8; }
+      else if (u < pr.pTD + pr.pFG) pts = 3;
+      else { const x = rnd(); if (x < 0.018) def = 7; else if (x < 0.023) def = 2; }
+      // a drive can't take longer than the time left; a score on the final drive still counts
+      if (poss === "H") { h += pts; a += def; } else { a += pts; h += def; }
+      t -= dt; first = false; poss = poss === "H" ? "A" : "H";
+    }
+    if (h === a) { // overtime: alternate possessions from the 25 until someone leads after a round
+      let round = 0;
+      while (h === a && round < 8) {
+        round++;
+        for (const side of ["H", "A"]) {
+          const pr = otProbs[side]; const u = rnd();
+          const pts = round >= 3 ? (rnd() < 0.45 * (side === "H" ? sH : sA) ** 0.3 ? 2 : 0)
+                    : u < pr.pTD ? (round === 2 ? (rnd() < 0.5 ? 8 : 6) + 0 : 7) : u < pr.pTD + pr.pFG ? 3 : 0;
+          if (side === "H") h += pts; else a += pts;
+        }
+      }
+      if (h === a) { if (rnd() < 0.5) h += 2; else a += 2; }
+    }
+    margins[i] = h - a; totals[i] = h + a;
+  }
+  return makeDist(margins, totals);
+}
+function makeDist(margins, totals) {
+  const n = margins.length;
+  let hw = 0, sm = 0, st = 0; for (let i = 0; i < n; i++) { if (margins[i] > 0) hw++; sm += margins[i]; st += totals[i]; }
+  return { n, margins, totals, pHome: hw / n, meanMargin: sm / n, meanTotal: st / n,
+    pCover(side, line) { let k = 0; for (let i = 0; i < n; i++) { const m = side === "home" ? margins[i] : -margins[i]; if (m > line) k++; } return k / n; },
+    pOver(line) { let k = 0; for (let i = 0; i < n; i++) if (totals[i] > line) k++; return k / n; } };
+}
+
+// Points per team implied by a spread (expected home margin) and total.
+function teamPoints(pre) {
+  const s = pre && isFinite(pre.spreadHome) ? pre.spreadHome : 0;
+  const t = pre && isFinite(pre.total) ? pre.total : 55;
+  return { home: Math.max(3, (t + s) / 2), away: Math.max(3, (t - s) / 2) };
+}
+
+// Calibrate (delta, kappa) so the sim reproduces the market's own liquid prices:
+//   delta (strength tilt) matches the moneyline; kappa (scoring rate) matches the total strike
+//   nearest 50%. Then blend probabilities: alpha * our pregame-anchored sim + (1-alpha) * calibrated sim.
+const _calCache = new Map();
+function liveDistribution(g, pre, markets, cfg) {
+  cfg = cfg || {};
+  const alpha = cfg.alpha != null ? cfg.alpha : 0.35;
+  const tp = teamPoints(pre);
+  const N_CAL = 1500, N = cfg.sims || 8000;
+  const seed = 987654;
+  const ot = g.period > 4 || (g.period === 4 && g.secondsLeft === 0 && g.home.score === g.away.score);
+  const target = { pHome: null, totalLine: null, pOver: null };
+  if (g.state === "in" || g.state === "pre") {
+    const maxW = cfg.maxQuoteWidth || 6;
+    const live = (markets || []).filter(mk => !mk.half && mk.status === "active" && mid(mk) != null && mk.yesAsk - mk.yesBid <= maxW);
+    const win = live.filter(mk => mk.kind === "win");
+    if (win.length) {
+      const ps = win.map(mk => mk.side === "home" ? mid(mk) / 100 : 1 - mid(mk) / 100);
+      const p = ps.reduce((x, y) => x + y, 0) / ps.length;
+      if (p > 0.03 && p < 0.97) target.pHome = p;
+    }
+    let bestT = null;
+    for (const mk of live.filter(mk => mk.kind === "total")) {
+      const p = mid(mk) / 100; if (p < 0.12 || p > 0.88) continue;
+      const score = Math.abs(p - 0.5) - Math.log(1 + mk.volume) * 0.005;
+      if (!bestT || score < bestT.score) bestT = { score, line: mk.line, p };
+    }
+    if (bestT) { target.totalLine = bestT.line; target.pOver = bestT.p; }
+  }
+  const sig = [g.id, g.home.score, g.away.score, g.period, Math.round(g.secondsLeft / 15), g.possession, g.yardsToGoal, g.down,
+               target.pHome && target.pHome.toFixed(2), target.totalLine, target.pOver && target.pOver.toFixed(2), tp.home, tp.away, alpha].join("|");
+  const hit = _calCache.get(g.id);
+  if (hit && hit.sig === sig) return hit.out;
+
+  const cal = { delta: 0, kappa: 1 };
+  if (!ot && g.state !== "post") {
+    for (let round = 0; round < (target.pHome != null && target.totalLine != null ? 2 : 1); round++) {
+      if (target.pHome != null) {
+        let lo = -2.5, hi = 2.5;
+        for (let it = 0; it < 10; it++) {
+          const m = (lo + hi) / 2;
+          const d = simRemaining(g, tp.home, tp.away, N_CAL, { delta: m, kappa: cal.kappa, seed });
+          if (d.pHome < target.pHome) lo = m; else hi = m;
+        }
+        cal.delta = (lo + hi) / 2;
+      }
+      if (target.totalLine != null) {
+        let lo = 0.25, hi = 3;
+        for (let it = 0; it < 9; it++) {
+          const m = (lo + hi) / 2;
+          const d = simRemaining(g, tp.home, tp.away, N_CAL, { delta: cal.delta, kappa: m, seed });
+          if (d.pOver(target.totalLine) < target.pOver) lo = m; else hi = m;
+        }
+        cal.kappa = (lo + hi) / 2;
+      }
+    }
+  }
+  const calibrated = simRemaining(g, tp.home, tp.away, N, { ...cal, seed: seed + 1 });
+  const model = alpha > 0 ? simRemaining(g, tp.home, tp.away, N, { delta: 0, kappa: 1, seed: seed + 2 }) : calibrated;
+  const dist = mixDist(model, calibrated, alpha);
+  // overtime state (which possession of the round) isn't modeled: don't trust fair values there
+  dist.unreliable = ot;
+  dist.calibratedTo = target;
+  const out = { dist, cal, eff: cal, target, tp, model, calibrated };
+  _calCache.set(g.id, { sig, out });
+  return out;
+}
+function mixDist(a, b, alpha) {
+  if (a === b || alpha <= 0) return b;
+  const w = alpha;
+  return { n: b.n, margins: b.margins, totals: b.totals, mixed: true,
+    pHome: w * a.pHome + (1 - w) * b.pHome,
+    meanMargin: w * a.meanMargin + (1 - w) * b.meanMargin, meanTotal: w * a.meanTotal + (1 - w) * b.meanTotal,
+    pCover: (side, line) => w * a.pCover(side, line) + (1 - w) * b.pCover(side, line),
+    pOver: (line) => w * a.pOver(line) + (1 - w) * b.pOver(line) };
+}
+
+// ── Pregame Monte Carlo (correlated margin/total) ───────────────────────────
+function pregameSim(spreadHome, total, n) {
+  n = n || 100000;
+  // favourite-signed margin error and total error correlate ~+0.15 (favourite covers -> over)
+  const rho = 0.15 * (spreadHome >= 0 ? 1 : -1);
+  const sigT = clamp(0.29 * total, 11, 19);
+  let homeWin = 0;
+  const margins = new Float32Array(n), totals = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    let u = 0, v = 0; while (u === 0) u = Math.random(); while (v === 0) v = Math.random();
+    const r = Math.sqrt(-2 * Math.log(u));
+    const z1 = r * Math.cos(2 * Math.PI * v), z2 = r * Math.sin(2 * Math.PI * v);
+    let m = spreadHome + P.SIGMA_MARGIN * z1;
+    const t = total + sigT * (rho * z1 + Math.sqrt(1 - rho * rho) * z2);
+    m = Math.round(m); if (m === 0) m = Math.random() < 0.5 + spreadHome * 0.01 ? 1 : -1; // OT
+    margins[i] = m; totals[i] = Math.max(0, Math.round(t));
+    if (m > 0) homeWin++;
+  }
+  return { n, margins, totals, pHome: homeWin / n,
+    pCover(side, line) { let k = 0; for (let i = 0; i < n; i++) { const m = side === "home" ? margins[i] : -margins[i]; if (m > line) k++; } return k / n; },
+    pOver(line) { let k = 0; for (let i = 0; i < n; i++) if (totals[i] > line) k++; return k / n; },
+  };
+}
+
+// ── Kalshi market parsing ────────────────────────────────────────────────────
+function normName(s) {
+  return String(s || "").toLowerCase()
+    .replace(/&/g, " and ").replace(/\bst\.?(?=\s|$)/g, "state").replace(/\buniv(ersity)?\.?\b/g, "")
+    .replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+}
+function nameScore(kName, team) {
+  const k = normName(kName);
+  const cands = [team.location, team.short, team.name, team.abbr].map(normName).filter(Boolean);
+  let best = 0;
+  for (const c of cands) {
+    if (k === c) best = Math.max(best, 1);
+    else if (k.startsWith(c + " ") || c.startsWith(k + " ")) best = Math.max(best, 0.8);
+    else {
+      const kt = new Set(k.split(" ")), ct = c.split(" ");
+      const hit = ct.filter(x => kt.has(x)).length;
+      if (hit) best = Math.max(best, 0.5 * hit / Math.max(ct.length, kt.size));
+    }
+  }
+  return best;
+}
+// Which side ("home"/"away") a Kalshi team name refers to.
+function sideForName(kName, g) {
+  const h = nameScore(kName, g.home), a = nameScore(kName, g.away);
+  if (Math.max(h, a) < 0.4 || h === a) return null;
+  return h > a ? "home" : "away";
+}
+// Kalshi event titles are "Away vs Home". Score a Kalshi event against an ESPN game.
+function matchEventScore(eventTitle, g) {
+  const parts = String(eventTitle || "").split(/\s+(?:vs\.?|at|@)\s+/i);
+  if (parts.length !== 2) return 0;
+  const s1 = nameScore(parts[0], g.away) + nameScore(parts[1], g.home);
+  const s2 = nameScore(parts[0], g.home) + nameScore(parts[1], g.away);
+  return Math.max(s1, s2) / 2;
+}
+
+const dollars = (x) => x == null || x === "" ? null : Math.round(parseFloat(x) * 100); // -> integer cents
+
+// Normalize a Kalshi market object into {ticker, kind, side, line, yesBid, yesAsk, noBid, noAsk, sizes}
+function parseKalshiMarket(m, g) {
+  const t = m.ticker || "";
+  const yesBid = dollars(m.yes_bid_dollars), yesAsk = dollars(m.yes_ask_dollars);
+  const noBid = m.no_bid_dollars != null ? dollars(m.no_bid_dollars) : (yesAsk != null ? 100 - yesAsk : null);
+  const noAsk = m.no_ask_dollars != null ? dollars(m.no_ask_dollars) : (yesBid != null ? 100 - yesBid : null);
+  const base = {
+    ticker: t, title: m.title, sub: m.yes_sub_title, status: m.status,
+    yesBid, yesAsk, noBid, noAsk,
+    yesBidSize: parseFloat(m.yes_bid_size_fp || 0), yesAskSize: parseFloat(m.yes_ask_size_fp || 0),
+    volume: parseFloat(m.volume_fp || 0), lastPrice: dollars(m.last_price_dollars), result: m.result,
+  };
+  const series = t.split("-")[0];
+  const half = /1H/.test(series);
+  if (/GAME$/.test(series) || series === "KXNCAAF1H") {
+    const side = sideForName(m.yes_sub_title, g);
+    return side ? { ...base, kind: "win", side, line: 0, half } : null;
+  }
+  if (/SPREAD$/.test(series)) {
+    const mm = String(m.yes_sub_title || m.title).match(/^(.*?)\s+wins by over\s+([\d.]+)/i);
+    if (!mm) return null;
+    const side = sideForName(mm[1], g);
+    const line = m.floor_strike != null ? Number(m.floor_strike) : parseFloat(mm[2]);
+    return side ? { ...base, kind: "spread", side, line, half } : null;
+  }
+  if (/TOTAL$/.test(series)) {
+    const mm = String(m.yes_sub_title || m.title).match(/over\s+([\d.]+)/i);
+    const line = m.floor_strike != null ? Number(m.floor_strike) : mm ? parseFloat(mm[1]) : null;
+    return line != null ? { ...base, kind: "total", side: "over", line, half } : null;
+  }
+  return null;
+}
+
+// ── Fair value ──────────────────────────────────────────────────────────────
+function modelYesProb(mk, pr) {
+  if (pr && pr.margins) { // simulated distribution
+    if (mk.kind === "win") return mk.side === "home" ? pr.pHome : 1 - pr.pHome;
+    if (mk.kind === "spread") return pr.pCover(mk.side, mk.line);
+    if (mk.kind === "total") return pr.pOver(mk.line);
+    return null;
+  }
+  if (mk.kind === "win") return mk.side === "home" ? pHomeWin(pr) : 1 - pHomeWin(pr);
+  if (mk.kind === "spread") return pCover(pr, mk.side, mk.line);
+  if (mk.kind === "total") return pOver(pr, mk.line);
+  return null;
+}
+function mid(mk) {
+  if (mk.yesBid == null || mk.yesAsk == null) return null;
+  if (mk.yesBid <= 0 && mk.yesAsk >= 100) return null;
+  return (mk.yesBid + mk.yesAsk) / 2;
+}
+
+// Fit the market's own distribution from the liquid part of a ladder.
+// points: [{L, p, w}] with p = P(X > L). Under X ~ N(m, s): PhiInv(p) = (m - L)/s  =>  L = m - s*z.
+// Weighted least squares of L on z gives m (intercept) and s (-slope).
+function fitLadder(points, sdPrior) {
+  const pts = points.filter(q => q.p > 0.06 && q.p < 0.94 && q.w > 0);
+  if (!pts.length) return null;
+  const zs = pts.map(q => PhiInv(q.p));
+  if (pts.length === 1 || new Set(pts.map(q => q.L)).size < 2) {
+    // one strike: only the mean is identified; use the prior SD
+    let num = 0, den = 0; pts.forEach((q, i) => { num += q.w * (q.L + sdPrior * zs[i]); den += q.w; });
+    return { m: num / den, s: sdPrior, n: pts.length, sdFit: false };
+  }
+  let W = 0, Sz = 0, SL = 0, Szz = 0, SzL = 0;
+  pts.forEach((q, i) => { const z = zs[i]; W += q.w; Sz += q.w * z; SL += q.w * q.L; Szz += q.w * z * z; SzL += q.w * z * q.L; });
+  const varZ = Szz / W - (Sz / W) ** 2;
+  if (varZ < 0.02) { // strikes too close together to identify the SD
+    let num = 0; pts.forEach((q, i) => { num += q.w * (q.L + sdPrior * zs[i]); });
+    return { m: num / W, s: sdPrior, n: pts.length, sdFit: false };
+  }
+  const slope = (SzL / W - (Sz / W) * (SL / W)) / varZ;
+  let s = clamp(-slope, sdPrior * 0.5, sdPrior * 1.8);
+  const m = SL / W + s * (Sz / W);
+  return { m, s, n: pts.length, sdFit: true };
+}
+
+// Market-implied distribution of the final home margin and total from the liquid Kalshi quotes.
+function marketImplied(markets, pr, opts) {
+  const maxWidth = (opts && opts.maxQuoteWidth) || 6;
+  const mPts = [], tPts = [];
+  for (const mk of markets) {
+    if (mk.half || mk.status !== "active") continue;
+    const md = mid(mk); if (md == null) continue;
+    const width = mk.yesAsk - mk.yesBid; if (width > maxWidth) continue;
+    const p = md / 100;
+    const w = Math.log(1 + (mk.volume || 0)) / (1 + width) * (mk.kind === "win" ? 2 : 1);
+    if (mk.kind === "win" || mk.kind === "spread") {
+      // convert to P(homeMargin > Lh)
+      if (mk.side === "home") mPts.push({ L: mk.line, p, w });
+      else mPts.push({ L: -mk.line, p: 1 - p, w });
+    } else if (mk.kind === "total") tPts.push({ L: mk.line, p, w });
+  }
+  const fm = fitLadder(mPts, pr.sdMargin), ft = fitLadder(tPts, pr.sdTotal);
+  return { meanMargin: fm ? fm.m : null, sdMargin: fm ? fm.s : null, meanTotal: ft ? ft.m : null, sdTotal: ft ? ft.s : null,
+           nMargin: fm ? fm.n : 0, nTotal: ft ? ft.n : 0, fitM: fm, fitT: ft };
+}
+
+// Blend our independent live model with the market-implied view. alpha = weight on our model.
+function blendedProjection(g, pre, markets, alpha, opts) {
+  const pr = liveProjection(g, pre);
+  if (pr.final) return { ...pr, model: pr, implied: null };
+  const imp = marketImplied(markets, pr, opts);
+  const out = { ...pr, model: pr, implied: imp };
+  if (imp.meanMargin != null) {
+    out.meanMargin = alpha * pr.meanMargin + (1 - alpha) * imp.meanMargin;
+    if (imp.fitM.sdFit && imp.fitM.n >= 3) out.sdMargin = alpha * pr.sdMargin + (1 - alpha) * imp.sdMargin;
+  }
+  if (imp.meanTotal != null) {
+    out.meanTotal = alpha * pr.meanTotal + (1 - alpha) * imp.meanTotal;
+    if (imp.fitT.sdFit && imp.fitT.n >= 3) out.sdTotal = alpha * pr.sdTotal + (1 - alpha) * imp.sdTotal;
+  }
+  return out;
+}
+
+// Kalshi taker fee per contract in cents: ceil(rate * C * P * (1-P)) over the order, ~ rate*P*(1-P) per contract
+function feeCents(priceCents, count, rate) {
+  const p = priceCents / 100;
+  const total = Math.ceil(rate * count * p * (1 - p) * 100 - 1e-9); // cents for the whole order
+  return total;
+}
+
+// ── Auto-trader decision engine ─────────────────────────────────────────────
+const DEFAULT_CONFIG = {
+  bankroll: 200,           // $ the bot may use (sizing base)
+  kellyFraction: 0.15,     // fraction of full Kelly
+  maxStake: 10,            // $ max cost of any one entry
+  maxGameExposure: 30,     // $ max open cost per game
+  maxTotalExposure: 60,    // $ max open cost overall
+  maxDailyLoss: 40,        // $ realized+unrealized loss that halts new entries
+  entryEdge: 8,            // cents of edge (after fees) needed to enter
+  confirmTicks: 2,         // the edge must show on this many consecutive ticks
+  minPrice: 12, maxPrice: 88, // only buy contracts priced within this band (cents)
+  maxQuoteWidth: 6,        // skip markets whose bid/ask spread is wider than this (cents)
+  minVolume: 500,          // skip thin markets
+  takeProfit: 12,          // cents per contract above cost -> cash out
+  takeProfitPct: 0.35,     // or +35% on cost
+  stopLoss: 15,            // cents per contract below cost -> cash out
+  trailArm: 10, trailGive: 6, // after +10c, give back at most 6c from the peak
+  edgeExit: 3,             // sell when bid exceeds our fair value by this much
+  holdToSettleAt: 96,      // don't sell above this bid; just let it settle
+  noEntryLastSecs: 240,    // no new entries in the last 4 minutes
+  freezeAfterScoreSecs: 25,// pause entries after any score change (data lag protection)
+  staleDataSecs: 20,       // ignore games whose live data is older than this
+  cooldownSecs: 60,        // wait after exiting a market before re-entering it
+  gameTimeoutSecs: 300,    // after a stop-loss, no new entries in that game for this long
+  blowoutMargin: 21,       // no entries in the 2nd half when a team leads by this much
+  reentryEdgeBonus: 2,     // extra edge required to re-enter the same market
+  maxPositionsPerGame: 3,
+  alpha: 0.25,             // weight on our pregame-anchored model vs the market-calibrated one
+  marketJumpCents: 6,      // if the moneyline moves this much while ESPN shows no change, freeze entries
+  marketJumpFreezeSecs: 30,
+  sims: 12000,
+  feeRate: 0.07,
+  kinds: { win: true, spread: true, total: true },
+  includeHalf: false,
+  restingTakeProfit: true, // also rest a GTC sell at the take-profit price on Kalshi
+  exitSlippage: 1,         // cash-out limit this many cents under the bid so the IOC fills
+  manageManual: false,     // live: also manage CFB positions opened outside the bot
+};
+
+// sideBid/Ask: price to sell/buy the side we hold (yes/no) in cents
+function sideQuotes(mk, side) {
+  return side === "yes" ? { bid: mk.yesBid, ask: mk.yesAsk, askSize: mk.yesAskSize, bidSize: mk.yesBidSize }
+                        : { bid: mk.noBid, ask: mk.noAsk, askSize: mk.yesBidSize, bidSize: mk.yesAskSize };
+}
+
+/*
+  decide(input) -> { actions:[...], evals:[...] }
+  input = {
+    now (ms), cfg, dailyPnl ($, realized+unrealized for the session),
+    games: [{ g (parsed ESPN), pre, dataTs, lastScoreChangeTs, markets:[parsed], enabled }],
+    positions: { [ticker]: { side, count, avgCost (cents), peakBid, openedAt, gameId } },
+    cooldowns: { [ticker]: { until, exits } },
+    paused, killed
+  }
+  action = { type:"buy"|"sell", ticker, side, count, limit (cents), reason, gameId, fair, edge }
+*/
+function decide(input) {
+  const cfg = { ...DEFAULT_CONFIG, ...(input.cfg || {}) };
+  const now = input.now;
+  const actions = [], evals = [];
+  const positions = input.positions || {};
+  const cooldowns = input.cooldowns || {};
+  let totalExposure = 0; const gameExposure = {}; const gamePosCount = {};
+  for (const [, p] of Object.entries(positions)) {
+    const c = p.count * p.avgCost / 100;
+    totalExposure += c; gameExposure[p.gameId] = (gameExposure[p.gameId] || 0) + c;
+    gamePosCount[p.gameId] = (gamePosCount[p.gameId] || 0) + 1;
+  }
+  const lossHalt = (input.dailyPnl || 0) <= -Math.abs(cfg.maxDailyLoss);
+
+  for (const G of input.games || []) {
+    const g = G.g; if (!g) continue;
+    const stale = !G.dataTs || (now - G.dataTs) / 1000 > cfg.staleDataSecs;
+    const markets = (G.markets || []).filter(mk => mk && !mk.half); // 1H markets need a half-time model; not traded yet
+    const live = liveDistribution(g, G.pre, markets, cfg);
+    const proj = live.dist; proj.cal = live.cal; proj.eff = live.eff; proj.target = live.target;
+    const frozen = (G.lastScoreChangeTs && (now - G.lastScoreChangeTs) / 1000 < cfg.freezeAfterScoreSecs)
+                || (G.freezeUntil && G.freezeUntil > now); // market jumped while our live data didn't change
+
+    const cands = [];
+    // kinds we already hold in this game: one position per kind per game (no stacking the ladder)
+    const heldKinds = new Set(Object.entries(positions).filter(([, p]) => p.gameId === g.id && p.count > 0)
+      .map(([t]) => (markets.find(m => m.ticker === t) || {}).kind));
+    for (const mk of markets) {
+      const pYes = modelYesProb(mk, proj);
+      if (pYes == null) continue;
+      const fairYes = pYes * 100;
+      const pos = positions[mk.ticker];
+      const ev = { ticker: mk.ticker, gameId: g.id, kind: mk.kind, side: mk.side, line: mk.line, fairYes,
+                   yesBid: mk.yesBid, yesAsk: mk.yesAsk, held: !!pos, note: "" };
+      evals.push(ev);
+
+      // ── Exits (always evaluated, even when stale/paused — but stale data only allows price-based exits)
+      if (pos && pos.count > 0) {
+        const q = sideQuotes(mk, pos.side);
+        const fairSide = pos.side === "yes" ? fairYes : 100 - fairYes;
+        if (q.bid == null || q.bid <= 0) { ev.note = "no bid"; continue; }
+        const gain = q.bid - pos.avgCost;
+        const peak = Math.max(pos.peakBid || 0, q.bid);
+        let reason = null;
+        if (input.killed) reason = "kill switch";
+        else if (q.bid >= cfg.holdToSettleAt) { ev.note = "holding to settle"; continue; }
+        else if (gain >= cfg.takeProfit || (pos.avgCost > 0 && gain / pos.avgCost >= cfg.takeProfitPct)) reason = `take profit +${gain}¢`;
+        else if (-gain >= cfg.stopLoss) reason = `stop loss ${gain}¢`;
+        else if (peak - pos.avgCost >= cfg.trailArm && peak - q.bid >= cfg.trailGive) reason = `trailing stop (peak ${peak}¢)`;
+        else if (!stale && !proj.unreliable && mk.status === "active" && q.bid - fairSide >= cfg.edgeExit) reason = `edge gone (fair ${fairSide.toFixed(0)}¢ < bid ${q.bid}¢)`;
+        if (reason) {
+          actions.push({ type: "sell", ticker: mk.ticker, side: pos.side, count: pos.count, limit: q.bid,
+                         reason, gameId: g.id, fair: fairSide, gain });
+        } else ev.note = `hold (${gain >= 0 ? "+" : ""}${gain}¢)`;
+        continue;
+      }
+
+      // ── Entries
+      if (input.killed || input.paused || lossHalt) { ev.note = lossHalt ? "loss limit hit" : "paused"; continue; }
+      if (!G.enabled) { ev.note = "game off"; continue; }
+      if (g.state !== "in") { ev.note = g.state === "pre" ? "not started" : "final"; continue; }
+      if (/DELAY|SUSPEND|POSTPONE|HALFTIME/.test(g.statusName || "")) { ev.note = "game paused"; continue; }
+      if (stale) { ev.note = "stale data"; continue; }
+      if (frozen) { ev.note = "data catching up (score/market just moved)"; continue; }
+      if (g.secondsLeft <= cfg.noEntryLastSecs || g.period > 4) { ev.note = "too late"; continue; }
+      if (!cfg.kinds[mk.kind]) { ev.note = "kind off"; continue; }
+      if (heldKinds.has(mk.kind)) { ev.note = "already hold this market type"; continue; }
+      if (proj.unreliable) { ev.note = "overtime"; continue; }
+      if (mk.status !== "active") { ev.note = mk.status; continue; }
+      if (mk.yesBid == null || mk.yesAsk == null || mk.yesAsk - mk.yesBid > cfg.maxQuoteWidth) { ev.note = "wide quote"; continue; }
+      if (mk.volume < cfg.minVolume) { ev.note = "thin"; continue; }
+      const gcd = cooldowns["game:" + g.id];
+      if (gcd && gcd.until > now) { ev.note = "game timeout after a stop-loss"; continue; }
+      if (g.period >= 3 && Math.abs(g.home.score - g.away.score) >= cfg.blowoutMargin) { ev.note = "blowout (garbage time not modeled)"; continue; }
+      const cd = cooldowns[mk.ticker];
+      if (cd && cd.until > now) { ev.note = "cooldown"; continue; }
+      if ((gamePosCount[g.id] || 0) >= cfg.maxPositionsPerGame) { ev.note = "max positions"; continue; }
+
+      const need = cfg.entryEdge + (cd && cd.exits ? cfg.reentryEdgeBonus : 0);
+      let best = null;
+      for (const side of ["yes", "no"]) {
+        const q = sideQuotes(mk, side);
+        if (q.ask == null || q.ask < cfg.minPrice || q.ask > cfg.maxPrice) continue;
+        const fairSide = side === "yes" ? fairYes : 100 - fairYes;
+        const fee = cfg.feeRate * (q.ask / 100) * (1 - q.ask / 100) * 100;
+        const edge = fairSide - q.ask - fee;
+        if (!best || edge > best.edge) best = { side, q, fairSide, edge, fee };
+      }
+      if (!best) { ev.note = "price out of band"; continue; }
+      ev.edge = best.edge; ev.bestSide = best.side;
+      if (best.edge < need) { ev.note = `edge ${best.edge.toFixed(1)}¢`; continue; }
+
+      // Kelly sizing for a binary contract: f* = (p - c) / (1 - c)
+      const p = best.fairSide / 100, c = best.q.ask / 100;
+      const kelly = Math.max(0, (p - c) / (1 - c));
+      let stake = Math.min(cfg.bankroll * kelly * cfg.kellyFraction, cfg.maxStake);
+      stake = Math.min(stake, cfg.maxGameExposure - (gameExposure[g.id] || 0), cfg.maxTotalExposure - totalExposure);
+      let count = Math.floor(stake / c);
+      if (best.q.askSize > 0) count = Math.min(count, Math.floor(best.q.askSize));
+      if (count < 1) { ev.note = "size < 1"; continue; }
+      ev.note = `candidate ${best.edge.toFixed(1)}¢`;
+      cands.push({ type: "buy", ticker: mk.ticker, side: best.side, count, limit: best.q.ask, kind: mk.kind,
+                   reason: `edge ${best.edge.toFixed(1)}¢ (fair ${best.fairSide.toFixed(0)}¢ vs ask ${best.q.ask}¢)`,
+                   gameId: g.id, fair: best.fairSide, edge: best.edge, cost: count * c,
+                   takeProfitPrice: Math.min(99, best.q.ask + cfg.takeProfit) });
+    }
+    // At most one new entry per game per tick (the best edge): the ladders are highly correlated,
+    // and "LSU wins YES" and "Tennessee wins NO" are the same bet.
+    if (cands.length) {
+      cands.sort((x, y) => y.edge - x.edge);
+      const pick = cands[0];
+      actions.push(pick);
+      totalExposure += pick.cost; gameExposure[g.id] = (gameExposure[g.id] || 0) + pick.cost;
+      gamePosCount[g.id] = (gamePosCount[g.id] || 0) + 1;
+    }
+    G.proj = proj;
+  }
+  return { actions, evals };
+}
+
+const API = { P, Phi, PhiInv, erf, clamp, median, expectedPoints, clockToSeconds, parseEspnEvent,
+  liveProjection, pHomeWin, pCover, pOver, pregameSim, normName, nameScore, sideForName, matchEventScore,
+  parseKalshiMarket, modelYesProb, mid, marketImplied, blendedProjection, feeCents, DEFAULT_CONFIG,
+  sideQuotes, decide, fitLadder, driveProbs, simRemaining, liveDistribution, teamPoints, mulberry32 };
+if (typeof module !== "undefined" && module.exports) module.exports = API;
+else root.CFB = API;
+})(typeof window !== "undefined" ? window : globalThis);
