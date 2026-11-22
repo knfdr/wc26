@@ -7,6 +7,159 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="js/bets.js"></script>
+<script>
+// ── MLB ↔ Kalshi (plain JS so it can be tested outside the page) ─────────────────
+// Kalshi's MLB markets come in three series that share one event key per game:
+//   KXMLBGAME-26OCT282000MILTB      winner      (one market per team, ticker ends -MIL / -TB)
+//   KXMLBSPREAD-26OCT282000MILTB    "Milwaukee wins by over 1.5 runs"  (ticker ends -MIL2, floor_strike 1.5)
+//   KXMLBTOTAL-26OCT282000MILTB     "Over 8.5 runs scored"             (floor_strike 8.5)
+// The key is YY MMM DD HHMM (Eastern start time) + away code + home code (+ G1/G2 for doubleheaders).
+(function (root) {
+  "use strict";
+  const SERIES = ["KXMLBGAME", "KXMLBSPREAD", "KXMLBTOTAL"];
+  const MON = { JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6, JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12 };
+  const pad = (n) => String(n).padStart(2, "0");
+  // Kalshi sends prices as dollars ("0.5400") on newer replies and whole cents (54) on older ones
+  const cents = (d, c) => d != null && d !== "" ? Math.round(parseFloat(d) * 100) : c != null && c !== "" ? Math.round(+c) : null;
+  const okPrice = (p) => p != null && p > 0 && p < 100;
+
+  function eventKey(evTicker) { const i = String(evTicker || "").indexOf("-"); return i < 0 ? null : evTicker.slice(i + 1); }
+  function parseEventKey(key) {
+    // doubleheaders end in G1 / G2, e.g. 26SEP251305CHCBOSG1
+    const m = /^(\d{2})([A-Z]{3})(\d{2})(\d{2})(\d{2})([A-Z]+?)(?:G(\d))?$/.exec(key || "");
+    if (!m || !MON[m[2]]) return null;
+    return { date: "20" + m[1] + "-" + pad(MON[m[2]]) + "-" + m[3], mins: +m[4] * 60 + +m[5], teams: m[6], gameNo: m[7] ? +m[7] : null };
+  }
+  const dayNum = (iso) => Math.round(Date.parse(iso + "T12:00:00Z") / 86400000);
+
+  // Fetch JSON through the site's Kalshi proxy. Throws when the reply isn't JSON (e.g. the login page or an error page).
+  async function getJSON(url) {
+    const r = await fetch(url);
+    const txt = await r.text();
+    let d; try { d = JSON.parse(txt); } catch (e) { throw new Error("Kalshi reply wasn't JSON (HTTP " + r.status + ")"); }
+    if (!r.ok) throw new Error((d && (d.error && (d.error.message || d.error))) || ("HTTP " + r.status));
+    return d;
+  }
+  async function fetchMarkets(status) {
+    const out = [];
+    for (const s of SERIES) {
+      let cursor = "";
+      for (let page = 0; page < 5; page++) {
+        const d = await getJSON("/api/kx/markets?series_ticker=" + s + "&status=" + (status || "open") + "&limit=1000" + (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""));
+        if (!d || !Array.isArray(d.markets)) throw new Error("Kalshi reply had no market list");
+        out.push(...d.markets);
+        cursor = d.cursor;
+        if (!cursor || !d.markets.length) break;
+      }
+    }
+    return out;
+  }
+  // Group markets by game: Map(eventKey -> { key, info, markets })
+  function indexByEvent(markets) {
+    const idx = new Map();
+    for (const m of markets || []) {
+      const key = eventKey(m.event_ticker); if (!key) continue;
+      if (!idx.has(key)) idx.set(key, { key, info: parseEventKey(key), markets: [] });
+      idx.get(key).markets.push(m);
+    }
+    return idx;
+  }
+  // game: { homeKx, awayKx, etDate "YYYY-MM-DD", etMins }. Same teams, closest date (±1 day) and start time (doubleheaders).
+  function matchGame(game, idx) {
+    let best = null, bestScore = -Infinity;
+    for (const ev of idx.values()) {
+      const inf = ev.info; if (!inf) continue;
+      const order = inf.teams === game.awayKx + game.homeKx ? 2 : inf.teams === game.homeKx + game.awayKx ? 1 : 0;
+      if (!order) continue;
+      const dd = game.etDate ? Math.abs(dayNum(inf.date) - dayNum(game.etDate)) : 0;
+      if (dd > 1) continue;
+      const tm = game.etMins != null ? Math.min(Math.abs(inf.mins - game.etMins), 720) / 720 : 0;
+      const score = order * 10 - dd * 5 - tm * 3;
+      if (score > bestScore) { bestScore = score; best = ev; }
+    }
+    return best;
+  }
+  // Normalize one market: { ticker, kind: win|spread|total, team: home|away (win/spread), line, yesBid, yesAsk, noBid, noAsk }
+  function parseMarket(m, game) {
+    const t = m.ticker || "", series = t.split("-")[0], tail = t.split("-").pop();
+    const yesBid = cents(m.yes_bid_dollars, m.yes_bid), yesAsk = cents(m.yes_ask_dollars, m.yes_ask);
+    const noBid = m.no_bid_dollars != null || m.no_bid != null ? cents(m.no_bid_dollars, m.no_bid) : (yesAsk != null ? 100 - yesAsk : null);
+    const noAsk = m.no_ask_dollars != null || m.no_ask != null ? cents(m.no_ask_dollars, m.no_ask) : (yesBid != null ? 100 - yesBid : null);
+    const base = { ticker: t, title: m.title, sub: m.yes_sub_title, yesBid, yesAsk, noBid, noAsk, result: m.result };
+    const teamOf = (code) => code === game.homeKx ? "home" : code === game.awayKx ? "away" : null;
+    if (series === "KXMLBGAME") { const team = teamOf(tail); return team ? { ...base, kind: "win", team, line: 0 } : null; }
+    if (series === "KXMLBSPREAD") {
+      const team = teamOf(tail.replace(/\d+$/, ""));
+      const mm = String(m.yes_sub_title || m.title || "").match(/over\s+([\d.]+)/i);
+      const line = m.floor_strike != null ? Number(m.floor_strike) : mm ? parseFloat(mm[1]) : null;
+      return team && line != null ? { ...base, kind: "spread", team, line } : null;
+    }
+    if (series === "KXMLBTOTAL") {
+      const mm = String(m.yes_sub_title || m.title || "").match(/over\s+([\d.]+)/i);
+      const line = m.floor_strike != null ? Number(m.floor_strike) : mm ? parseFloat(mm[1]) : null;
+      return line != null ? { ...base, kind: "total", line } : null;
+    }
+    return null;
+  }
+  // Model probabilities from a sim result (needs agg.totalDist / agg.marginDist)
+  function probsFromAgg(agg) {
+    if (!agg || !agg.totalDist || !agg.marginDist) return null;
+    const off = agg.marginOffset;
+    const pHome = agg.hWins / agg.n;
+    return {
+      pHome,
+      pOver: (line) => agg.totalDist.reduce((a, f, k) => a + (k > line ? f : 0), 0),
+      // P(team's margin > line): home margin = home - away
+      pWinBy: (team, line) => agg.marginDist.reduce((a, f, i) => { const hm = i - off; const m = team === "home" ? hm : -hm; return a + (m > line ? f : 0); }, 0),
+    };
+  }
+  function modelYes(mk, pr) {
+    if (mk.kind === "win") return mk.team === "home" ? pr.pHome : 1 - pr.pHome;
+    if (mk.kind === "spread") return pr.pWinBy(mk.team, mk.line);
+    if (mk.kind === "total") return pr.pOver(mk.line);
+    return null;
+  }
+  // Every priced bet for one game. game: { home, away, homeShort, awayShort, homeKx, awayKx }.
+  // Each market: compare YES and NO (winner markets: YES only, since each team has its own), keep the side with the bigger edge.
+  // grade(p, price) comes from SharpBets. opts.hideWide drops markets whose bid/ask gap is over 6¢.
+  function priceGame(game, ev, pr, grade, opts) {
+    opts = opts || {};
+    const rows = [];
+    if (!ev || !pr) return rows;
+    const name = (t) => t === "home" ? game.homeShort : game.awayShort;
+    const full = (t) => t === "home" ? game.home : game.away;
+    const other = (t) => t === "home" ? "away" : "home";
+    for (const m of ev.markets) {
+      const mk = parseMarket(m, game); if (!mk) continue;
+      const pYes = modelYes(mk, pr); if (pYes == null) continue;
+      const sides = [];
+      if (okPrice(mk.yesAsk)) sides.push({ side: "yes", price: mk.yesAsk, p: pYes, gap: mk.yesBid != null ? mk.yesAsk - mk.yesBid : 99 });
+      if (mk.kind !== "win" && okPrice(mk.noAsk)) sides.push({ side: "no", price: mk.noAsk, p: 1 - pYes, gap: mk.noBid != null ? mk.noAsk - mk.noBid : 99 });
+      if (!sides.length) continue;
+      const s = sides.sort((a, b) => (b.p * 100 - b.price) - (a.p * 100 - a.price))[0];
+      if (mk.kind !== "win" && (s.price < 5 || s.price > 95)) continue;   // far-off lines: nothing to learn there
+      const wide = s.gap > 6;
+      if (wide && opts.hideWide) continue;
+      const g = grade(s.p, s.price); if (!g) continue;
+      let label, market, kindLabel;
+      if (mk.kind === "win") { label = name(mk.team) + " to win"; market = full(mk.team) + " ML"; kindLabel = "Winner"; }
+      else if (mk.kind === "spread") {
+        const n = Math.ceil(mk.line);
+        if (s.side === "yes") { label = name(mk.team) + " win by " + n + "+ (−" + mk.line + ")"; market = full(mk.team) + " -" + mk.line; }
+        else { label = name(other(mk.team)) + " +" + mk.line + " (" + name(mk.team) + " don't win by " + n + "+)"; market = full(other(mk.team)) + " +" + mk.line; }
+        kindLabel = "Run line";
+      } else {
+        label = (s.side === "yes" ? "Over " : "Under ") + mk.line + " runs"; market = (s.side === "yes" ? "Over " : "Under ") + mk.line + " Total"; kindLabel = "Total runs";
+      }
+      rows.push({ ticker: mk.ticker, side: s.side, price: s.price, chance: s.p * 100, edge: g.edge, g, wide, kind: mk.kind, kindLabel, line: mk.line, label, market,
+        sub: "Kalshi " + mk.ticker + " · buy " + s.side.toUpperCase() + " at " + s.price + "¢" });
+    }
+    return rows;
+  }
+  root.MLBKX = { SERIES, cents, eventKey, parseEventKey, getJSON, fetchMarkets, indexByEvent, matchGame, parseMarket, probsFromAgg, modelYes, priceGame };
+})(typeof window !== "undefined" ? window : globalThis);
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
@@ -395,6 +548,14 @@ function aggregateMLB(homeTeam, awayTeam, results, hp, ap, n) {
 
   const [mls] = Object.entries(scoreFreq).sort((a,b)=>b[1]-a[1])[0];
 
+  // Full run distributions so any Kalshi line (total over X, team wins by over X) can be priced
+  const MAX_TOTAL = 40, MARGIN_OFF = 30;
+  const totalDist = new Array(MAX_TOTAL + 1).fill(0), marginDist = new Array(2 * MARGIN_OFF + 1).fill(0);
+  results.forEach(r => {
+    totalDist[Math.min(r.total, MAX_TOTAL)] += 1 / n;
+    marginDist[Math.max(0, Math.min(2 * MARGIN_OFF, r.homeRuns - r.awayRuns + MARGIN_OFF))] += 1 / n;
+  });
+
   // Shutout / combined shutout
   const homeShutout = results.filter(r=>r.awayRuns===0).length;
   const awayShutout = results.filter(r=>r.homeRuns===0).length;
@@ -419,12 +580,17 @@ function aggregateMLB(homeTeam, awayTeam, results, hp, ap, n) {
     homeShutoutPct: fmt((homeShutout/n)*100,1),
     awayShutoutPct: fmt((awayShutout/n)*100,1),
     topScores,
+    totalDist, marginDist, marginOffset: MARGIN_OFF,
   };
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
-// ODDS API FETCH
+// SCHEDULE — ESPN's free scoreboard (today's games, Eastern date)
 // ════════════════════════════════════════════════════════════════════════════════
+const SB = window.SharpBets;
+const KX = window.MLBKX;
+const { GradeBadge, GradeLegend, BetButton, SortTh, sortRows, RecordCard } = SB;
+
 function formatAge(ts) {
   const mins = Math.floor((Date.now() - ts) / 60000);
   if (mins < 1) return "just now";
@@ -433,414 +599,120 @@ function formatAge(ts) {
   return hrs + "h " + (mins % 60) + "m ago";
 }
 
-const ODDS_CACHE_KEY = "sharp_odds_cache";
-const ODDS_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
-
-async function fetchMLBGames({ force = false } = {}) {
-  if (!force) {
-    try {
-      const cached = JSON.parse(localStorage.getItem(ODDS_CACHE_KEY) || "null");
-      if (cached && Date.now() - cached.ts < ODDS_CACHE_TTL) return cached.data;
-    } catch(e) {}
-  }
-  const url = "/api/odds?sport=baseball_mlb&markets=h2h,spreads,totals&bookmakers=fanduel,draftkings";
-  const res = await fetch(url);
-  if (!res.ok) throw new Error("API error: " + res.status);
-  const data = await res.json();
-  localStorage.setItem(ODDS_CACHE_KEY, JSON.stringify({ ts: Date.now(), data }));
-  return data;
-}
-
-// Odds API sometimes uses non-standard or city-less team names
-const TEAM_NAME_MAP = {
-  "Athletics": "Oakland Athletics",
-  "Cleveland Guardians": "Cleveland Guardians",
+// Team codes where ESPN or Kalshi differ from the model's abbreviation
+const CODE_FIX = {
+  "Arizona Diamondbacks": { kx:"AZ" },
+  "Chicago White Sox":    { espn:"CHW" },
+  "Oakland Athletics":    { espn:"ATH", kx:"ATH", short:"A's" },
 };
-function normalizeTeamName(name) {
-  return TEAM_NAME_MAP[name] || name;
+const kxCode = (team) => (CODE_FIX[team] && CODE_FIX[team].kx) || (TEAM_PARAMS[team] && TEAM_PARAMS[team].abbr);
+const ESPN_TO_TEAM = {};
+TEAM_NAMES.forEach(t => { ESPN_TO_TEAM[(CODE_FIX[t] && CODE_FIX[t].espn) || TEAM_PARAMS[t].abbr] = t; });
+
+const ET = "America/New_York";
+const etDateOf = (d) => new Date(d).toLocaleDateString("en-CA", { timeZone: ET });
+function etMinsOf(d) {
+  const p = new Intl.DateTimeFormat("en-US", { timeZone: ET, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(d));
+  const v = (k) => +(p.find(x => x.type === k) || {}).value;
+  return v("hour") * 60 + v("minute");
 }
 
-function parseOddsGame(game) {
-  // Find best available odds from FanDuel then DraftKings
-  const books = game.bookmakers || [];
-  const fd = books.find(b=>b.key==="fanduel") || books[0];
-  if (!fd) return null;
-
-  let h2h = {}, spread = {}, total = {};
-  (fd.markets||[]).forEach(m => {
-    if (m.key === "h2h") {
-      m.outcomes.forEach(o => {
-        if (o.name === game.home_team) h2h.home = o.price;
-        else h2h.away = o.price;
-      });
-    }
-    if (m.key === "spreads") {
-      m.outcomes.forEach(o => {
-        if (o.name === game.home_team) { spread.homePoint = o.point; spread.homePrice = o.price; }
-        else { spread.awayPoint = o.point; spread.awayPrice = o.price; }
-      });
-    }
-    if (m.key === "totals") {
-      m.outcomes.forEach(o => {
-        if (o.name === "Over") { total.line = o.point; total.overPrice = o.price; }
-        else total.underPrice = o.price;
-      });
-    }
-  });
-
-  return {
-    id: game.id,
-    homeTeam: normalizeTeamName(game.home_team),
-    awayTeam: normalizeTeamName(game.away_team),
-    commenceTime: game.commence_time,
-    h2h, spread, total,
-  };
-}
-
-function fmtOdds(n) {
-  if (!n) return "—";
-  return n > 0 ? "+"+n : ""+n;
-}
-
-function impliedProb(ml) {
-  if (!ml) return 0;
-  if (ml < 0) return (-ml)/(-ml+100)*100;
-  return 100/(ml+100)*100;
-}
-// ════════════════════════════════════════════════════════════════════════════════
-// SHARED BET TRACKING ENGINE
-// Gist ID: 8a76d2b09c709882e4364528a0152ccc
-// Token + OddsKey stored in localStorage only, never in source
-// ════════════════════════════════════════════════════════════════════════════════
-const GIST_ID = "8a76d2b09c709882e4364528a0152ccc";
-const GIST_FILENAME = "sharpsim_bets.json";
-
-// Unit sizing: LOCK=2u, HIGH=1.5u, LEAN=1u
-function tierToUnits(tier) {
-  if (tier === "LOCK") return 2.0;
-  if (tier === "HIGH") return 1.5;
-  return 1.0;
-}
-function kellyUnits(simPctStr, bookOddsStr, tier) {
-  const p = parseFloat(simPctStr) / 100;
-  const oddsNum = parseFloat((bookOddsStr || "").replace(/^~/, ""));
-  if (!isNaN(oddsNum) && oddsNum !== 0) {
-    const b = oddsNum > 0 ? oddsNum / 100 : 100 / Math.abs(oddsNum);
-    const kelly = (b * p - (1 - p)) / b;
-    if (kelly > 0) return parseFloat(Math.min(3, kelly * 15).toFixed(1));
-  }
-  return tierToUnits(tier);
-}
-
-function tierColor(tier, T) {
-  if (tier === "LOCK") return T.red;
-  if (tier === "HIGH") return T.green;
-  return T.gold;
-}
-function simPctToFairOdds(simPctStr) {
-  const p = parseFloat(simPctStr) / 100;
-  if (!p || p <= 0 || p >= 1) return "—";
-  if (p >= 0.5) return "-" + Math.round(p / (1 - p) * 100);
-  return "+" + Math.round((1 - p) / p * 100);
-}
-function bookOddsToImplied(oddsStr) {
-  if (!oddsStr) return null;
-  const cleaned = oddsStr.replace(/^~/, "").trim();
-  const n = parseFloat(cleaned);
-  if (isNaN(n)) return null;
-  return n < 0 ? (-n) / (-n + 100) * 100 : 100 / (n + 100) * 100;
-}
-function calcEdge(simPctStr, bookOddsStr) {
-  const modelPct = parseFloat(simPctStr);
-  const bookImplied = bookOddsToImplied(bookOddsStr);
-  if (isNaN(modelPct) || bookImplied === null) return null;
-  return modelPct - bookImplied;
-}
-
-// ── Gist read/write ──────────────────────────────────────────────────────────
-async function gistRead() {
-  const res = await fetch("/api/gist");
-  if (!res.ok) throw new Error("Gist read failed: " + res.status);
+async function fetchMLBGames() {
+  const today = etDateOf(Date.now());
+  const res = await fetch("https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=" + today.replace(/-/g, ""));
+  if (!res.ok) throw new Error("ESPN schedule error: " + res.status);
   const data = await res.json();
-  const content = data.files[GIST_FILENAME] && data.files[GIST_FILENAME].content;
-  try { return JSON.parse(content || "[]"); } catch { return []; }
-}
-
-async function gistWrite(bets) {
-  const res = await fetch("/api/gist", {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ files: { [GIST_FILENAME]: { content: JSON.stringify(bets, null, 2) } } })
-  });
-  if (!res.ok) throw new Error("Gist write failed: " + res.status);
-  return true;
-}
-
-// ── Stats calculator ──────────────────────────────────────────────────────────
-function calcStats(bets) {
-  const resolved = bets.filter(b => b.result !== "pending");
-  const wins = resolved.filter(b => b.result === "win");
-  const losses = resolved.filter(b => b.result === "loss");
-  const pushes = resolved.filter(b => b.result === "push");
-  const totalUnits = resolved.reduce((a, b) => a + (b.result === "win" ? b.units : b.result === "loss" ? -b.units : 0), 0);
-
-  const bySport = {};
-  const bySportTier = {};
-  resolved.forEach(b => {
-    if (!bySport[b.sport]) bySport[b.sport] = { wins:0, losses:0, pushes:0, units:0 };
-    bySport[b.sport].units += b.result === "win" ? b.units : b.result === "loss" ? -b.units : 0;
-    if (b.result === "win") bySport[b.sport].wins++;
-    else if (b.result === "loss") bySport[b.sport].losses++;
-    else bySport[b.sport].pushes++;
-    const tier = b.tier || "OTHER";
-    if (!bySportTier[b.sport]) bySportTier[b.sport] = {};
-    if (!bySportTier[b.sport][tier]) bySportTier[b.sport][tier] = { wins:0, losses:0, pushes:0, units:0 };
-    bySportTier[b.sport][tier].units += b.result === "win" ? b.units : b.result === "loss" ? -b.units : 0;
-    if (b.result === "win") bySportTier[b.sport][tier].wins++;
-    else if (b.result === "loss") bySportTier[b.sport][tier].losses++;
-    else bySportTier[b.sport][tier].pushes++;
-  });
-
-  return {
-    total: resolved.length, wins: wins.length, losses: losses.length, pushes: pushes.length,
-    winPct: resolved.length ? ((wins.length / (resolved.length - pushes.length)) * 100).toFixed(1) : "—",
-    totalUnits: totalUnits.toFixed(1),
-    pending: bets.filter(b => b.result === "pending").length,
-    bySport, bySportTier,
-  };
-}
-
-// ── Extract top bets from sim agg ─────────────────────────────────────────────
-function extractTopBets(agg, game, sport) {
-  const bets = [];
-  const gameId = game ? game.id : (agg.homeTeam + "|" + agg.awayTeam);
-  const homeTeam = agg.homeTeam || game.homeTeam;
-  const awayTeam = agg.awayTeam || game.awayTeam;
-
-  function push(market, simPct, bookOdds, tier) {
-    bets.push({
-      id: Date.now() + "_" + Math.random().toString(36).slice(2,7),
-      sport, gameId,
-      homeTeam, awayTeam,
-      market, simPct, bookOdds,
-      tier, units: kellyUnits(simPct, bookOdds, tier),
-      loggedAt: new Date().toISOString(),
-      result: "pending",
-      resolvedAt: null, finalScore: null,
-      gameDate: new Date().toLocaleDateString("en-CA"),
-    });
-  }
-
-  if (sport === "MLB" && agg) {
-    const hasOdds = game && game.h2h && game.h2h.home;
-    const hImp = hasOdds ? impliedProb(game.h2h.home) : 0;
-    const aImp = hasOdds ? impliedProb(game.h2h.away) : 0;
-
-    const checks = [
-      { market: homeTeam+" ML", pct: parseFloat(agg.hWPct), imp: hImp, odds: hasOdds?fmtOdds(game.h2h.home):"—" },
-      { market: awayTeam+" ML", pct: parseFloat(agg.aWPct), imp: aImp, odds: hasOdds?fmtOdds(game.h2h.away):"—" },
-      { market: "Over 8.5 Total", pct: parseFloat(agg.over85Pct), imp: 0, odds: hasOdds?fmtOdds(game.total.overPrice):"—" },
-      { market: "Under 8.5 Total", pct: parseFloat(agg.under85Pct), imp: 0, odds: hasOdds?fmtOdds(game.total.underPrice):"—" },
-    ];
-
-    checks.forEach(({ market, pct, imp, odds }) => {
-      if (pct >= 70) push(market, pct.toFixed(1)+"%", odds, "LOCK");
-      else if (pct >= 60) push(market, pct.toFixed(1)+"%", odds, "HIGH");
-      else if (pct > 52 && pct > imp + 3) push(market, pct.toFixed(1)+"%", odds, "LEAN");
-    });
-  }
-
-  if (sport === "WC" && agg) {
-    const checks = [
-      { market: homeTeam+" Win", pct: parseFloat(agg.hWPct), odds: "ML" },
-      { market: awayTeam+" Win", pct: parseFloat(agg.aWPct), odds: "ML" },
-      { market: "Over "+agg.overUnderLine+" Goals", pct: parseFloat(agg.overPct), odds: agg.overOdds||"—" },
-      { market: "Under "+agg.overUnderLine+" Goals", pct: parseFloat(agg.underPct), odds: agg.underOdds||"—" },
-      { market: homeTeam+" Clean Sheet", pct: parseFloat(agg.csPct), odds:"~Market" },
-      { market: "1H Over 0.5 Goals", pct: parseFloat(agg.h1Over05Pct), odds:"~-180" },
-      { market: homeTeam+" HT Win", pct: parseFloat(agg.ht_hWPct), odds:"~HT 1X2" },
-      { market: "Over 8.5 Corners", pct: parseFloat(agg.cOver85Pct), odds:"~-115" },
-      { market: homeTeam+" 1H -0.5 Spread", pct: parseFloat(agg.hSpread1HPct), odds:"~-120" },
-    ];
-    checks.forEach(({ market, pct, odds }) => {
-      if (pct >= 85) push(market, pct.toFixed(1)+"%", odds, "LOCK");
-      else if (pct >= 70) push(market, pct.toFixed(1)+"%", odds, "HIGH");
-      else if (pct > 52) push(market, pct.toFixed(1)+"%", odds, "LEAN");
-    });
-  }
-
-  // Sort by simPct desc, then dedupe by market
-  return bets.sort((a,b) => parseFloat(b.simPct) - parseFloat(a.simPct));
+  return (data.events || []).map(e => {
+    const c = (e.competitions || [])[0] || {};
+    const side = (ha) => (c.competitors || []).find(x => x.homeAway === ha) || {};
+    const h = side("home"), a = side("away");
+    const ht = h.team || {}, at = a.team || {};
+    const homeTeam = ESPN_TO_TEAM[ht.abbreviation] || ht.displayName, awayTeam = ESPN_TO_TEAM[at.abbreviation] || at.displayName;
+    const shortOf = (team, espnTeam) => (CODE_FIX[team] && CODE_FIX[team].short) || espnTeam.name || team;
+    return {
+      id: e.id, homeTeam, awayTeam, commenceTime: e.date,
+      state: (e.status && e.status.type && e.status.type.state) || "pre",
+      statusText: (e.status && e.status.type && e.status.type.shortDetail) || "",
+      // for Kalshi matching / labels
+      home: homeTeam, away: awayTeam, homeShort: shortOf(homeTeam, ht), awayShort: shortOf(awayTeam, at),
+      homeKx: kxCode(homeTeam), awayKx: kxCode(awayTeam), etDate: etDateOf(e.date), etMins: etMinsOf(e.date),
+    };
+  }).filter(g => g.state !== "post");
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
-// SHARED BET TRACKING UI COMPONENTS
+// KALSHI PRICES → GRADED BETS
 // ════════════════════════════════════════════════════════════════════════════════
+// kx: { status: "loading"|"ok"|"down", idx, ts, error }
+function gamePicks(game, agg, kx, settings) {
+  if (!kx || kx.status !== "ok" || !agg) return { ev: null, rows: [] };
+  const ev = KX.matchGame(game, kx.idx);
+  const pr = KX.probsFromAgg(agg);
+  const rows = KX.priceGame(game, ev, pr, (p, price) => SB.grade(p, price, settings), { hideWide: settings.hideWide })
+    .map(r => ({ ...r, stake: SB.stake(r.g, "mlb", settings), gameId: game.id, gameDate: game.etDate, game, matchup: game.awayShort + " @ " + game.homeShort }));
+  return { ev, rows };
+}
+const gradeSortGet = (r, k) => k === "grade" ? -r.g.rank : k === "game" ? r.matchup : r[k];
+const betPick = (r) => ({ ticker: r.ticker, side: r.side, price: r.price, chance: r.chance, label: r.label, sub: r.matchup + " · " + r.sub, sport: "mlb", grade: r.g });
 
-// Top Bets Card — used on both game tabs and top-picks tab
-function TopBetCard({ bet, logged, T, S }) {
-  const tc = tierColor(bet.tier, T);
-  const fairOdds = simPctToFairOdds(bet.simPct);
-  const edge = calcEdge(bet.simPct, bet.bookOdds);
-  const edgeColor = edge === null ? T.muted : edge >= 5 ? T.green : edge >= 0 ? T.gold : T.red;
+function KalshiNote({ kx, ev, hasAgg, color }) {
+  let msg = null;
+  if (!kx || kx.status === "loading") msg = "Loading Kalshi prices…";
+  else if (kx.status === "down") msg = "Kalshi prices couldn't be loaded" + (kx.error ? " (" + kx.error + ")" : "") + ". Model chances are shown without grades. Try ↻ Refresh.";
+  else if (!ev) msg = "No Kalshi markets open for this game.";
+  else if (!hasAgg) msg = "Running the simulation…";
+  if (!msg) return null;
+  return <div style={{ ...S.card, fontSize:10, color:color || T.muted, lineHeight:1.6 }}>{msg}</div>;
+}
+
+// Sortable table of graded Kalshi bets (one game, or the whole slate when showGame)
+function PicksTable({ rows, showGame }) {
+  const [sort, setSort] = useState({ k:"edge", dir:-1 });
+  const sorted = sortRows(rows, sort, gradeSortGet);
+  const td = { ...S.td, fontSize:11, verticalAlign:"middle" };
   return (
-    <div style={{ ...S.card, borderLeft:"3px solid "+tc, marginBottom:8 }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:6 }}>
-        <div>
-          <div style={{ fontSize:9, color:T.muted, marginBottom:3 }}>{bet.homeTeam} vs {bet.awayTeam}</div>
-          <div style={{ fontSize:13, fontWeight:700, color:T.text }}>{bet.market}</div>
-          <div style={{ display:"flex", gap:12, marginTop:6, flexWrap:"wrap", alignItems:"center" }}>
-            <div>
-              <div style={{ fontSize:"7px", color:T.muted, letterSpacing:"0.5px", marginBottom:1 }}>MODEL HIT %</div>
-              <span style={{ fontSize:12, color:tc, fontWeight:700 }}>{bet.simPct}</span>
-            </div>
-            <div>
-              <div style={{ fontSize:"7px", color:T.muted, letterSpacing:"0.5px", marginBottom:1 }}>FAIR ODDS</div>
-              <span style={{ fontSize:11, color:T.text, fontWeight:600 }}>{fairOdds}</span>
-            </div>
-            <div>
-              <div style={{ fontSize:"7px", color:T.muted, letterSpacing:"0.5px", marginBottom:1 }}>BOOK ODDS</div>
-              <span style={{ fontSize:11, color:T.muted }}>{bet.bookOdds}</span>
-            </div>
-            <div>
-              <div style={{ fontSize:"7px", color:T.muted, letterSpacing:"0.5px", marginBottom:1 }}>EDGE</div>
-              <span style={{ fontSize:11, color:edgeColor, fontWeight:700 }}>
-                {edge === null ? "—" : (edge >= 0 ? "+" : "") + edge.toFixed(1) + " pts"}
-              </span>
-            </div>
-            <span style={{ background:T.purple+"1a", border:"1px solid "+T.purple+"33", color:T.purple, fontSize:"8px", padding:"2px 6px", borderRadius:2 }}>{bet.units}u</span>
-          </div>
-        </div>
-        <div style={{ background:logged?T.green+"22":"#1a2a3e", border:"1px solid "+(logged?T.green:T.border), color:logged?T.green:T.muted, borderRadius:4, padding:"5px 10px", fontSize:9, fontWeight:700, letterSpacing:"1px", whiteSpace:"nowrap" }}>
-          {logged ? "✓ LOGGED" : "PENDING"}
-        </div>
-      </div>
+    <div style={{ ...S.card, padding:0, overflowX:"auto" }}>
+      <table style={{ ...S.table, minWidth:showGame ? 640 : 560 }}>
+        <thead><tr>
+          <SortTh k="grade" sort={sort} setSort={setSort}>Grade</SortTh>
+          {showGame && <SortTh k="game" sort={sort} setSort={setSort}>Game</SortTh>}
+          <SortTh sort={sort} setSort={setSort}>Bet</SortTh>
+          <SortTh k="chance" sort={sort} setSort={setSort}>Chance to cash</SortTh>
+          <SortTh k="price" sort={sort} setSort={setSort}>Price</SortTh>
+          <SortTh k="edge" sort={sort} setSort={setSort}>Edge</SortTh>
+          <SortTh k="stake" sort={sort} setSort={setSort}>Suggested</SortTh>
+          <SortTh sort={sort} setSort={setSort}></SortTh>
+        </tr></thead>
+        <tbody>
+          {sorted.map(r => (
+            <tr key={r.ticker + r.side}>
+              <td style={td}><GradeBadge g={r.g} small/></td>
+              {showGame && <td style={{ ...td, color:T.muted, fontSize:10, whiteSpace:"nowrap" }}>{r.matchup}</td>}
+              <td style={td}>
+                <div style={{ fontWeight:700 }}>{r.label}</div>
+                <div style={{ fontSize:9, color:T.muted }}>{r.kindLabel}{r.wide ? " · wide bid/ask, price may not be real" : ""}</div>
+              </td>
+              <td style={{ ...td, color:r.g.color, fontWeight:700, whiteSpace:"nowrap" }}>model: {r.chance.toFixed(0)}%</td>
+              <td style={{ ...td, whiteSpace:"nowrap" }}>{r.price}¢</td>
+              <td style={{ ...td, color:r.edge >= 0 ? T.green : T.red, whiteSpace:"nowrap" }}>{(r.edge >= 0 ? "+" : "") + r.edge.toFixed(1)}¢</td>
+              <td style={{ ...td, whiteSpace:"nowrap" }}>{r.stake ? SB.money(r.stake) : "—"}</td>
+              <td style={{ ...td, textAlign:"right" }}>{r.g.edge > 0 && <BetButton pick={betPick(r)} compact/>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-// Bet History Row
-function BetHistoryRow({ bet, T, S }) {
-  const rc = bet.result === "win" ? T.green : bet.result === "loss" ? T.red : bet.result === "push" ? T.muted : T.yellow;
-  const tc = tierColor(bet.tier, T);
+// Model chances for bets Kalshi doesn't list (or when its prices are missing). No grade without a price.
+function ModelOnlyRow({ market, pct }) {
   return (
-    <div style={{ ...S.betRow, flexWrap:"wrap" }}>
-      <div style={{ minWidth:120, fontSize:9, color:T.muted }}>{bet.gameDate} · {bet.sport}</div>
-      <div style={{ flex:2, fontSize:10, color:T.text }}>{bet.market}</div>
-      <div style={{ fontSize:9, color:T.muted, flex:1 }}>{bet.homeTeam} vs {bet.awayTeam}</div>
-      <div style={{ fontSize:9, color:tc }}>{bet.tier} · {bet.units}u</div>
-      <div style={{ fontSize:10, color:T.muted }}>{bet.simPct} <span style={{ fontSize:8, color:T.muted, opacity:0.6 }}>fair {simPctToFairOdds(bet.simPct)}</span></div>
-      <div style={{ minWidth:50, textAlign:"right" }}>
-        <span style={{ background:rc+"22", border:"1px solid "+rc+"44", color:rc, fontSize:"8px", fontWeight:700, padding:"2px 6px", borderRadius:2 }}>
-          {bet.result === "pending" ? "PENDING" : bet.result === "win" ? "WIN" : bet.result === "loss" ? "LOSS" : "PUSH"}
-        </span>
-      </div>
-      {(bet.resolvedValue || bet.finalScore) && <div style={{ fontSize:9, color:T.muted, width:"100%", marginTop:3 }}>{bet.resolvedValue || ("Final: " + bet.finalScore)}</div>}
+    <div style={S.betRow}>
+      <span style={{ color:T.muted, fontSize:10 }}>{market}</span>
+      <span style={{ fontSize:11 }}>model: <b>{pct}%</b> chance</span>
     </div>
   );
-}
-
-// Stats Banner — used on homepage and sport pages
-const TIER_ORDER = ["LOCK","HIGH","LEAN","CONSIDER","OTHER"];
-const TIER_COLORS = { LOCK:"#ef4444", HIGH:"#22c55e", LEAN:"#e8c547", CONSIDER:"#f97316", OTHER:"#4b6280" };
-
-function StatsBanner({ stats, T, S }) {
-  if (!stats || stats.total === 0) return null;
-  const unitColor = parseFloat(stats.totalUnits) >= 0 ? T.green : T.red;
-  return (
-    <div style={{ background:T.navy, border:"1px solid "+T.border, borderRadius:6, padding:"12px 16px", marginBottom:16 }}>
-      <div style={{ display:"flex", gap:20, flexWrap:"wrap", alignItems:"center" }}>
-        <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Win %</div><div style={{ fontSize:20, fontWeight:700, color:T.green }}>{stats.winPct}%</div></div>
-        <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Record</div><div style={{ fontSize:14, fontWeight:700 }}><span style={{ color:T.green }}>{stats.wins}W</span>-<span style={{ color:T.red }}>{stats.losses}L</span>-<span style={{ color:T.muted }}>{stats.pushes}P</span></div></div>
-        <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Units</div><div style={{ fontSize:20, fontWeight:700, color:unitColor }}>{parseFloat(stats.totalUnits)>=0?"+":""}{stats.totalUnits}u</div><div style={{ fontSize:"8px", color:T.muted }}>1u = $10</div></div>
-        <div><div style={{ fontSize:"8px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase" }}>Pending</div><div style={{ fontSize:14, fontWeight:700, color:T.yellow }}>{stats.pending}</div></div>
-      </div>
-      {Object.entries(stats.bySportTier||{}).map(([sport, tiers]) => {
-        const sp = stats.bySport[sport];
-        const spUc = sp.units >= 0 ? T.green : T.red;
-        const sportTiers = TIER_ORDER.filter(t => tiers[t]);
-        return (
-          <div key={sport} style={{ marginTop:10, paddingTop:10, borderTop:"1px solid "+T.border, display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-            <div style={{ minWidth:52 }}>
-              <div style={{ fontSize:"8px", color:T.muted, letterSpacing:"1px", textTransform:"uppercase", marginBottom:2 }}>{sport}</div>
-              <span style={{ fontSize:11, fontWeight:700 }}><span style={{ color:T.green }}>{sp.wins}W</span>-<span style={{ color:T.red }}>{sp.losses}L</span></span>
-              <span style={{ fontSize:9, color:spUc, marginLeft:5 }}>{sp.units>=0?"+":""}{sp.units.toFixed(1)}u</span>
-            </div>
-            {sportTiers.map(tier => {
-              const s = tiers[tier]; const tc = TIER_COLORS[tier];
-              const wpct = (s.wins+s.losses) > 0 ? ((s.wins/(s.wins+s.losses))*100).toFixed(0) : "—";
-              return (
-                <div key={tier} style={{ display:"flex", alignItems:"center", gap:5 }}>
-                  <span style={{ background:tc+"22", border:"1px solid "+tc+"44", color:tc, fontSize:"7px", fontWeight:700, padding:"1px 5px", borderRadius:2, letterSpacing:"1px" }}>{tier}</span>
-                  <span style={{ fontSize:11, fontWeight:700 }}><span style={{ color:T.green }}>{s.wins}W</span>-<span style={{ color:T.red }}>{s.losses}L</span>{s.pushes>0&&<span style={{ color:T.muted }}>-{s.pushes}P</span>}</span>
-                  <span style={{ fontSize:9, color:T.muted }}>{wpct}{wpct!=="—"?"%":""}</span>
-                  <span style={{ fontSize:9, color:s.units>=0?T.green:T.red }}>{s.units>=0?"+":""}{s.units.toFixed(1)}u</span>
-                </div>
-              );
-            })}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// Bet Logger Hook — manages gist read/write and local state
-function useBetLogger() {
-  const [bets, setBets] = useState([]);
-  const [saving, setSaving] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    gistRead().then(data => {
-      setBets(data);
-      setLoaded(true);
-    }).catch(e => {
-      console.error("Gist read error:", e);
-      setLoaded(true);
-    });
-  }, []);
-
-  async function logBet(bet) {
-    setSaving(true);
-    const updated = [...bets, bet];
-    setBets(updated);
-    try { await gistWrite(updated); } catch(e) { console.error(e); }
-    setSaving(false);
-  }
-
-  // Log multiple bets at once, deduping by gameDate+gameId+market (any result status)
-  async function logAllBets(newBets) {
-    if (!newBets.length) return;
-    setSaving(true);
-    const today = new Date().toLocaleDateString("en-CA");
-    const existingKeys = new Set(
-      bets
-        .filter(b => b.gameDate === today)
-        .map(b => b.gameId + "|" + b.market)
-    );
-    const toAdd = newBets.filter(b => !existingKeys.has(b.gameId + "|" + b.market));
-    if (!toAdd.length) { setSaving(false); return; }
-    const updated = [...bets, ...toAdd];
-    setBets(updated);
-    try { await gistWrite(updated); } catch(e) { console.error(e); }
-    setSaving(false);
-  }
-
-  async function removeBet(id) {
-    const updated = bets.filter(b => b.id !== id);
-    setBets(updated);
-    try { await gistWrite(updated); } catch(e) { console.error(e); }
-  }
-
-  const stats = calcStats(bets);
-  const today = new Date().toISOString().slice(0,10);
-  const isLogged = (gameId, market) =>
-    bets.some(b => b.gameId === gameId && b.market === market && b.gameDate === today && b.result === "pending");
-  const countLogged = (gameId) =>
-    bets.filter(b => b.gameId === gameId && b.gameDate === today && b.result === "pending").length;
-
-  return { bets, stats, logBet, logAllBets, removeBet, saving, loaded, isLogged, countLogged };
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -856,40 +728,13 @@ function StatCard({ label, value, sub, color }) {
   );
 }
 
-function BetRow({ market, simPct, bookOdds, signal }) {
-  const sc = signal==="LEAN"?T.gold:signal==="PASS"?T.muted:signal==="CONSIDER"?"#f97316":signal==="LOCK"?T.red:signal==="HIGH"?T.green:T.muted;
-  return (
-    <div style={S.betRow}>
-      <span style={{ color:T.muted, minWidth:160, fontSize:10 }}>{market}</span>
-      <span style={{ flex:1, textAlign:"center", fontSize:11 }}>{simPct}</span>
-      <span style={{ color:T.muted, flex:1, textAlign:"center", fontSize:10 }}>{bookOdds}</span>
-      <span style={S.pill(sc)}>{signal}</span>
-    </div>
-  );
-}
-
-function signal(simPct, impliedPct, lockThresh=70, highThresh=60, leanThresh=52) {
-  const s = parseFloat(simPct);
-  if (s >= lockThresh) return "LOCK";
-  if (s >= highThresh) return "HIGH";
-  if (s > leanThresh && (impliedPct===0 || s > impliedPct + 3)) return "LEAN";
-  return "PASS";
-}
-
-// ════════════════════════════════════════════════════════════════════════════════
-// API KEY GATE
-// ════════════════════════════════════════════════════════════════════════════════
 // ════════════════════════════════════════════════════════════════════════════════
 // GAME SIM VIEW
 // ════════════════════════════════════════════════════════════════════════════════
-function GameSimView({ game, agg, running, onRun, runCount, betLogger }) {
-  const hasOdds = game && game.h2h && game.h2h.home;
-
-  const hImplied = hasOdds ? impliedProb(game.h2h.home) : 0;
-  const aImplied = hasOdds ? impliedProb(game.h2h.away) : 0;
-  const totalLine = hasOdds && game.total.line ? game.total.line : 8.5;
-
+function GameSimView({ game, agg, running, onRun, runCount, kx, settings }) {
   const commenceStr = game ? new Date(game.commenceTime).toLocaleString("en-US",{weekday:"short",month:"short",day:"numeric",hour:"numeric",minute:"2-digit",timeZoneName:"short"}) : "";
+  const { ev, rows } = gamePicks(game, agg, kx, settings);
+  const best = rows.filter(r => r.g.key === "STRONG" || r.g.key === "GOOD").sort((a,b) => b.edge - a.edge);
 
   return (
     <div>
@@ -901,7 +746,7 @@ function GameSimView({ game, agg, running, onRun, runCount, betLogger }) {
           <span style={S.vs}>@</span>
           <span>{game ? game.homeTeam : "—"}</span>
         </div>
-        <div style={S.meta}>{commenceStr || "Select a game"}</div>
+        <div style={S.meta}>{commenceStr || "Select a game"}{game && game.state === "in" ? " · LIVE " + game.statusText : ""}</div>
         <div style={S.modelTag(T.green)}>MARKOV CHAIN + FIP/xFIP + wRC+ + PARK FACTORS · 100,000 ITERATIONS</div>
       </div>
 
@@ -910,43 +755,38 @@ function GameSimView({ game, agg, running, onRun, runCount, betLogger }) {
           {running ? "⟳ Running Markov Chain (100,000 iterations)..." : ("↻ Re-Run Simulation" + (runCount > 0 ? " (Run #"+runCount+")" : ""))}
         </button>}
 
-        {/* Live odds strip */}
-        {hasOdds && (
-          <div style={{ ...S.sec }}>
-            <div style={S.secLabel}>Live Odds (The Odds API · FanDuel)</div>
-            <div style={S.g3}>
-              <div style={S.card}>
-                <div style={S.sL}>{game.awayTeam} ML</div>
-                <div style={{ ...S.sV, color:T.blue, fontSize:20 }}>{fmtOdds(game.h2h.away)}</div>
-                <div style={S.sSub}>Implied: {aImplied.toFixed(1)}%</div>
-              </div>
-              <div style={S.card}>
-                <div style={S.sL}>{game.homeTeam} ML</div>
-                <div style={{ ...S.sV, color:T.green, fontSize:20 }}>{fmtOdds(game.h2h.home)}</div>
-                <div style={S.sSub}>Implied: {hImplied.toFixed(1)}%</div>
-              </div>
-              <div style={S.card}>
-                <div style={S.sL}>Total O/U</div>
-                <div style={{ ...S.sV, color:T.gold, fontSize:20 }}>{game.total.line || "—"}</div>
-                <div style={S.sSub}>
-                  O {fmtOdds(game.total.overPrice)} · U {fmtOdds(game.total.underPrice)}
+        {/* Best bets for this game */}
+        {best.length > 0 && (
+          <div style={S.sec}>
+            <div style={S.secLabel}>Best bets this game</div>
+            {best.slice(0, 3).map(r => (
+              <div key={r.ticker + r.side} style={{ ...S.card, borderLeft:"3px solid "+r.g.color, marginBottom:8, display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                <div>
+                  <div style={{ marginBottom:4 }}><GradeBadge g={r.g}/></div>
+                  <div style={{ fontSize:13, fontWeight:700 }}>{r.label}</div>
+                  <div style={{ fontSize:11, marginTop:3 }}><b style={{ color:r.g.color }}>model: {r.chance.toFixed(0)}% chance to cash</b></div>
+                  <div style={{ fontSize:10, color:T.muted, marginTop:2 }}>costs {r.price}¢ · edge {(r.edge >= 0 ? "+" : "") + r.edge.toFixed(1)}¢{r.g.longShot ? " · long shot" : ""}</div>
                 </div>
+                <BetButton pick={betPick(r)}/>
               </div>
-            </div>
-            {game.spread && game.spread.homePoint && (
-              <div style={{ ...S.card, marginTop:9, display:"flex", gap:20, flexWrap:"wrap" }}>
-                <div><div style={S.sL}>{game.awayTeam} Run Line</div><div style={{ fontSize:14, fontWeight:700, color:T.blue }}>{game.spread.awayPoint > 0 ? "+"+game.spread.awayPoint : game.spread.awayPoint} <span style={{ color:T.muted, fontSize:11 }}>{fmtOdds(game.spread.awayPrice)}</span></div></div>
-                <div><div style={S.sL}>{game.homeTeam} Run Line</div><div style={{ fontSize:14, fontWeight:700, color:T.green }}>{game.spread.homePoint > 0 ? "+"+game.spread.homePoint : game.spread.homePoint} <span style={{ color:T.muted, fontSize:11 }}>{fmtOdds(game.spread.homePrice)}</span></div></div>
-              </div>
-            )}
+            ))}
           </div>
         )}
+
+        {/* Kalshi table */}
+        <div style={S.sec}>
+          <div style={S.secLabel}>Kalshi bets for this game{kx && kx.ts ? " · prices " + formatAge(kx.ts) : ""}</div>
+          {rows.length > 0 ? <PicksTable rows={rows}/> : <KalshiNote kx={kx} ev={ev} hasAgg={!!agg}/>}
+          {rows.length === 0 && kx && kx.status === "ok" && ev && agg && (
+            <div style={{ ...S.card, fontSize:10, color:T.muted }}>Kalshi has this game, but no market has a usable price right now{settings.hideWide ? " (wide bid/ask markets are hidden in Settings)" : ""}.</div>
+          )}
+        </div>
 
         {/* Team params */}
         {game && (
           <div style={S.sec}>
             <div style={S.secLabel}>Model Inputs (2025 Season)</div>
-            <div style={S.card}>
+            <div style={{ ...S.card, overflowX:"auto" }}>
               <table style={S.table}>
                 <thead><tr>
                   <th style={S.th}>Team</th>
@@ -1018,40 +858,22 @@ function GameSimView({ game, agg, running, onRun, runCount, betLogger }) {
               </div>
             </div>
 
-            {/* Betting signals */}
+            {/* Model-only numbers */}
             <div style={S.sec}>
-              <div style={S.secLabel}>Betting Signals vs Market</div>
-
+              <div style={S.secLabel}>More model numbers (no Kalshi price, so no grade)</div>
               <div style={S.card}>
-                <div style={{ ...S.sL, marginBottom:8 }}>Full Game</div>
-                <div style={{ ...S.betRow, fontSize:"8px", fontWeight:700 }}>
-                  <span style={{ color:T.muted, minWidth:160 }}>MARKET</span>
-                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>SIM PROB</span>
-                  <span style={{ flex:1, textAlign:"center", color:T.muted }}>LIVE ODDS</span>
-                  <span style={{ minWidth:64, textAlign:"right", color:T.muted }}>SIGNAL</span>
-                </div>
-                <BetRow market={agg.awayTeam+" ML"} simPct={agg.aWPct+"%"} bookOdds={fmtOdds(hasOdds?game.h2h.away:null)} signal={signal(agg.aWPct, aImplied)}/>
-                <BetRow market={agg.homeTeam+" ML"} simPct={agg.hWPct+"%"} bookOdds={fmtOdds(hasOdds?game.h2h.home:null)} signal={signal(agg.hWPct, hImplied)}/>
-                <BetRow market={agg.awayTeam+" -1.5 RL"} simPct={agg.aRLPct+"%"} bookOdds={hasOdds&&game.spread?fmtOdds(game.spread.awayPrice):"~+150"} signal={signal(agg.aRLPct, 0, 55, 45, 38)}/>
-                <BetRow market={agg.homeTeam+" -1.5 RL"} simPct={agg.hRLPct+"%"} bookOdds={hasOdds&&game.spread?fmtOdds(game.spread.homePrice):"~+150"} signal={signal(agg.hRLPct, 0, 55, 45, 38)}/>
-                <BetRow market={"Over "+totalLine+" Total"} simPct={agg.over85Pct+"%"} bookOdds={fmtOdds(hasOdds?game.total.overPrice:null)} signal={signal(agg.over85Pct, 0)}/>
-                <BetRow market={"Under "+totalLine+" Total"} simPct={agg.under85Pct+"%"} bookOdds={fmtOdds(hasOdds?game.total.underPrice:null)} signal={signal(agg.under85Pct, 0)}/>
-                <BetRow market="Over 7.5 Total" simPct={agg.over75Pct+"%"} bookOdds="~Market" signal={signal(agg.over75Pct, 0)}/>
-                <BetRow market="Over 9.5 Total" simPct={agg.over95Pct+"%"} bookOdds="~Market" signal={signal(agg.over95Pct, 0, 55, 42, 35)}/>
-                <BetRow market={agg.homeTeam+" Shutout Win"} simPct={agg.homeShutoutPct+"%"} bookOdds="~Market" signal={signal(agg.homeShutoutPct, 0, 30, 20, 12)}/>
-                <BetRow market={agg.awayTeam+" Shutout Win"} simPct={agg.awayShutoutPct+"%"} bookOdds="~Market" signal={signal(agg.awayShutoutPct, 0, 30, 20, 12)}/>
+                <ModelOnlyRow market={agg.homeTeam+" −1.5 (win by 2+)"} pct={agg.hRLPct}/>
+                <ModelOnlyRow market={agg.awayTeam+" −1.5 (win by 2+)"} pct={agg.aRLPct}/>
+                <ModelOnlyRow market="Over 7.5 runs" pct={agg.over75Pct}/>
+                <ModelOnlyRow market="Over 8.5 runs" pct={agg.over85Pct}/>
+                <ModelOnlyRow market="Over 9.5 runs" pct={agg.over95Pct}/>
+                <ModelOnlyRow market={"First 5 innings: "+agg.homeTeam+" lead"} pct={agg.f5HomePct}/>
+                <ModelOnlyRow market={"First 5 innings: "+agg.awayTeam+" lead"} pct={agg.f5AwayPct}/>
+                <ModelOnlyRow market="No run in the 1st inning (NRFI)" pct={agg.nrfiPct}/>
+                <ModelOnlyRow market={agg.homeTeam+" shutout win"} pct={agg.homeShutoutPct}/>
+                <ModelOnlyRow market={agg.awayTeam+" shutout win"} pct={agg.awayShutoutPct}/>
               </div>
-
             </div>
-
-            {(() => { const topBets = agg && game ? extractTopBets(agg, game, "MLB") : []; return topBets.length > 0 && (
-              <div style={S.sec}>
-                <div style={S.secLabel}>Top Signals This Game</div>
-                {topBets.map(b => (
-                  <TopBetCard key={b.market} bet={b} T={T} S={S} logged={betLogger ? betLogger.isLogged(b.gameId, b.market) : false}/>
-                ))}
-              </div>
-            ); })()}
 
             <div style={{ background:"#0a0f1a", border:"1px solid "+T.purple+"33", borderRadius:6, padding:"11px 14px", fontSize:"10px", color:T.muted, marginTop:18, lineHeight:1.8 }}>
               <div style={{ color:T.purple, fontWeight:700, fontSize:"9px", letterSpacing:"2px", marginBottom:7 }}>MODEL METHODOLOGY</div>
@@ -1059,9 +881,10 @@ function GameSimView({ game, agg, running, onRun, runCount, betLogger }) {
               <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Pitching Model:</span> FIP-to-R/9 conversion with regression-to-mean. Starter exits after inning 5 (F5 boundary), bullpen ERA used for innings 6-9.</div>
               <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Park Factor:</span> Home team park factor applied to wRC+ for both teams. Factors calibrated from 3-year Baseball Savant data.</div>
               <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Run Expectancy:</span> 2024 MLB RE24 matrix used for base-out state transitions. Walk-off and extra inning (ghost runner) rules applied.</div>
+              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Pricing:</span> every Kalshi winner, run-line and total-runs market for the game is checked against the simulated score distribution. Edge = model chance − price in cents.</div>
             </div>
             <div style={S.disclaimer}>
-              Simulation parameters sourced from publicly available 2025 MLB statistics. Live odds from The Odds API. Not professional betting advice. Gamble responsibly.
+              Simulation parameters sourced from publicly available 2025 MLB statistics. Schedule from ESPN, prices from Kalshi. Not professional betting advice. Gamble responsibly.
             </div>
           </div>
         )}
@@ -1071,99 +894,41 @@ function GameSimView({ game, agg, running, onRun, runCount, betLogger }) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
-// TOP PICKS TAB — aggregates best bets across all today's games
+// TOP PICKS TAB — graded Kalshi bets across today's games
 // ════════════════════════════════════════════════════════════════════════════════
-function TopPicksTab({ simData, games, betLogger }) {
-  const { logAllBets, isLogged, stats, saving } = betLogger;
-  const autoLoggedRef = useRef(false);
-
-  const allBets = [];
-  games.forEach(game => {
-    const key = game.homeTeam + "|" + game.awayTeam;
-    const agg = simData[key];
-    if (!agg) return;
-    extractTopBets(agg, game, "MLB").forEach(b => allBets.push({ ...b, gameTime: game.commenceTime }));
-  });
-  allBets.sort((a,b) => parseFloat(b.simPct) - parseFloat(a.simPct));
-
+function TopPicksTab({ allRows, games, simData, kx }) {
   const simsReady = games.filter(g => simData[g.homeTeam+"|"+g.awayTeam]).length;
-  const allSimsReady = simsReady === games.length && games.length > 0;
-
-  // Auto-log all bets once all sims are complete and logger is loaded
-  useEffect(() => {
-    if (!allSimsReady || !betLogger.loaded || autoLoggedRef.current || !allBets.length) return;
-    autoLoggedRef.current = true;
-    logAllBets(allBets);
-  }, [allSimsReady, betLogger.loaded]);
-
-  const locks = allBets.filter(b => b.tier === "LOCK");
-  const highs = allBets.filter(b => b.tier === "HIGH");
-  const leans = allBets.filter(b => b.tier === "LEAN");
-
-  const loggedCount = allBets.filter(b => isLogged(b.gameId, b.market)).length;
+  const shown = allRows.filter(r => r.g.edge > 0 && r.g.rank <= 2);
+  const strong = allRows.filter(r => r.g.key === "STRONG").length, good = allRows.filter(r => r.g.key === "GOOD").length;
+  const matched = games.filter(g => kx && kx.status === "ok" && KX.matchGame(g, kx.idx)).length;
 
   return (
     <div style={{ maxWidth:920, margin:"0 auto", padding:"0 14px 48px" }}>
       <div style={S.sec}>
-        <div style={{ ...S.card, background:"#0a1020", border:"1px solid "+T.green+"33", marginBottom:14 }}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
-            <div>
-              <div style={{ fontSize:11, color:T.green, fontWeight:700, letterSpacing:"1px" }}>TOP PICKS — TODAY'S SLATE</div>
-              <div style={{ fontSize:10, color:T.muted, marginTop:3 }}>
-                {simsReady}/{games.length} games simulated · {allBets.length} qualifying signals
-                {saving ? " · Saving to Gist..." : allSimsReady && loggedCount > 0 ? " · "+loggedCount+" auto-logged ✓" : ""}
-              </div>
-            </div>
-            <div style={{ display:"flex", gap:6 }}>
-              <span style={{ background:T.red+"22", border:"1px solid "+T.red+"44", color:T.red, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>LOCK ≥70% · 2u</span>
-              <span style={{ background:T.green+"22", border:"1px solid "+T.green+"44", color:T.green, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>HIGH ≥60% · 1.5u</span>
-              <span style={{ background:T.gold+"22", border:"1px solid "+T.gold+"44", color:T.gold, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>LEAN &gt;52% · 1u</span>
-            </div>
+        <div style={{ ...S.card, background:"#0a1020", border:"1px solid "+T.green+"33", marginBottom:12 }}>
+          <div style={{ fontSize:11, color:T.green, fontWeight:700, letterSpacing:"1px" }}>TOP PICKS — TODAY'S SLATE</div>
+          <div style={{ fontSize:10, color:T.muted, marginTop:3, lineHeight:1.6 }}>
+            {simsReady}/{games.length} games simulated · {matched}/{games.length} have Kalshi markets · {strong} strong, {good} good
+            {kx && kx.ts ? " · prices " + formatAge(kx.ts) : ""}
           </div>
         </div>
+        <RecordCard sport="mlb"/>
+        <GradeLegend sport="mlb"/>
       </div>
 
-      {simsReady < games.length && (
-        <div style={{ ...S.card, marginBottom:12, fontSize:10, color:T.yellow }}>
-          ⚠ {games.length - simsReady} game(s) still simulating — bets will auto-log once all sims complete.
-        </div>
-      )}
-
-      {[{ label:"LOCK Bets", bets:locks },
-        { label:"HIGH Confidence", bets:highs },
-        { label:"LEAN Signals", bets:leans }
-      ].map(({ label, bets }) => bets.length > 0 && (
-        <div key={label} style={S.sec}>
-          <div style={S.secLabel}>{label} ({bets.length})</div>
-          {bets.map((bet, i) => (
-            <TopBetCard key={i} bet={bet} T={T} S={S}
-              logged={isLogged(bet.gameId, bet.market)}
-            />
-          ))}
-        </div>
-      ))}
-
-      {allBets.length === 0 && simsReady > 0 && (
-        <div style={{ ...S.card, textAlign:"center", padding:32, color:T.muted, marginTop:20 }}>No qualifying signals found across today's slate.</div>
-      )}
+      {kx && kx.status === "down" && <div style={{ ...S.card, marginBottom:12, fontSize:10, color:T.yellow }}>Kalshi prices couldn't be loaded{kx.error ? " (" + kx.error + ")" : ""}. Grades need a price, so none are shown. Try ↻ Refresh.</div>}
+      {simsReady < games.length && <div style={{ ...S.card, marginBottom:12, fontSize:10, color:T.yellow }}>⚠ {games.length - simsReady} game(s) still simulating.</div>}
 
       <div style={S.sec}>
-        <div style={S.secLabel}>Bet Log — MLB ({betLogger.bets.filter(b=>b.sport==="MLB").length} bets)</div>
-        {betLogger.bets.filter(b=>b.sport==="MLB").length === 0 ? (
-          <div style={{ ...S.card, color:T.muted, fontSize:10, textAlign:"center", padding:24 }}>No MLB bets logged yet.</div>
-        ) : (
-          <div style={S.card}>
-            <div style={{ ...S.betRow, fontSize:"8px", fontWeight:700 }}>
-              <span style={{ minWidth:120, color:T.muted }}>DATE · SPORT</span>
-              <span style={{ flex:2, color:T.muted }}>MARKET</span>
-              <span style={{ flex:1, color:T.muted }}>MATCHUP</span>
-              <span style={{ color:T.muted }}>TIER</span>
-              <span style={{ color:T.muted }}>SIM %</span>
-              <span style={{ minWidth:50, textAlign:"right", color:T.muted }}>RESULT</span>
-            </div>
-            {betLogger.bets.filter(b=>b.sport==="MLB").slice().reverse().map(b => (
-              <BetHistoryRow key={b.id} bet={b} T={T} S={S} />
-            ))}
+        <div style={S.secLabel}>Bets with an edge ({shown.length})</div>
+        {shown.length > 0 ? <PicksTable rows={shown} showGame/> : (
+          <div style={{ ...S.card, textAlign:"center", padding:28, color:T.muted, fontSize:11, lineHeight:1.7 }}>
+            {!kx || kx.status === "loading" ? "Loading Kalshi prices…"
+              : kx.status === "down" ? "No grades without Kalshi prices."
+              : games.length === 0 ? "No MLB games today."
+              : matched === 0 ? "No Kalshi markets open for today's games."
+              : simsReady < games.length ? "Waiting for the simulations…"
+              : "No bet on today's slate is priced below the model's chance."}
           </div>
         )}
       </div>
@@ -1172,116 +937,70 @@ function TopPicksTab({ simData, games, betLogger }) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
-// PARLAY TAB — MLB version
+// PARLAY TAB — cross-game combos of STRONG / GOOD picks
 // ════════════════════════════════════════════════════════════════════════════════
 const PARLAY_SIZE_LABELS = { 2:"2-Leg", 3:"3-Leg", 4:"4-Leg", 5:"5-Leg" };
 
-function buildMLBParlays(simData, games) {
-  const allLegs = [];
-  games.forEach(game => {
-    const key = game.homeTeam + "|" + game.awayTeam;
-    const agg = simData[key];
-    if (!agg) return;
-    const bets = extractTopBets(agg, game, "MLB");
-    bets.forEach(b => {
-      allLegs.push({ matchId: key, match: b.awayTeam+" @ "+b.homeTeam,
-        market: b.market, prob: parseFloat(b.simPct)/100, probPct: b.simPct, tier: b.tier, units: b.units });
-    });
-  });
-
-  if (allLegs.length === 0) return { legs: allLegs, parlays: [] };
-
-  // Build cross-game combos only
-  function buildCombos(legs, size) {
+function parlayLegs(allRows) {
+  return allRows.filter(r => r.g.key === "STRONG" || r.g.key === "GOOD").map(r => ({
+    matchId: r.gameId, match: r.matchup, market: r.label, prob: r.chance / 100, probPct: r.chance.toFixed(1) + "%",
+    price: r.price, ticker: r.ticker, side: r.side, tier: r.g.key, g: r.g,
+  }));
+}
+function buildMLBParlays(legs) {
+  if (legs.length === 0) return [];
+  function buildCombos(size) {
     const results = [];
-    function combine(start, current) {
+    (function combine(start, current) {
       if (current.length === size) { results.push([...current]); return; }
       for (let i = start; i < legs.length; i++) {
-        const matchIds = current.map(l => l.matchId);
-        if (!matchIds.includes(legs[i].matchId)) {
-          current.push(legs[i]); combine(i+1, current); current.pop();
-        }
+        if (!current.some(l => l.matchId === legs[i].matchId)) { current.push(legs[i]); combine(i+1, current); current.pop(); }
       }
-    }
-    combine(0, []);
+    })(0, []);
     return results;
   }
-
   const parlays = [];
   for (const size of [2,3,4,5]) {
-    buildCombos(allLegs, size)
-      .map(combo => ({ legs:combo, size, jointProb:combo.reduce((acc,leg) => acc * leg.prob, 1) }))
-      .sort((a,b) => b.jointProb - a.jointProb)
-      .slice(0,15)
-      .forEach(p => parlays.push({ ...p, jointProbPct:(p.jointProb*100).toFixed(2) }));
+    buildCombos(size)
+      .map(combo => ({ legs:combo, size, jointProb:combo.reduce((a,l) => a * l.prob, 1), jointPrice:combo.reduce((a,l) => a * l.price / 100, 1) }))
+      .sort((a,b) => b.jointProb - a.jointProb).slice(0,15)
+      .forEach(p => parlays.push(p));
   }
-  parlays.sort((a,b) => b.jointProb - a.jointProb);
-  return { legs: allLegs, parlays };
+  return parlays.sort((a,b) => b.jointProb - a.jointProb);
 }
 
-function MLBParlayTab({ simData, games, betLogger }) {
+function MLBParlayTab({ allRows }) {
   const [filterSize, setFilterSize] = useState("all");
-  const { logBet, isLogged } = betLogger;
-  const simsReady = games.filter(g => simData[g.homeTeam+"|"+g.awayTeam]).length;
-
-  if (simsReady < 2) {
-    return (
-      <div style={{ textAlign:"center", padding:"48px 24px", color:T.muted, fontSize:11, lineHeight:2 }}>
-        <div style={{ fontSize:22, marginBottom:12 }}>⏳</div>
-        Parlay builder needs at least 2 games simulated for cross-game parlays.
-        <div style={{ marginTop:16, display:"flex", gap:8, justifyContent:"center", flexWrap:"wrap" }}>
-          {games.map(g => {
-            const ready = !!simData[g.homeTeam+"|"+g.awayTeam];
-            return (
-              <div key={g.id} style={{ background:ready?T.green+"22":T.card, border:"1px solid "+(ready?T.green:T.border), borderRadius:4, padding:"4px 10px", fontSize:10, color:ready?T.green:T.muted }}>
-                {ready?"✓":"○"} {TEAM_PARAMS[g.awayTeam]?.abbr||"?"} @ {TEAM_PARAMS[g.homeTeam]?.abbr||"?"}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
-
-  const { legs, parlays } = buildMLBParlays(simData, games);
+  const legs = parlayLegs(allRows);
+  const parlays = buildMLBParlays(legs);
   const filtered = filterSize==="all" ? parlays : parlays.filter(p=>p.size===parseInt(filterSize));
 
   return (
     <div style={{ maxWidth:920, margin:"0 auto", padding:"0 14px 48px" }}>
       <div style={S.sec}>
         <div style={{ ...S.card, background:"#0a1020", border:"1px solid "+T.green+"33" }}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
-            <div>
-              <div style={{ fontSize:11, color:T.green, fontWeight:700, letterSpacing:"1px" }}>MLB PARLAY BUILDER</div>
-              <div style={{ fontSize:10, color:T.muted, marginTop:3 }}>
-                {legs.length} qualifying legs · {simsReady} games simulated · 2/3/4/5-leg cross-game combos · Sorted by joint probability
-              </div>
-            </div>
-            <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-              <span style={{ background:T.red+"22", border:"1px solid "+T.red+"44", color:T.red, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>LOCK ≥70%</span>
-              <span style={{ background:T.green+"22", border:"1px solid "+T.green+"44", color:T.green, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>HIGH ≥60%</span>
-              <span style={{ background:T.gold+"22", border:"1px solid "+T.gold+"44", color:T.gold, fontSize:"9px", padding:"2px 7px", borderRadius:3, fontWeight:700 }}>LEAN &gt;52%</span>
-            </div>
+          <div style={{ fontSize:11, color:T.green, fontWeight:700, letterSpacing:"1px" }}>MLB PARLAY BUILDER</div>
+          <div style={{ fontSize:10, color:T.muted, marginTop:3, lineHeight:1.6 }}>
+            Built only from STRONG and GOOD bets, one per game. {legs.length} qualifying legs. Kalshi doesn't sell these as one bet, so place each leg on its own or build it in Kalshi's app.
           </div>
         </div>
       </div>
 
-      <div style={S.sec}>
-        <div style={S.secLabel}>Signal Pool ({legs.length} legs)</div>
-        <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-          {legs.map((leg,i) => {
-            const tc = tierColor(leg.tier, T);
-            return (
-              <div key={i} style={{ background:T.card, border:"1px solid "+T.border, borderLeft:"3px solid "+tc, borderRadius:4, padding:"5px 10px", fontSize:10, display:"flex", alignItems:"center", gap:6 }}>
-                <span style={{ background:tc+"22", color:tc, fontSize:"8px", fontWeight:700, padding:"1px 5px", borderRadius:2 }}>{leg.tier}</span>
+      {legs.length > 0 && (
+        <div style={S.sec}>
+          <div style={S.secLabel}>Legs ({legs.length})</div>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+            {legs.map((leg,i) => (
+              <div key={i} style={{ background:T.card, border:"1px solid "+T.border, borderLeft:"3px solid "+leg.g.color, borderRadius:4, padding:"5px 10px", fontSize:10, display:"flex", alignItems:"center", gap:6 }}>
+                <GradeBadge g={leg.g} small/>
                 <span style={{ color:T.muted, fontSize:9 }}>{leg.match} ·</span>
                 <span style={{ color:T.text, fontWeight:700 }}>{leg.market}</span>
-                <span style={{ color:tc, marginLeft:2 }}>{leg.probPct}</span>
+                <span style={{ color:leg.g.color, marginLeft:2 }}>{(leg.prob*100).toFixed(0)}%</span>
               </div>
-            );
-          })}
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       <div style={{ ...S.sec, display:"flex", gap:6, flexWrap:"wrap" }}>
         {["all","2","3","4","5"].map(v=>(
@@ -1292,27 +1011,13 @@ function MLBParlayTab({ simData, games, betLogger }) {
         <div style={{ marginLeft:"auto", fontSize:10, color:T.muted, alignSelf:"center" }}>Showing {filtered.length} parlays</div>
       </div>
 
-      {filtered.length===0 && <div style={{ ...S.card, textAlign:"center", padding:32, color:T.muted, fontSize:11, marginTop:12 }}>Not enough cross-game signals for {filterSize}-leg parlays.</div>}
+      {filtered.length===0 && <div style={{ ...S.card, textAlign:"center", padding:32, color:T.muted, fontSize:11, marginTop:12 }}>
+        {legs.length < 2 ? "A parlay needs STRONG or GOOD bets from at least 2 different games." : "Not enough games with STRONG or GOOD bets for " + filterSize + "-leg parlays."}
+      </div>}
 
       {filtered.map((parlay,pi) => {
         const jp = parlay.jointProb;
-        const fairOdds = jp > 0 ? (jp < 0.5 ? "+" + Math.round((1/jp-1)*100) : "-" + Math.round((jp/(1-jp))*100)) : "—";
         const rankColor = pi===0?T.gold:pi===1?"#94a3b8":pi===2?"#cd7f32":T.border;
-        const totalUnits = parlay.legs.reduce((a,l)=>a+l.units,0).toFixed(1);
-
-        // Build parlay bet for logging
-        const parlayBet = {
-          id: Date.now()+"_p"+pi,
-          sport:"MLB", gameId:"parlay_"+pi,
-          homeTeam:"(parlay)", awayTeam:"("+parlay.size+"-leg)",
-          market: parlay.legs.map(l=>l.market).join(" + "),
-          simPct: parlay.jointProbPct+"%", bookOdds: fairOdds,
-          tier: parlay.legs[0].tier, units: Math.min(parseFloat(totalUnits), 2),
-          loggedAt: new Date().toISOString(), result:"pending",
-          resolvedAt:null, finalScore:null,
-          gameDate: new Date().toLocaleDateString("en-CA"),
-        };
-
         return (
           <div key={pi} style={{ ...S.card, marginTop:10, borderLeft:"3px solid "+(pi<3?rankColor:T.border) }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10, flexWrap:"wrap", gap:6 }}>
@@ -1320,40 +1025,31 @@ function MLBParlayTab({ simData, games, betLogger }) {
                 <div style={{ background:pi<3?rankColor+"22":T.navy, border:"1px solid "+(pi<3?rankColor:T.border), color:pi<3?rankColor:T.muted, fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:3 }}>#{pi+1}</div>
                 <div style={{ background:T.purple+"1a", border:"1px solid "+T.purple+"33", color:T.purple, fontSize:9, padding:"2px 8px", borderRadius:3, letterSpacing:"1px" }}>{PARLAY_SIZE_LABELS[parlay.size]}</div>
               </div>
-              <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-                <div style={{ textAlign:"right" }}>
-                  <div style={{ fontSize:22, fontWeight:700, color:jp>0.4?T.green:jp>0.2?T.gold:T.red }}>{parlay.jointProbPct}%</div>
-                  <div style={{ fontSize:9, color:T.muted }}>joint probability</div>
-                </div>
-                <button onClick={()=>logBet(parlayBet)} style={{ background:T.green, color:"#070b14", border:"none", borderRadius:4, padding:"6px 12px", fontSize:9, fontWeight:700, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
-                  + LOG
-                </button>
+              <div style={{ textAlign:"right" }}>
+                <div style={{ fontSize:22, fontWeight:700, color:jp>0.4?T.green:jp>0.2?T.gold:T.red }}>{(jp*100).toFixed(1)}%</div>
+                <div style={{ fontSize:9, color:T.muted }}>model: chance all legs cash</div>
               </div>
             </div>
             <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
-              {parlay.legs.map((leg,li) => {
-                const tc = tierColor(leg.tier, T);
-                return (
-                  <div key={li} style={{ display:"flex", alignItems:"center", gap:8, background:T.navy, borderRadius:4, padding:"7px 10px", borderLeft:"2px solid "+tc }}>
-                    <span style={{ background:tc+"22", color:tc, fontSize:"8px", fontWeight:700, padding:"1px 5px", borderRadius:2, minWidth:32, textAlign:"center" }}>{leg.tier}</span>
-                    <div style={{ fontSize:9, color:T.muted, minWidth:110 }}>{leg.match}</div>
-                    <div style={{ flex:1, fontSize:11, color:T.text, fontWeight:600 }}>{leg.market}</div>
-                    <div style={{ fontSize:9, color:T.purple }}>{leg.units}u</div>
-                    <div style={{ fontSize:11, color:tc, fontWeight:700, minWidth:44, textAlign:"right" }}>{leg.probPct}</div>
-                  </div>
-                );
-              })}
+              {parlay.legs.map((leg,li) => (
+                <div key={li} style={{ display:"flex", alignItems:"center", gap:8, background:T.navy, borderRadius:4, padding:"7px 10px", borderLeft:"2px solid "+leg.g.color, flexWrap:"wrap" }}>
+                  <GradeBadge g={leg.g} small/>
+                  <div style={{ fontSize:9, color:T.muted, minWidth:90 }}>{leg.match}</div>
+                  <div style={{ flex:1, fontSize:11, color:T.text, fontWeight:600 }}>{leg.market}</div>
+                  <div style={{ fontSize:9, color:T.muted }}>{leg.price}¢</div>
+                  <div style={{ fontSize:11, color:leg.g.color, fontWeight:700, minWidth:44, textAlign:"right" }}>{(leg.prob*100).toFixed(0)}%</div>
+                </div>
+              ))}
             </div>
             <div style={{ display:"flex", gap:16, marginTop:10, flexWrap:"wrap" }}>
-              <div><div style={{ fontSize:9, color:T.muted }}>JOINT PROB</div><div style={{ fontSize:13, fontWeight:700 }}>{parlay.jointProbPct}%</div></div>
-              <div><div style={{ fontSize:9, color:T.muted }}>FAIR ODDS (no vig)</div><div style={{ fontSize:13, fontWeight:700, color:T.gold }}>{fairOdds}</div></div>
-              <div><div style={{ fontSize:9, color:T.muted }}>LEGS</div><div style={{ fontSize:13, fontWeight:700, color:T.purple }}>{parlay.size}</div></div>
-              <div><div style={{ fontSize:9, color:T.muted }}>TOTAL UNITS</div><div style={{ fontSize:13, fontWeight:700, color:T.green }}>{totalUnits}u</div></div>
+              <div><div style={{ fontSize:9, color:T.muted }}>CHANCE TO CASH</div><div style={{ fontSize:13, fontWeight:700 }}>{(jp*100).toFixed(1)}%</div></div>
+              <div><div style={{ fontSize:9, color:T.muted }}>LEG PRICES MULTIPLIED</div><div style={{ fontSize:13, fontWeight:700, color:T.gold }}>{(parlay.jointPrice*100).toFixed(1)}¢</div></div>
+              <div><div style={{ fontSize:9, color:T.muted }}>PAYS PER $1 (FAIR)</div><div style={{ fontSize:13, fontWeight:700, color:T.green }}>{SB.money(1/parlay.jointPrice)}</div></div>
             </div>
           </div>
         );
       })}
-      <div style={S.disclaimer}>Parlay legs assumed independent across games. Fair odds before vig. Not professional betting advice. Gamble responsibly.</div>
+      <div style={S.disclaimer}>Legs from different games are treated as independent. "Leg prices multiplied" is what the parlay would cost per $1 if each leg were bought at today's Kalshi price. Not professional betting advice. Gamble responsibly.</div>
     </div>
   );
 }
@@ -1362,47 +1058,56 @@ function MLBParlayTab({ simData, games, betLogger }) {
 // MAIN APP
 // ════════════════════════════════════════════════════════════════════════════════
 function App() {
+  const settings = SB.useSettings();
   const [games, setGames]   = useState([]);
   const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError]   = useState("");
-  const [activeTab, setActiveTab] = useState("game_0");
-  const SIM_CACHE_KEY = "sharp_sim_cache_mlb_" + new Date().toLocaleDateString("en-CA");
+  const [activeTab, setActiveTab] = useState("top_picks");
+  const SIM_CACHE_KEY = "sharp_sim_cache_mlb2_" + new Date().toLocaleDateString("en-CA");
   const [simData, setSimData] = useState(() => {
     try { return JSON.parse(localStorage.getItem(SIM_CACHE_KEY) || "{}"); } catch(e) { return {}; }
   });
   const [runningId, setRunningId] = useState(null);
-  const [running, setRunning] = useState(false);
-  const [lastFetched, setLastFetched] = useState(() => {
-    try {
-      const c = JSON.parse(localStorage.getItem(ODDS_CACHE_KEY) || "null");
-      return c ? c.ts : null;
-    } catch(e) { return null; }
-  });
   const [runCounts, setRunCounts] = useState({});
+  const [kx, setKx] = useState({ status:"loading" });
   const autoRanRef = useRef(false);
 
-  const betLogger = useBetLogger();
+  async function loadKalshi() {
+    try {
+      const markets = await KX.fetchMarkets("open");
+      setKx({ status:"ok", idx: KX.indexByEvent(markets), ts: Date.now(), count: markets.length });
+    } catch (e) {
+      setKx(prev => prev.status === "ok" ? { ...prev, stale: true } : { status:"down", error: e.message });
+    }
+  }
 
-  useEffect(() => { loadGames(); }, []);
-
-  // Write parlay legs to localStorage for cross-sport parlay page (App level so it runs regardless of active tab)
-  const xsportWrittenRef = useRef(false);
+  useEffect(() => { loadGames(); loadKalshi(); }, []);
+  // Kalshi prices move; refresh them every 2 minutes while there are games to price
   useEffect(() => {
-    const allSimsReady = games.length > 0 && games.every(g => simData[g.homeTeam + "|" + g.awayTeam]);
-    if (!allSimsReady || xsportWrittenRef.current) return;
-    xsportWrittenRef.current = true;
-    const legs = [];
-    games.forEach(game => {
-      const key = game.homeTeam + "|" + game.awayTeam;
-      const agg = simData[key];
-      if (!agg) return;
-      extractTopBets(agg, game, "MLB").forEach(b => {
-        legs.push({ matchId: key, match: b.awayTeam + " @ " + b.homeTeam,
-          market: b.market, prob: parseFloat(b.simPct) / 100, probPct: b.simPct, tier: b.tier, sport: "MLB" });
-      });
-    });
+    if (!games.length) return;
+    const t = setInterval(loadKalshi, 120000);
+    return () => clearInterval(t);
+  }, [games.length]);
+
+  // Every graded Kalshi bet across today's games
+  const allRows = [];
+  games.forEach(g => { gamePicks(g, simData[g.homeTeam+"|"+g.awayTeam], kx, settings).rows.forEach(r => allRows.push(r)); });
+  const strongGood = allRows.filter(r => r.g.key === "STRONG" || r.g.key === "GOOD");
+  const pickSig = strongGood.map(r => r.ticker + "|" + r.side + "|" + r.g.key).sort().join(",");
+
+  // Add STRONG / GOOD picks to the shared record (deduped by ticker+side in SharpBets)
+  useEffect(() => {
+    if (!strongGood.length) return;
+    SB.logPicks(strongGood.map(r => ({ sport:"mlb", gameId:r.gameId, gameDate:r.gameDate, home:r.game.homeTeam, away:r.game.awayTeam,
+      market:r.market, ticker:r.ticker, side:r.side, chance:r.chance, price:r.price, tier:r.g.key })));
+  }, [pickSig]);
+
+  // Write parlay legs for the cross-sport parlay page (STRONG / GOOD only)
+  useEffect(() => {
+    const legs = parlayLegs(allRows).map(({ g, ...l }) => ({ ...l, sport:"MLB" }));
     try { localStorage.setItem("sharp_xsport_legs_mlb_" + new Date().toLocaleDateString("en-CA"), JSON.stringify({ legs, ts: Date.now() })); } catch(e) {}
-  }, [games, simData]);
+  }, [pickSig]);
 
   // Auto-sim all games sequentially once games are loaded; skip cached results
   useEffect(() => {
@@ -1425,7 +1130,7 @@ function App() {
         if (result) {
           setSimData(prev => {
             const next = { ...prev, [key]: result };
-            localStorage.setItem(SIM_CACHE_KEY, JSON.stringify(next));
+            try { localStorage.setItem(SIM_CACHE_KEY, JSON.stringify(next)); } catch(e) {}
             return next;
           });
           setRunCounts(prev => ({ ...prev, [key]: 1 }));
@@ -1437,27 +1142,16 @@ function App() {
     setTimeout(runNext, 200);
   }, [games]);
 
-  async function loadGames({ force = false } = {}) {
+  async function loadGames() {
     setLoading(true); setError("");
-    try {
-      const data = await fetchMLBGames({ force });
-      const now = Date.now();
-      setLastFetched(JSON.parse(localStorage.getItem(ODDS_CACHE_KEY)||"{}").ts || now);
-      const today = new Date().toLocaleDateString("en-CA");
-      const parsed = data
-        .filter(g => new Date(g.commence_time).toLocaleDateString("en-CA") === today)
-        .map(parseOddsGame)
-        .filter(Boolean);
-      setGames(parsed);
-      setActiveTab("game_0");
-    } catch(e) { setError(e.message); }
-    setLoading(false);
+    try { setGames(await fetchMLBGames()); }
+    catch(e) { setError(e.message); }
+    setLoading(false); setLoaded(true);
   }
 
   const isSpecialTab = activeTab === "top_picks" || activeTab === "parlays";
   const activeGameIdx = activeTab.startsWith("game_") ? parseInt(activeTab.split("_")[1]) : 0;
   const activeGame = isSpecialTab ? null : games[activeGameIdx];
-
   const gameKey = activeGame ? activeGame.homeTeam+"|"+activeGame.awayTeam : null;
 
   function runSim(game) {
@@ -1483,43 +1177,19 @@ function App() {
 
   const simsLoaded = games.filter(g => simData[g.homeTeam+"|"+g.awayTeam]).length;
   const allSimsReady = games.length > 0 && simsLoaded === games.length;
-
-  // Auto-log at App level so it fires regardless of which tab is active
-  const appAutoLoggedRef = useRef(false);
-  useEffect(() => {
-    if (!allSimsReady || !betLogger.loaded || appAutoLoggedRef.current) return;
-    const allBets = [];
-    games.forEach(game => {
-      const agg = simData[game.homeTeam+"|"+game.awayTeam];
-      if (!agg) return;
-      extractTopBets(agg, game, "MLB").forEach(b => allBets.push({ ...b, gameTime: game.commenceTime }));
-    });
-    if (!allBets.length) return;
-    appAutoLoggedRef.current = true;
-    betLogger.logAllBets(allBets);
-  }, [allSimsReady, betLogger.loaded]);
-
-  const topBetCount = games.reduce((acc,g) => {
-    const agg = simData[g.homeTeam+"|"+g.awayTeam];
-    if (!agg) return acc;
-    return acc + extractTopBets(agg, g, "MLB").length;
-  },0);
+  const busy = loading || !!runningId;
 
   return (
     <div style={S.wrap}>
       {/* TOPBAR */}
       <div style={{ background:T.navy, borderBottom:"1px solid "+T.border, padding:"8px 16px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-        <a href="index.html" style={{ fontSize:10, color:T.muted, letterSpacing:"1px" }}>← Sharp Sim</a>
+        <a href="index.html" style={{ fontSize:10, color:T.muted, letterSpacing:"1px", textDecoration:"none" }}>← Sharp Sim</a>
+        <div style={{ fontSize:10, color:T.green, fontWeight:700, letterSpacing:"1px" }}>⚾ MLB</div>
         <div style={{ flex:1 }}/>
-        {(() => { const sp = betLogger.stats.bySport && betLogger.stats.bySport["MLB"]; return sp && (sp.wins+sp.losses) > 0 && (
-          <div style={{ fontSize:10, color:T.muted }}>
-            MLB: <span style={{ color:T.green }}>{sp.wins}W</span>-<span style={{ color:T.red }}>{sp.losses}L</span>
-            <span style={{ color:sp.units>=0?T.green:T.red, marginLeft:6 }}>{sp.units>=0?"+":""}{sp.units.toFixed(1)}u</span>
-          </div>
-        ); })()}
         <div style={{ fontSize:9, color:T.muted }}>{games.length > 0 ? games.length+" games" : loading?"Loading...":""}</div>
-        {lastFetched && <div style={{ fontSize:8, color:T.muted, letterSpacing:"0.5px" }}>cached {formatAge(lastFetched)}</div>}
-        <button onClick={()=>{ autoRanRef.current=false; loadGames({ force: true }); }} disabled={loading||!!runningId} style={{ background:"none", border:"1px solid "+T.border, color:(loading||!!runningId)?T.muted:T.green, padding:"4px 10px", borderRadius:4, fontSize:9, cursor:(loading||!!runningId)?"default":"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
+        {kx.ts && <div style={{ fontSize:8, color:T.muted, letterSpacing:"0.5px" }}>Kalshi {formatAge(kx.ts)}{kx.stale ? " (refresh failed)" : ""}</div>}
+        <a href="settings.html" style={{ fontSize:9, color:T.muted, letterSpacing:"1px", textDecoration:"none", border:"1px solid "+T.border, padding:"4px 10px", borderRadius:4 }}>⚙ SETTINGS</a>
+        <button onClick={()=>{ autoRanRef.current=false; loadGames(); loadKalshi(); }} disabled={busy} style={{ background:"none", border:"1px solid "+T.border, color:busy?T.muted:T.green, padding:"4px 10px", borderRadius:4, fontSize:9, cursor:busy?"default":"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
           {loading?"Loading...":"↻ Refresh"}
         </button>
       </div>
@@ -1540,40 +1210,44 @@ function App() {
 
       {/* TABS */}
       <div style={S.tabBar}>
+        <button style={{ ...S.tab(activeTab==="top_picks"), color:activeTab==="top_picks"?T.green:T.muted, borderBottom:activeTab==="top_picks"?"2px solid "+T.green:"2px solid transparent" }}
+          onClick={()=>setActiveTab("top_picks")}>
+          ⭐ TOP PICKS {strongGood.length>0?"("+strongGood.length+")":""}
+        </button>
+        <button style={{ ...S.tab(activeTab==="parlays"), color:activeTab==="parlays"?T.purple:T.muted, borderBottom:activeTab==="parlays"?"2px solid "+T.purple:"2px solid transparent", borderRight:"1px solid "+T.border }}
+          onClick={()=>setActiveTab("parlays")}>
+          🎰 PARLAYS
+        </button>
         {games.map((g,i) => (
-          <button key={g.id} style={S.tab(activeTab==="game_"+i)} onClick={()=>{ setActiveTab("game_"+i); }}>
+          <button key={g.id} style={S.tab(activeTab==="game_"+i)} onClick={()=>setActiveTab("game_"+i)}>
             {TEAM_PARAMS[g.awayTeam]?.abbr||g.awayTeam.split(" ").pop()} @ {TEAM_PARAMS[g.homeTeam]?.abbr||g.homeTeam.split(" ").pop()}
             {runningId===(g.homeTeam+"|"+g.awayTeam) ? " ⟳" : !simData[g.homeTeam+"|"+g.awayTeam] ? " ·" : ""}
           </button>
         ))}
-        <div style={{ flex:1 }}/>
-        <button style={{ ...S.tab(activeTab==="top_picks"), color:activeTab==="top_picks"?T.green:T.muted, borderBottom:activeTab==="top_picks"?"2px solid "+T.green:"2px solid transparent", borderLeft:"1px solid "+T.border }}
-          onClick={()=>{ setActiveTab("top_picks"); }}>
-          ⭐ TOP PICKS {topBetCount>0?"("+topBetCount+")":""}
-        </button>
-        <button style={{ ...S.tab(activeTab==="parlays"), color:activeTab==="parlays"?T.purple:T.muted, borderBottom:activeTab==="parlays"?"2px solid "+T.purple:"2px solid transparent" }}
-          onClick={()=>{ setActiveTab("parlays"); }}>
-          🎰 PARLAYS
-        </button>
       </div>
 
-      {/* MANUAL SELECTOR */}
-
       {/* CONTENT */}
-      {activeTab==="top_picks" && <TopPicksTab simData={simData} games={games} betLogger={betLogger}/>}
-      {activeTab==="parlays" && <MLBParlayTab simData={simData} games={games} betLogger={betLogger}/>}
-      {!["top_picks","parlays"].includes(activeTab) && activeGame && TEAM_PARAMS[activeGame.homeTeam] && TEAM_PARAMS[activeGame.awayTeam] && (
+      {loaded && !loading && games.length === 0 && !error && activeTab === "top_picks" && (
+        <div style={{ maxWidth:920, margin:"0 auto", padding:"0 14px" }}>
+          <div style={{ ...S.card, marginTop:20, textAlign:"center", padding:"20px 16px", color:T.muted, fontSize:11, lineHeight:1.7 }}>
+            No MLB games today. Picks show up here on game days, graded against Kalshi's prices.
+          </div>
+        </div>
+      )}
+      {activeTab==="top_picks" && <TopPicksTab allRows={allRows} games={games} simData={simData} kx={kx}/>}
+      {activeTab==="parlays" && <MLBParlayTab allRows={allRows}/>}
+      {!isSpecialTab && activeGame && TEAM_PARAMS[activeGame.homeTeam] && TEAM_PARAMS[activeGame.awayTeam] && (
         <GameSimView game={activeGame} agg={simData[gameKey]}
           running={runningId === gameKey}
           runCount={runCounts[gameKey]||0}
           onRun={()=>runSim(activeGame)}
-          betLogger={betLogger}
+          kx={kx} settings={settings}
         />
       )}
-      {!["top_picks","parlays"].includes(activeTab) && activeGame && (!TEAM_PARAMS[activeGame.homeTeam]||!TEAM_PARAMS[activeGame.awayTeam]) && (
+      {!isSpecialTab && activeGame && (!TEAM_PARAMS[activeGame.homeTeam]||!TEAM_PARAMS[activeGame.awayTeam]) && (
         <div style={{ textAlign:"center", padding:48, color:T.muted, fontSize:11 }}>Team not in model: {activeGame.homeTeam} vs {activeGame.awayTeam}</div>
       )}
-      {!["top_picks","parlays"].includes(activeTab) && !activeGame && (
+      {!isSpecialTab && !activeGame && (
         <div style={{ textAlign:"center", padding:48, color:T.muted, fontSize:11 }}>{loading?"Loading today's games...":"No games found."}</div>
       )}
     </div>
