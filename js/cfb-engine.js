@@ -693,7 +693,8 @@ const DEFAULT_CONFIG = {
   cooldownSecs: 60,        // wait after exiting a market before re-entering it
   anchorHoldSecs: 20,      // after a score/possession change, price the new state with the pre-change calibration this long
   leadEntries: true,       // allow entries in that window when the market hasn't moved yet (paper-test first)
-  leadEntryEdge: 6,        // edge needed for a feed-lead entry (¢, after fee)
+  leadEntryEdge: 6,
+  leadEntryWindowSecs: 10, // lead entries only this soon after the score (the market usually reprices in 10-30s)        // edge needed for a feed-lead entry (¢, after fee)
   leadTargetFrac: 0.8,     // feed-lead take-profit = this share of the entry edge...
   leadMinTarget: 4,        // ...but at least this many ¢
   leadMaxHoldSecs: 180,    // the catch-up is over by then: flatten a lead trade unless it's down more than leadMaxGiveBack
@@ -701,7 +702,8 @@ const DEFAULT_CONFIG = {
   maxMarketAgeSecs: 6,     // no entries on quotes older than this
   maxEdge: 25,             // an "edge" bigger than this is almost always stale or bad data, not opportunity
   modelEntries: false,     // also enter on plain model-vs-market disagreement (lost money in paper; off by default)
-  leadMaxPreMove: 2,       // ...and only if the moneyline hadn't already moved this many ¢ before our feed showed it
+  leadMaxPreMove: 3,       // ...and only if no sensitive price in the game had already moved this many ¢ before our feed showed it
+  anchorQuietSecs: 8,      // the pre-change calibration only refreshes after prices have been quiet this long
   maxStopsPerGame: 2,      // after this many stop-losses in one game, stop entering it
   gameTimeoutSecs: 300,    // after a stop-loss, no new entries in that game for this long
   blowoutMargin: 21,       // no entries in the 2nd half when a team leads by this much
@@ -737,7 +739,16 @@ function sideQuotes(mk, side) {
   }
   action = { type:"buy"|"sell", ticker, side, count, limit (cents), reason, gameId, fair, edge }
 */
-const _keyState = new Map(), _anchors = new Map();
+const _keyState = new Map(), _anchors = new Map(), _midHist = new Map();
+// mids of the liquid, price-sensitive rungs of a game's ladder (by ticker)
+function ladderMids(markets) {
+  const o = {};
+  for (const mk of markets || []) {
+    if (mk.half || mk.status !== "active" || mk.yesBid == null || mk.yesAsk == null || mk.yesAsk - mk.yesBid > 6) continue;
+    const m = (mk.yesBid + mk.yesAsk) / 2; if (m >= 15 && m <= 85) o[mk.ticker] = m;
+  }
+  return o;
+}
 const feedFast = (g) => g.feed === "core";
 function decide(input) {
   const cfg = { ...DEFAULT_CONFIG, ...(input.cfg || {}) };
@@ -757,27 +768,32 @@ function decide(input) {
     const g = G.g; if (!g) continue;
     const stale = !G.dataTs || (now - G.dataTs) / 1000 > cfg.staleDataSecs;
     const markets = (G.markets || []).filter(mk => mk && !mk.half); // 1H markets need a half-time model; not traded yet
-    // Feed lead: track score/possession changes and the moneyline mid at that moment.
-    const winH = markets.find(m => m.kind === "win" && m.side === "home");
-    const mlMid = winH ? mid(winH) : null;
+    // Feed lead. Track the game's sensitive prices (liquid rungs priced 15-85¢): a touchdown barely moves a 95¢
+    // moneyline but moves the spread/total ladder. The pre-change calibration ("anchor") is only refreshed while those
+    // prices are quiet, so it can't soak up a market that is already reacting to a score our feed hasn't shown yet.
+    const mids = ladderMids(markets);
+    const maxMove = (a, b) => { let m = 0; if (!a || !b) return 99; for (const k in a) if (b[k] != null) m = Math.max(m, Math.abs(a[k] - b[k])); return m; };
+    let hist = _midHist.get(g.id); if (!hist) { hist = []; _midHist.set(g.id, hist); }
+    if (!hist.length || now - hist[hist.length - 1].ts >= 1000) hist.push({ ts: now, mids });
+    while (hist.length > 1 && now - hist[1].ts > cfg.anchorQuietSecs * 1000) hist.shift();
+    const quiet = hist.length > 0 && now - hist[0].ts >= cfg.anchorQuietSecs * 1000 * 0.75 && maxMove(hist[0].mids, mids) < cfg.leadMaxPreMove;
     const keySig = [g.home.score, g.away.score, g.possession, g.period > 4 ? "ot" : ""].join("|");
     let ks = _keyState.get(g.id);
-    if (!ks || ks.sig !== keySig) { ks = { sig: keySig, ts: ks ? now : 0, midAtChange: mlMid }; _keyState.set(g.id, ks); }
+    if (!ks || ks.sig !== keySig) { ks = { sig: keySig, ts: ks ? now : 0, midsAtChange: mids }; _keyState.set(g.id, ks); }
     const sinceKey = (now - ks.ts) / 1000;
     const anchor = _anchors.get(g.id);
     // Hold only if the market hadn't already moved before our feed showed the change (else the old calibration would
     // count the score twice), and only until the market reacts.
-    const preMoveOk = anchor && anchor.mid != null && ks.midAtChange != null && Math.abs(ks.midAtChange - anchor.mid) < cfg.leadMaxPreMove;
-    const reacted = mlMid != null && ks.midAtChange != null && Math.abs(mlMid - ks.midAtChange) >= 2 * cfg.leadMaxPreMove;
+    const preMoveOk = anchor && maxMove(anchor.mids, ks.midsAtChange) < cfg.leadMaxPreMove;
+    const reacted = maxMove(ks.midsAtChange, mids) >= 2 * cfg.leadMaxPreMove;
     const holding = cfg.anchorHoldSecs > 0 && g.state === "in" && anchor && anchor.keySig !== keySig && sinceKey < cfg.anchorHoldSecs && preMoveOk && !reacted;
     const live = liveDistribution(g, G.pre, markets, holding ? { ...cfg, hold: anchor } : cfg);
-    if (!holding && sinceKey >= cfg.anchorHoldSecs && !stale && g.state === "in")
-      _anchors.set(g.id, { cal: live.cal, corr: live.corr, keySig, mid: mlMid, ts: now });
-    // the market hadn't already moved before our feed showed the change (otherwise it's the market leading, not us)
+    if (!holding && sinceKey >= cfg.anchorHoldSecs && !stale && g.state === "in" && quiet)
+      _anchors.set(g.id, { cal: live.cal, corr: live.corr, keySig, mids, ts: now });
     const scoreMoved = anchor && anchor.keySig.split("|").slice(0, 2).join("|") !== keySig.split("|").slice(0, 2).join("|");
     // quotes must be fresh: after a stall (a frozen background tab), old quotes next to a new score look like huge fake edges
     const marketFresh = !G.marketTs || (now - G.marketTs) / 1000 <= cfg.maxMarketAgeSecs;
-    const leadOk = holding && scoreMoved && cfg.leadEntries && feedFast(g) && !g.reviewPending && marketFresh;
+    const leadOk = holding && scoreMoved && sinceKey <= cfg.leadEntryWindowSecs && cfg.leadEntries && feedFast(g) && !g.reviewPending && marketFresh;
     // a key change we can't trade on: block entries until the hold window passes (data / market catching up)
     const catchingUp = anchor && anchor.keySig !== keySig && sinceKey < cfg.anchorHoldSecs && !leadOk;
     const proj = live.dist; proj.cal = live.cal; proj.eff = live.eff; proj.target = live.target; proj.held = holding;
@@ -817,7 +833,9 @@ function decide(input) {
           if (width > cfg.maxExitWidth && fairSide - q.bid >= cfg.stopLoss / 2 && !proj.unreliable) { ev.note = `stop held: quote ${q.bid}/${q.ask} too wide (fair ${fairSide.toFixed(0)}¢)`; continue; }
           reason = -gain >= cfg.stopLoss ? `stop loss ${gain}¢` : `trailing stop (peak ${peak}¢)`;
         }
-        else if (!stale && !proj.unreliable && mk.status === "active" && q.bid - fairSide >= cfg.edgeExit) reason = `edge gone (fair ${fairSide.toFixed(0)}¢ < bid ${q.bid}¢)`;
+        // lead positions: once the post-score view ends, fair is just the market's own price again, so "edge gone" is
+        // meaningless; they exit by target, lead window or stop instead
+        else if (!stale && !proj.unreliable && mk.status === "active" && q.bid - fairSide >= cfg.edgeExit && (!pos.lead || holding)) reason = `edge gone (fair ${fairSide.toFixed(0)}¢ < bid ${q.bid}¢)`;
         if (reason) {
           actions.push({ type: "sell", ticker: mk.ticker, side: pos.side, count: pos.count, limit: q.bid,
                          reason, gameId: g.id, fair: fairSide, gain });
