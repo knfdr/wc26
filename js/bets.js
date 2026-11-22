@@ -46,18 +46,22 @@
   function getSettings() { return settings; }
   function onSettings(fn) { listeners.add(fn); return () => listeners.delete(fn); }
   function applySettings(s) { settings = merge(DEFAULTS, s); try { localStorage.setItem(LS_SETTINGS, JSON.stringify(settings)); } catch (e) {} listeners.forEach(f => f(settings)); }
-  let gistCache = null;
-  async function gistRead() {
-    if (gistCache && Date.now() - gistCache.ts < 20000) return gistCache.data;
-    const r = await fetch("/api/gist"); if (!r.ok) throw new Error("gist read " + r.status);
-    const data = await r.json(); gistCache = { ts: Date.now(), data }; return data;
+  // one shared read: every component on a page asks at once, so share the request in flight and cache it 20s
+  let gistCache = null, gistInflight = null;
+  function gistRead() {
+    if (gistCache && Date.now() - gistCache.ts < 20000) return Promise.resolve(gistCache.data);
+    if (!gistInflight) gistInflight = fetch("/api/gist").then(async r => { if (!r.ok) throw new Error("gist read " + r.status); const data = await r.json(); gistCache = { ts: Date.now(), data }; return data; })
+      .finally(() => { gistInflight = null; });
+    return gistInflight;
   }
   async function gistWriteFile(name, obj) {
     const r = await fetch("/api/gist", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ files: { [name]: { content: JSON.stringify(obj, null, 2) } } }) });
     gistCache = null;
     if (!r.ok) throw new Error("gist write " + r.status);
   }
-  async function loadSettings() {
+  let settingsLoad = null;   // once per page load
+  function loadSettings() { return settingsLoad || (settingsLoad = loadSettingsNow()); }
+  async function loadSettingsNow() {
     try { const d = await gistRead(); const f = d.files && d.files[GIST_SETTINGS]; if (f && f.content) applySettings(JSON.parse(f.content)); } catch (e) {}
     return settings;
   }

@@ -10,6 +10,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <script src="js/cfb-engine.js"></script>
+<script src="js/bets.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html,body{min-height:100vh;background:#070b14;font-family:'IBM Plex Mono','Courier New',monospace;color:#dde5f0}
@@ -111,20 +112,29 @@ function blend(g, res, fpiHome) {
   return { spreadHome: spread, total, fpiSpread, market: mk, results: res };
 }
 
-function tierFor(edge, p) {
-  if (edge >= 10 && p >= 0.55) return "LOCK";
-  if (edge >= 7) return "HIGH";
-  if (edge >= 4) return "LEAN";
-  return null;
-}
-const TIER_C = { LOCK: T.red, HIGH: T.green, LEAN: T.gold };
+const SB = window.SharpBets;
+const SPORT = "cfb";
+const wide = (r) => r.yesAsk - r.yesBid > 6;   // quotes this far apart aren't real prices
+// grade of a row's best side: model chance to cash vs the price of that side
+const gradeRow = (r, st) => r.ask != null ? SB.grade(r.pSide, r.ask, st) : null;
 
-function marketLabel(m, g) {
-  const nm = (s) => s === "home" ? g.home.abbr : g.away.abbr;
-  if (m.kind === "win") return `${nm(m.side)} ML`;
-  if (m.kind === "spread") return `${nm(m.side)} -${m.line}`;
-  return `O ${m.line}`;
+// The best side of a row in plain words: "BAL -6.5" / "CIN +6.5", "BAL to win" / "BAL doesn't win", "Over 44.5" / "Under 44.5"
+function betLabel(r, g) {
+  const nm = (s) => s === "home" ? g.home.abbr : g.away.abbr, other = (s) => s === "home" ? "away" : "home";
+  const yes = r.side === "yes";
+  if (r.kind === "win") return yes ? `${nm(r.team)} to win` : `${nm(r.team)} doesn't win`;
+  if (r.kind === "spread") return yes ? `${nm(r.team)} -${r.line}` : (r.line % 1 ? `${nm(other(r.team))} +${r.line}` : `${nm(r.team)} doesn't cover -${r.line}`);
+  return yes ? `Over ${r.line}` : `Under ${r.line}`;
 }
+// One line saying what has to happen for the bet to cash
+function betMeaning(r, g) {
+  const nm = (s) => s === "home" ? g.home.abbr : g.away.abbr;
+  const yes = r.side === "yes";
+  if (r.kind === "win") return yes ? `${nm(r.team)} wins the game` : `${nm(r.team)} loses or ties`;
+  if (r.kind === "spread") { const by = Math.floor(r.line) + 1; return yes ? `${nm(r.team)} wins by ${by}+` : `${nm(r.team)} doesn't win by ${by}+`; }
+  return yes ? `${Math.floor(r.line) + 1}+ total points` : `${Math.ceil(r.line) - 1} or fewer total points`;
+}
+const pickOf = (r, g, gr) => ({ ticker: r.ticker, side: r.side, price: r.ask, chance: r.pSide * 100, label: betLabel(r, g), sub: `${betMeaning(r, g)} · ${g.away.abbr} @ ${g.home.abbr}`, sport: SPORT, grade: gr });
 
 // ── App ──────────────────────────────────────────────────────────────────────
 function App() {
@@ -186,7 +196,7 @@ function App() {
           const side = (yesEdge ?? -99) >= (noEdge ?? -99) ? "yes" : "no";
           const edge = side === "yes" ? yesEdge : noEdge;
           const pSide = side === "yes" ? p : 1 - p;
-          return { ...m, fair, side, edge, pSide, ask: side === "yes" ? m.yesAsk : m.noAsk, tier: edge != null ? tierFor(edge, pSide) : null };
+          return { ...m, team: m.side, fair, side, edge, pSide, ask: side === "yes" ? m.yesAsk : m.noAsk };
         });
         setSims(prev => ({ ...prev, [g.id]: { v: (x.markets || []).length + (rt ? 1 : 0), b, pHome: dist.pHome, rows } }));
         await sleep(10);
@@ -195,6 +205,7 @@ function App() {
     return () => { cancelled = true; };
   }, [games, extra, rt]);
 
+  const st = SB.useSettings();
   const picks = useMemo(() => {
     const out = [];
     for (const g of games) {
@@ -202,13 +213,24 @@ function App() {
       // best pick per market type per game, liquid quotes only
       const byKind = {};
       for (const r of s.rows) {
-        if (!r.tier || r.ask < 10 || r.ask > 90 || r.yesAsk - r.yesBid > 6 || r.volume < 1000) continue;
-        if (!byKind[r.kind] || r.edge > byKind[r.kind].edge) byKind[r.kind] = r;
+        if (r.ask == null || r.ask < 10 || r.ask > 90 || wide(r) || r.volume < 1000) continue;
+        const gr = gradeRow(r, st);
+        if (!gr || gr.rank > 2) continue;   // STRONG, GOOD, SMALL only
+        if (!byKind[r.kind] || gr.edge > byKind[r.kind].gr.edge) byKind[r.kind] = { r, gr };
       }
-      Object.values(byKind).forEach(r => out.push({ g, r }));
+      Object.values(byKind).forEach(({ r, gr }) => out.push({ g, r, gr }));
     }
-    return out.sort((a, b) => b.r.edge - a.r.edge);
-  }, [games, sims]);
+    return out.sort((a, b) => a.gr.rank - b.gr.rank || b.gr.edge - a.gr.edge);
+  }, [games, sims, st]);
+
+  // add STRONG and GOOD picks to the win/loss record (deduped by ticker|side in the shared module)
+  const logKey = picks.filter(p => p.gr.rank <= 1).map(p => p.r.ticker + "|" + p.r.side).join(",");
+  useEffect(() => {
+    if (!logKey) return;
+    SB.logPicks(picks.filter(p => p.gr.rank <= 1).map(({ g, r, gr }) => ({
+      sport: SPORT, gameId: g.id, gameDate: new Date(g.date).toLocaleDateString("en-CA"), home: g.home.name, away: g.away.name,
+      market: betLabel(r, g), ticker: r.ticker, side: r.side, chance: gr.chance, price: r.ask, tier: gr.key })));
+  }, [logKey]);
 
   const tabs = [["picks", `⭐ TOP PICKS (${picks.length})`], ...games.map(g => ["g" + g.id, `${g.away.abbr} @ ${g.home.abbr}`])];
   const active = games.find(g => "g" + g.id === tab);
@@ -218,6 +240,7 @@ function App() {
       <div style={{ background: T.navy, borderBottom: "1px solid " + T.border, padding: "10px 16px", display: "flex", gap: 14, alignItems: "center" }}>
         <a href="index.html" style={{ fontSize: 9, color: T.muted, letterSpacing: 1 }}>← SHARP SIM</a>
         <div style={{ flex: 1 }} />
+        <a href="settings.html" style={{ fontSize: 9, color: T.muted, letterSpacing: 1 }}>⚙ SETTINGS</a>
         <a href="live.html" style={{ fontSize: 9, color: T.accent, letterSpacing: 1, fontWeight: 700 }}>⚡ LIVE AUTO →</a>
       </div>
       <div style={{ background: "linear-gradient(160deg,#0c1526 0%,#070b14 100%)", borderBottom: "1px solid " + T.border, padding: "24px 16px 18px", textAlign: "center" }}>
@@ -238,69 +261,55 @@ function App() {
       <div style={{ maxWidth: 1000, margin: "0 auto", padding: "16px 16px 60px" }}>
         {status && <div style={{ ...card, fontSize: 10, color: T.muted, marginBottom: 12 }}>{status}</div>}
         {rt && <div style={{ fontSize: 8, color: T.dim, marginBottom: 10 }}>Ratings fit on {rt.nGames} completed {SEASON} games.</div>}
+        {tab === "picks" && <><SB.GradeLegend sport={SPORT} /><SB.RecordCard sport={SPORT} /></>}
         {tab === "picks" && (kxDown
           ? <div style={{ ...card, fontSize: 10, color: T.gold }}>Kalshi prices couldn't be loaded, so there's nothing to compare the model with. The site's data service is over Cloudflare's free daily request limit; it resets at 7 PM Eastern. The model's own lines are still on each game tab.</div>
-          : <Picks picks={picks} kx={kx} />)}
-        {active && <GameView g={active} s={sims[active.id]} x={extra[active.id]} rt={rt} kx={kx} />}
+          : <Picks picks={picks} st={st} />)}
+        {active && <GameView g={active} s={sims[active.id]} x={extra[active.id]} rt={rt} st={st} />}
         <div style={{ fontSize: 9, color: T.muted, marginTop: 16, padding: 10, borderTop: "1px solid " + T.border, lineHeight: 1.7 }}>
-          Edges are model fair value minus Kalshi's ask, after the taker fee. The market carries most of the weight, so a big edge usually means a thin or stale quote: check the book before buying. Not betting advice.
+          "Chance to cash" is how often the model's simulations say the bet wins. Edge is that chance minus Kalshi's price in cents (before Kalshi's small trading fee). The market carries most of the model's weight, so a very big edge usually means a thin or stale quote: check the price before buying. Not betting advice.
         </div>
       </div>
     </div>
   );
 }
 
-function Picks({ picks, kx }) {
-  if (!picks.length) return <div style={{ ...card, fontSize: 10, color: T.muted }}>No qualifying edges yet (needs ≥4¢ after fees on a liquid Kalshi quote).</div>;
+function Picks({ picks, st }) {
+  if (!picks.length) return <div style={{ ...card, fontSize: 10, color: T.muted }}>No bets worth making right now. A bet shows up here once the model's chance to cash beats Kalshi's price by at least {st.small.minEdge}¢ on a market that trades.</div>;
   return (
-    <div style={{ display: "grid", gap: 8 }}>
-      {picks.map(({ g, r }) => (
-        <div key={r.ticker} style={{ ...card, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", borderLeft: "3px solid " + TIER_C[r.tier] }}>
-          <span style={{ background: TIER_C[r.tier] + "22", border: "1px solid " + TIER_C[r.tier] + "55", color: TIER_C[r.tier], fontSize: 8, fontWeight: 700, padding: "2px 6px", borderRadius: 2, letterSpacing: 1 }}>{r.tier}</span>
-          <div style={{ flex: 1, minWidth: 200 }}>
-            <div style={{ fontSize: 12, fontWeight: 700 }}>{r.side === "yes" ? marketLabel(r, g) : "NOT " + marketLabel(r, g)}</div>
-            <div style={{ fontSize: 9, color: T.muted }}>{g.away.abbr} @ {g.home.abbr} · {new Date(g.date).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}</div>
-          </div>
-          <div style={{ fontSize: 10, textAlign: "right" }}>
-            <div>model <b style={{ color: T.purple }}>{(r.pSide * 100).toFixed(1)}%</b> · ask <b>{r.ask}¢</b></div>
-            <div style={{ color: T.green }}>edge +{r.edge.toFixed(1)}¢</div>
-          </div>
-          <BuyButton r={r} kx={kx} label={r.side === "yes" ? marketLabel(r, g) : "NOT " + marketLabel(r, g)} />
-        </div>
-      ))}
+    <div>
+      <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 8 }}>Best bets right now: tap BET to place it on Kalshi</div>
+      <div style={{ display: "grid", gap: 8 }}>
+        {picks.map(({ g, r, gr }) => {
+          const usd = SB.stake(gr, SPORT, st);
+          return (
+            <div key={r.ticker} style={{ ...card, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", borderLeft: "3px solid " + gr.color }}>
+              <SB.GradeBadge g={gr} />
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>{betLabel(r, g)} <span style={{ fontSize: 9, color: T.muted, fontWeight: 400 }}>· {betMeaning(r, g)}</span></div>
+                <div style={{ margin: "2px 0" }}><SB.ChanceLine g={gr} /></div>
+                <div style={{ fontSize: 9, color: T.muted }}>{g.away.abbr} @ {g.home.abbr} · {new Date(g.date).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}{usd ? <> · suggested bet <b style={{ color: T.text }}>{SB.money(usd)}</b></> : null}</div>
+              </div>
+              <SB.BetButton pick={pickOf(r, g, gr)} />
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-function BuyButton({ r, kx, label }) {
-  const [st, setSt] = useState("idle");
-  if (!kx || !kx.credentials || !kx.tradingEnabled) return null;
-  async function buy() {
-    const dollars = parseFloat(prompt(`Buy ${label} at ${r.ask}¢ on Kalshi.\nHow many dollars? (server cap $${kx.maxOrderDollars})`, "10") || "0");
-    if (!(dollars > 0)) return;
-    const count = Math.floor(dollars / (r.ask / 100));
-    if (count < 1) return;
-    if (!confirm(`Place: ${count} contracts of ${label} at ${r.ask}¢ (risk $${(count * r.ask / 100).toFixed(2)})?`)) return;
-    setSt("placing");
-    const yesPrice = r.side === "yes" ? r.ask : 100 - r.ask;
-    try {
-      const res = await fetch("/api/kx/portfolio/events/orders", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticker: r.ticker, side: r.side === "yes" ? "bid" : "ask", price: (yesPrice / 100).toFixed(2), count: String(count), time_in_force: "good_till_canceled" }) });
-      const d = await res.json();
-      if (!res.ok) throw new Error(typeof d.error === "string" ? d.error : JSON.stringify(d.error || d));
-      setSt("ok");
-    } catch (e) { alert(e.message); setSt("idle"); }
-  }
-  if (st === "ok") return <span style={{ fontSize: 8, color: T.green, fontWeight: 700 }}>✓ ORDER SENT</span>;
-  return <button onClick={buy} disabled={st === "placing"} style={{ ...btn, color: T.green, borderColor: T.green + "66" }}>{st === "placing" ? "…" : "BUY ON KALSHI"}</button>;
-}
-
-function GameView({ g, s, x, rt, kx }) {
+function GameView({ g, s, x, rt, st }) {
+  const [sort, setSort] = useState({ k: "edge", dir: -1 });
   if (!s) return <div style={{ ...card, fontSize: 10, color: T.muted }}>Simulating…</div>;
   const b = s.b;
   const fmtLine = (sp) => sp == null ? "—" : `${sp >= 0 ? g.home.abbr : g.away.abbr} -${Math.abs(sp).toFixed(1)}`;
-  const winRow = s.rows.find(r => r.kind === "win" && r.side === "home");
-  const rows = s.rows.slice().sort((a, c) => (a.kind > c.kind ? 1 : a.kind < c.kind ? -1 : a.side > c.side ? 1 : a.side < c.side ? -1 : a.line - c.line));
+  const winRow = s.rows.find(r => r.kind === "win" && r.team === "home");
+  const all = s.rows.map(r => ({ r, gr: gradeRow(r, st) }));
+  const hidden = st.hideWide ? all.filter(o => wide(o.r)).length : 0;
+  const shown = st.hideWide ? all.filter(o => !wide(o.r)) : all;
+  const val = (o, k) => k === "bet" ? betLabel(o.r, g) : k === "grade" ? (o.gr ? -o.gr.rank : null) : k === "chance" ? o.r.pSide * 100 : k === "price" ? o.r.ask : k === "edge" ? (o.gr ? o.gr.edge : null) : k === "usd" ? (o.gr ? SB.stake(o.gr, SPORT, st) : null) : null;
+  const rows = SB.sortRows(shown, sort, val);
   return (
     <div>
       <div style={{ ...card, marginBottom: 12 }}>
@@ -317,19 +326,34 @@ function GameView({ g, s, x, rt, kx }) {
       </div>
       {!x || !x.markets ? <div style={{ ...card, fontSize: 10, color: T.muted }}>No Kalshi markets found for this game.</div> : (
         <div style={{ ...card, padding: 0, overflowX: "auto" }}>
+          <div style={{ fontSize: 10, color: T.muted, padding: "10px 10px 4px" }}>Every Kalshi market for this game, best edge first. Tap a column to sort. Focus on <b style={{ color: SB.COLORS.STRONG }}>STRONG</b> and <b style={{ color: SB.COLORS.GOOD }}>GOOD</b> rows.</div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
-            <thead><tr>{["Market", "Kalshi bid/ask", "Model fair", "Best side", "Edge", ""].map(h => <th key={h} style={{ textAlign: "left", color: T.muted, fontSize: 8, letterSpacing: 1, padding: "8px 10px", borderBottom: "1px solid " + T.border, textTransform: "uppercase" }}>{h}</th>)}</tr></thead>
-            <tbody>{rows.map(r => (
-              <tr key={r.ticker} style={{ opacity: r.yesAsk - r.yesBid > 6 ? 0.5 : 1 }}>
-                <td style={td}>{marketLabel(r, g)}</td>
-                <td style={td}>{r.yesBid}/{r.yesAsk}¢</td>
-                <td style={{ ...td, color: T.purple }}>{r.fair.toFixed(1)}¢</td>
-                <td style={td}>{r.side.toUpperCase()} @ {r.ask}¢</td>
-                <td style={{ ...td, color: r.tier ? TIER_C[r.tier] : (r.edge || 0) > 0 ? T.text : T.muted, fontWeight: r.tier ? 700 : 400 }}>{r.edge != null ? (r.edge >= 0 ? "+" : "") + r.edge.toFixed(1) + "¢" : "—"} {r.tier || ""}</td>
-                <td style={td}>{r.tier && <BuyButton r={r} kx={kx} label={(r.side === "yes" ? "" : "NOT ") + marketLabel(r, g)} />}</td>
-              </tr>
-            ))}</tbody>
+            <thead><tr>
+              <SB.SortTh k="bet" sort={sort} setSort={setSort}>Bet</SB.SortTh>
+              <SB.SortTh k="grade" sort={sort} setSort={setSort}>Grade</SB.SortTh>
+              <SB.SortTh k="chance" sort={sort} setSort={setSort}>Chance to cash</SB.SortTh>
+              <SB.SortTh k="price" sort={sort} setSort={setSort}>Price</SB.SortTh>
+              <SB.SortTh k="edge" sort={sort} setSort={setSort}>Edge</SB.SortTh>
+              <SB.SortTh k="usd" sort={sort} setSort={setSort}>Suggested</SB.SortTh>
+              <SB.SortTh sort={sort} setSort={setSort}></SB.SortTh>
+            </tr></thead>
+            <tbody>{rows.map(({ r, gr }) => {
+              const usd = gr ? SB.stake(gr, SPORT, st) : 0;
+              const good = gr && gr.rank <= 1;
+              return (
+                <tr key={r.ticker} style={{ opacity: wide(r) ? 0.5 : 1, background: good ? gr.color + "0d" : "transparent" }}>
+                  <td style={td}><div style={{ fontWeight: good ? 700 : 400, whiteSpace: "nowrap" }}>{betLabel(r, g)}</div><div style={{ fontSize: 8, color: T.muted, whiteSpace: "nowrap" }}>{betMeaning(r, g)}{wide(r) ? " · wide quote" : ""}</div></td>
+                  <td style={td}>{gr ? <SB.GradeBadge g={gr} small /> : "—"}</td>
+                  <td style={{ ...td, color: gr ? gr.color : T.text, fontWeight: 700 }}>{(r.pSide * 100).toFixed(0)}%</td>
+                  <td style={td}>{r.ask != null ? r.ask + "¢" : "—"}</td>
+                  <td style={{ ...td, color: gr ? (gr.edge > 0 ? gr.color : T.muted) : T.muted, fontWeight: good ? 700 : 400 }}>{gr ? (gr.edge >= 0 ? "+" : "") + gr.edge.toFixed(1) + "¢" : "—"}</td>
+                  <td style={td}>{usd ? SB.money(usd) : "—"}</td>
+                  <td style={td}>{gr && gr.rank <= 2 && <SB.BetButton pick={pickOf(r, g, gr)} compact />}</td>
+                </tr>
+              );
+            })}</tbody>
           </table>
+          {hidden > 0 && <div style={{ fontSize: 9, color: T.dim, padding: "8px 10px" }}>{hidden} market{hidden > 1 ? "s" : ""} hidden: buy and sell prices more than 6¢ apart, so the price isn't real. Show them in <a href="settings.html" style={{ color: T.blue }}>Settings</a>.</div>}
         </div>
       )}
     </div>
