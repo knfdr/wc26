@@ -7,6 +7,19 @@
   const h = R.createElement, { useState, useEffect, useRef, useMemo } = R;
   const SB = root.SharpBets || {};
 
+  // Theme: "auto" follows the phone; "dark"/"light" are set in Settings and stored on this device.
+  const THEME_KEY = "sharp_theme";
+  function getTheme() { try { return localStorage.getItem(THEME_KEY) || "auto"; } catch (e) { return "auto"; } }
+  function setTheme(t) {
+    try { if (t === "auto") localStorage.removeItem(THEME_KEY); else localStorage.setItem(THEME_KEY, t); } catch (e) {}
+    applyTheme(t);
+  }
+  function applyTheme(t) {
+    const el = root.document && root.document.documentElement; if (!el) return;
+    if (t === "dark" || t === "light") el.setAttribute("data-theme", t); else el.removeAttribute("data-theme");
+  }
+  applyTheme(getTheme());
+
   // Color with transparency that works for hex and CSS variables alike: alpha("var(--strong)", 15)
   const alpha = (c, pct) => `color-mix(in srgb, ${c} ${pct}%, transparent)`;
 
@@ -233,5 +246,5 @@
         xLabels: [[0, fmtD(data[0].date)], [data.length - 1, fmtD(data[data.length - 1].date)]] }));
   }
 
-  root.SharpUI = { alpha, NAV, TopBar, Shell, PageHead, H2, Status, Tabs, Seg, Tile, PickCard, PickRow, PickList, LineChart, BarChart, ProbLadder, RecordChart, useWidth, niceTicks };
+  root.SharpUI = { alpha, getTheme, setTheme, NAV, TopBar, Shell, PageHead, H2, Status, Tabs, Seg, Tile, PickCard, PickRow, PickList, LineChart, BarChart, ProbLadder, RecordChart, useWidth, niceTicks };
 })(typeof window !== "undefined" ? window : globalThis);
