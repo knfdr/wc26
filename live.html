@@ -68,6 +68,8 @@ async function getJSON(url) {
   if (r.status === 429 && url.startsWith("/api/kx")) kxQueue.backoffUntil = Date.now() + 2000;
   const text = await r.text();
   let d; try { d = JSON.parse(text); } catch (e) { d = { error: text.slice(0, 200) }; }
+  // over Cloudflare's daily request limit the site serves its home page for /api/*
+  if (r.ok && url.startsWith("/api/") && /^\s*</.test(text)) { const err = new Error("site API unavailable (Cloudflare daily request limit?)"); err.status = 503; throw err; }
   if (!r.ok) { const err = new Error((d && (d.error && (d.error.message || d.error)) || d.message) || ("HTTP " + r.status)); err.status = r.status; err.body = d; throw err; }
   return d;
 }
@@ -1033,7 +1035,11 @@ function ServerRunner({ cfg, enabled, liveGames, nEnabled, browserRunning, onSta
   const [st, setSt] = useState(null), [err, setErr] = useState(""), [busy, setBusy] = useState(false);
   const [pick, setPick] = useState(() => load("sharp_runner_mode", "paper"));
   const [acct, setAcct] = useState(null), [synced, setSynced] = useState(null), [showLog, setShowLog] = useState(false);
-  const refresh = useCallback(() => getJSON("/api/runner/status").then(d => { setSt(d); setErr(""); onStatus && onStatus(d); }).catch(e => setErr(e.message)), []);
+  const refresh = useCallback(() => getJSON("/api/runner/status").then(d => {
+      // when Cloudflare's daily request limit is hit, the site serves its home page instead of the API: don't render that as a status
+      if (!d || typeof d !== "object" || !Array.isArray(d.positions)) throw new Error("Can't reach the server auto trader right now (Cloudflare's daily request limit may be used up; it resets at 7 PM Eastern).");
+      d.trades = d.trades || []; d.myPositions = d.myPositions || []; d.shadowTrades = d.shadowTrades || []; d.record = d.record || { n: 0, wins: 0 };
+      setSt(d); setErr(""); onStatus && onStatus(d); }).catch(e => { setErr(e.message); setSt(null); onStatus && onStatus(null); }), []);
   useEffect(() => { refresh(); let last = Date.now();
     const id = setInterval(() => { if (!document.hidden || Date.now() - last > 60000) { last = Date.now(); refresh(); } }, 5000);
     return () => clearInterval(id); }, [refresh]);
