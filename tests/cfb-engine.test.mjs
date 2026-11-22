@@ -174,3 +174,25 @@ test("decide: feed-lead positions exit at their own target or when the lead wind
   assert.match(run({ avgCost: 49, tpPrice: 56, openedAt: t - 200000 }, t)[0].reason, /lead window over/);
   assert.equal(run({ avgCost: 49, tpPrice: 56, openedAt: t - 30000 }, t).length, 0);
 });
+
+test("decide: positions you hand over follow only your price rules", () => {
+  const g = game();
+  const m = mk("spread", "home", 3.5, 60, 62);
+  const base = { now: Date.now(), cfg: { alpha: 0 }, games: [{ g, pre: { spreadHome: 3, total: 50 }, dataTs: Date.now(), markets: [m], enabled: true }] };
+  const run = (pos, extra = {}) => CFB.decide({ ...base, ...extra, positions: { [m.ticker]: { gameId: "1", side: "yes", count: 10, manual: true, ...pos } } }).actions.find(a => a.type === "sell");
+  assert.equal(run({ avgCost: 45 }), undefined);                                  // +15 but no rules set: the bot's own take-profit doesn't apply
+  assert.match(run({ avgCost: 45, tpPrice: 60 }).reason, /your target 60/);
+  assert.equal(run({ avgCost: 45, tpPrice: 61 }), undefined);
+  assert.match(run({ avgCost: 70, slPrice: 60 }).reason, /your stop 60/);
+  assert.match(run({ avgCost: 50, peakBid: 70, trailArm: 10, trailGive: 8 }).reason, /trailing/);   // high 70, now 60
+  assert.equal(run({ avgCost: 50, peakBid: 66, trailArm: 10, trailGive: 8 }), undefined);           // gave back only 6
+  // a 97c bid on your own position sells at your target (no hold-to-settle)
+  const hi = mk("spread", "home", 3.5, 97, 98);
+  const r = CFB.decide({ ...base, games: [{ ...base.games[0], markets: [hi] }], positions: { [hi.ticker]: { gameId: "1", side: "yes", count: 5, manual: true, avgCost: 50, tpPrice: 95 } } });
+  assert.match(r.actions[0].reason, /your target/);
+  // stops wait out a delayed game
+  const delayed = { ...base, games: [{ ...base.games[0], g: game({ statusName: "STATUS_DELAYED" }) }] };
+  assert.equal(run({ avgCost: 70, slPrice: 60 }, delayed), undefined);
+  // the kill switch cashes them out too
+  assert.match(run({ avgCost: 45 }, { killed: true }).reason, /kill/);
+});

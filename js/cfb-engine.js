@@ -834,6 +834,20 @@ function decide(input) {
         const gain = q.bid - pos.avgCost;
         const peak = Math.max(pos.peakBid || 0, q.bid);
         let reason = null;
+        // A position you handed over (pos.manual): only your own price rules apply: no model "edge gone", no hold-to-settle.
+        if (pos.manual) {
+          const stopHeld = () => { const width = q.ask != null ? q.ask - q.bid : 99;
+            if (/DELAY|SUSPEND/.test(g.statusName || "")) return `stop held: game delayed (bid ${q.bid}¢)`;
+            if (width > cfg.maxExitWidth && fairSide - q.bid >= 8 && !proj.unreliable) return `stop held: quote ${q.bid}/${q.ask} too wide (fair ${fairSide.toFixed(0)}¢)`;
+            return null; };
+          if (input.killed) reason = "kill switch";
+          else if (pos.tpPrice && q.bid >= pos.tpPrice) reason = `your target ${pos.tpPrice}¢ reached`;
+          else if (pos.slPrice && q.bid <= pos.slPrice) { const h = stopHeld(); if (h) { ev.note = h; continue; } reason = `your stop ${pos.slPrice}¢ reached`; }
+          else if (pos.trailGive && peak - pos.avgCost >= (pos.trailArm || 0) && peak - q.bid >= pos.trailGive) { const h = stopHeld(); if (h) { ev.note = h; continue; } reason = `trailing stop (high ${peak}¢, gave back ${peak - q.bid}¢)`; }
+          if (reason) actions.push({ type: "sell", ticker: mk.ticker, side: pos.side, count: pos.count, limit: q.bid, reason, gameId: g.id, fair: fairSide, gain, manual: true });
+          else ev.note = `watching (${gain >= 0 ? "+" : ""}${gain}¢)`;
+          continue;
+        }
         if (input.killed) reason = "kill switch";
         else if (q.bid >= cfg.holdToSettleAt) { ev.note = "holding to settle"; continue; }
         else if (pos.lead && pos.tpPrice && q.bid >= pos.tpPrice) reason = `lead target hit +${gain}¢`;

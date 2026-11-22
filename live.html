@@ -1063,12 +1063,16 @@ function ServerRunner({ cfg, enabled, liveGames, nEnabled, browserRunning, onSta
     catch (e) { setErr(e.message); alert("Auto trader: " + e.message); }
     finally { setBusy(false); }
   }
+  const entries = !!(st && st.entries), nManaged = st ? st.managedCount || 0 : 0;
   const checks = [
-    { ok: nEnabled > 0, label: nEnabled > 0 ? `${nEnabled} game${nEnabled === 1 ? "" : "s"} picked` : "Pick games with the toggles below",
-      fix: nEnabled === 0 && liveGames.length > 0 ? <a style={{ color: T.accent, cursor: "pointer" }} onClick={onAllOn}>turn on all live games</a> : null },
-    { ok: true, label: `Rules: up to $${Math.min(cfg.maxStake, 25)} per entry · $${Math.min(cfg.maxTotalExposure, 150)} open · stops for the night at −$${cfg.maxDailyLoss}`,
-      fix: <a style={{ color: T.accent, cursor: "pointer" }} onClick={onRules}>change</a> },
+    { ok: nManaged > 0 || entries, label: nManaged > 0 ? `Managing ${nManaged} of your position${nManaged === 1 ? "" : "s"}` : entries ? "Not managing any of your positions (fine: it will look for new trades)" : "Pick at least one of your positions below and set its sell rules" },
   ];
+  if (entries) {
+    checks.push({ ok: nEnabled > 0, label: nEnabled > 0 ? `New trades in ${nEnabled} game${nEnabled === 1 ? "" : "s"}` : "Pick games for new trades with the toggles below",
+      fix: nEnabled === 0 && liveGames.length > 0 ? <a style={{ color: T.accent, cursor: "pointer" }} onClick={onAllOn}>turn on all live games</a> : null });
+    checks.push({ ok: true, label: `New-trade limits: up to $${Math.min(cfg.maxStake, 25)} per entry · $${Math.min(cfg.maxTotalExposure, 150)} open · stops for the night at −$${cfg.maxDailyLoss}`,
+      fix: <a style={{ color: T.accent, cursor: "pointer" }} onClick={onRules}>change</a> });
+  }
   if (isLive) {
     checks.push({ ok: !!(acct && acct.connected), label: !acct ? "Checking the Kalshi connection…" : acct.connected ? `Kalshi connected · ${fmt$(acct.cash)} cash` : `Kalshi not connected (${acct.error})` });
     checks.push({ ok: !!(st && st.tradingEnabled), label: st && st.tradingEnabled ? "Live trading switch is on" : "Live trading switch is off on the server",
@@ -1079,10 +1083,16 @@ function ServerRunner({ cfg, enabled, liveGames, nEnabled, browserRunning, onSta
   function start() {
     if (!ready) return;
     if (isLive) {
-      const typed = prompt(`LIVE: the server will place real-money orders on Kalshi, even with this page closed.\n\nUp to $${Math.min(cfg.maxStake, 25)} per entry · $${Math.min(cfg.maxTotalExposure, 150)} open at once · stops for the night at −$${cfg.maxDailyLoss}\n\nType LIVE to start.`);
+      const what = (nManaged ? `It will SELL your managed positions on Kalshi when their rules hit (${nManaged} position${nManaged === 1 ? "" : "s"}).` : "")
+        + (entries ? `\nIt will also OPEN new trades: up to $${Math.min(cfg.maxStake, 25)} per entry · $${Math.min(cfg.maxTotalExposure, 150)} open · stops for the night at −$${cfg.maxDailyLoss}.` : "\nIt will not open any new trades.");
+      const typed = prompt(`LIVE: real orders on Kalshi from the server, even with this page closed.\n\n${what}\n\nType LIVE to start.`);
       if (typed !== "LIVE") return;
       call("start", { mode: "live", confirm: "LIVE", cfg, enabled: enabledMap() });
     } else call("start", { mode: "paper", cfg, enabled: enabledMap() });
+  }
+  function setEntries(on) {
+    if (on && !confirm("Also let it open its own trades?\n\nTesting so far shows no edge: the free score feeds are slower than Kalshi's prices. Leave this off unless you're testing.")) return;
+    call("settings", { entries: on });
   }
   const ago = (ts) => ts ? Math.max(0, Math.round((Date.now() - ts) / 1000)) + "s ago" : "never";
   const stale = running && st.lastTick && Date.now() - st.lastTick > 90000;
@@ -1106,9 +1116,18 @@ function ServerRunner({ cfg, enabled, liveGames, nEnabled, browserRunning, onSta
         {!running && <button disabled={busy || !ready} onClick={start} style={{ ...big, background: (isLive ? T.red : T.green) + (ready ? "33" : "11"), borderColor: isLive ? T.red : T.green, color: isLive ? T.red : T.green, opacity: ready ? 1 : 0.5, cursor: ready ? "pointer" : "not-allowed" }}>
           ▶ START {isLive ? "LIVE" : "PAPER"}</button>}
         {running && <button disabled={busy} onClick={() => call("stop")} style={{ ...big, color: T.gold, borderColor: T.gold }}>■ STOP</button>}
-        {(running || (st && st.positions.length > 0)) && <button disabled={busy} onClick={() => { if (confirm("Cash out every auto-trader position now and stop?")) call("kill"); }} style={{ ...big, color: T.red, borderColor: T.red }}>✕ CASH OUT ALL</button>}
+        {(running || (st && st.positions.length > 0)) && <button disabled={busy} onClick={() => { if (confirm(isLive ? "Sell every position the auto trader manages (including the ones you handed over) at the current bid, and stop?" : "Paper: close the bot's paper positions and record would-sells for your managed positions, then stop?")) call("kill"); }} style={{ ...big, color: T.red, borderColor: T.red }}>✕ CASH OUT ALL</button>}
       </div>
 
+      {st && (
+        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 9, color: T.muted }}>
+          <span>What it does:</span>
+          <div style={{ display: "flex", border: "1px solid " + T.border, borderRadius: 4, overflow: "hidden" }}>
+            <button disabled={busy} onClick={() => entries && setEntries(false)} style={{ ...btnBase, padding: "5px 10px", border: "none", borderRadius: 0, background: !entries ? T.accent + "22" : "transparent", color: !entries ? T.accent : T.muted }}>MANAGE MY POSITIONS</button>
+            <button disabled={busy} onClick={() => !entries && setEntries(true)} style={{ ...btnBase, padding: "5px 10px", border: "none", borderRadius: 0, background: entries ? T.gold + "22" : "transparent", color: entries ? T.gold : T.muted }}>+ FIND NEW TRADES (experimental)</button>
+          </div>
+          <span>{entries ? "Manages the positions you pick and also opens its own trades." : "Sells the positions you pick at your target, stop or trailing stop. It never buys."}</span>
+        </div>)}
       {err && <div style={{ fontSize: 9, color: T.red, marginTop: 8 }}>{err}</div>}
       {!st && !err && <div style={{ fontSize: 9, color: T.muted, marginTop: 8 }}>Connecting to the server…</div>}
 
@@ -1129,12 +1148,24 @@ function ServerRunner({ cfg, enabled, liveGames, nEnabled, browserRunning, onSta
           <span style={{ color: T.muted }}>{nEnabled} games picked{synced ? " · rule changes sent " + new Date(synced).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : " · rule and game changes here are sent automatically"}</span>
         </div>)}
 
-      {st && (st.positions.length > 0 || st.trades.length > 0 || running) && (
+      {st && <MyPositions st={st} busy={busy} call={call} isLive={isLive} running={running} />}
+
+      {st && (st.shadowTrades || []).length > 0 && (
+        <div style={{ marginTop: 10, borderTop: "1px solid " + T.border, paddingTop: 10 }}>
+          <div style={{ fontSize: 8, letterSpacing: 2, color: T.muted, marginBottom: 4 }}>PAPER: WHAT IT WOULD HAVE SOLD (nothing was sold)</div>
+          {st.shadowTrades.slice(0, 8).map((t, i) => (
+            <div key={i} style={{ fontSize: 10, color: T.text, display: "flex", gap: 6 }}>
+              <span style={{ flex: 1 }}>{new Date(t.ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} {t.label} {t.side.toUpperCase()} · {t.reason}</span>
+              <span>{t.count}× {t.entry}→{t.exit}¢</span><span style={{ color: t.pnl >= 0 ? T.green : T.red }}>{fmtSigned$(t.pnl)}</span>
+            </div>))}
+        </div>)}
+
+      {st && (st.positions.filter(p => !p.unmanaged && !st.myPositions.some(m => m.ticker === p.ticker && m.rules)).length > 0 || st.trades.length > 0 || (running && entries)) && (
         <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 12, borderTop: "1px solid " + T.border, paddingTop: 10 }}>
           <div>
-            <div style={{ fontSize: 8, letterSpacing: 2, color: T.muted, marginBottom: 4 }}>OPEN POSITIONS ({st.positions.length})</div>
-            {st.positions.length === 0 && <div style={{ fontSize: 9, color: T.dim }}>none: waiting for a fresh score to trade</div>}
-            {st.positions.map(p => (
+            <div style={{ fontSize: 8, letterSpacing: 2, color: T.muted, marginBottom: 4 }}>BOT'S OWN POSITIONS ({st.positions.filter(p => !p.unmanaged).length})</div>
+            {st.positions.filter(p => !p.unmanaged).length === 0 && <div style={{ fontSize: 9, color: T.dim }}>none</div>}
+            {st.positions.filter(p => !p.unmanaged).map(p => (
               <div key={p.ticker} style={{ fontSize: 10, color: T.text, display: "flex", gap: 6 }}>
                 <span style={{ flex: 1 }}>{p.label} {p.side.toUpperCase()}{p.lead ? " ⚡" : ""}{p.unmanaged ? " (yours, not managed)" : ""}</span>
                 <span>{p.count}× {p.avgCost}¢ → {p.bid == null ? "—" : p.bid + "¢"}</span>
@@ -1142,7 +1173,7 @@ function ServerRunner({ cfg, enabled, liveGames, nEnabled, browserRunning, onSta
               </div>))}
           </div>
           <div>
-            <div style={{ fontSize: 8, letterSpacing: 2, color: T.muted, marginBottom: 4 }}>RECENT TRADES</div>
+            <div style={{ fontSize: 8, letterSpacing: 2, color: T.muted, marginBottom: 4 }}>BOT'S CLOSED TRADES</div>
             {st.trades.length === 0 && <div style={{ fontSize: 9, color: T.dim }}>none yet</div>}
             {st.trades.slice(0, 8).map((t, i) => (
               <div key={i} style={{ fontSize: 10, color: T.text, display: "flex", gap: 6 }}>
@@ -1160,6 +1191,51 @@ function ServerRunner({ cfg, enabled, liveGames, nEnabled, browserRunning, onSta
               <div key={i} style={{ fontSize: 9, color: l.kind === "error" || l.kind === "loss" ? T.red : l.kind === "win" ? T.green : T.muted }}>{new Date(l.ts).toLocaleTimeString()} {l.msg}</div>))}
           </div>}
         </div>)}
+    </div>
+  );
+}
+
+
+// Your own Kalshi positions, read from your account by the server. Tick one to hand it over with your sell rules.
+function MyPositions({ st, busy, call, isLive, running }) {
+  const list = (st.myPositions || []).filter(p => !p.botOwned);
+  const [edit, setEdit] = useState({});
+  if (!st.credentials) return <div style={{ marginTop: 10, fontSize: 9, color: T.muted }}>Your Kalshi positions show here once the server has your Kalshi key.</div>;
+  const age = st.myPositionsTs ? Math.round((Date.now() - st.myPositionsTs) / 1000) : null;
+  const inp = { width: 38, background: T.bg, border: "1px solid " + T.border, color: T.text, fontFamily: "inherit", fontSize: 10, padding: "3px 4px", borderRadius: 3 };
+  const draft = (p) => edit[p.ticker] || (p.rules ? { tp: p.rules.tpPrice || "", sl: p.rules.slPrice || "", arm: p.rules.trailArm || "", give: p.rules.trailGive || "" }
+    : { tp: Math.min(95, p.avgCost + 15), sl: Math.max(1, p.avgCost - 15), arm: "", give: "" });
+  const set = (p, k, v) => setEdit(e => ({ ...e, [p.ticker]: { ...draft(p), [k]: v } }));
+  const save = (p) => { const d = draft(p); call("manage", { ticker: p.ticker, rules: { tpPrice: d.tp, slPrice: d.sl, trailArm: d.arm, trailGive: d.give } }); setEdit(e => { const n = { ...e }; Reflect.deleteProperty(n, p.ticker); return n; }); };
+  return (
+    <div style={{ marginTop: 10, borderTop: "1px solid " + T.border, paddingTop: 10 }}>
+      <div style={{ fontSize: 8, letterSpacing: 2, color: T.muted, marginBottom: 6 }}>
+        YOUR KALSHI POSITIONS ({list.length}){age != null ? ` · read ${age}s ago` : ""}
+        <span style={{ letterSpacing: 0, marginLeft: 8, color: T.dim }}>{isLive ? "live: rules sell for real" : "paper: rules only record what would have sold"}</span>
+      </div>
+      {list.length === 0 && <div style={{ fontSize: 9, color: T.dim }}>No college football positions in your account right now.</div>}
+      {list.map(p => {
+        const d = draft(p), dirty = !!edit[p.ticker], pnl = p.bid != null ? (p.bid - p.avgCost) * p.count / 100 : null;
+        return (
+          <div key={p.ticker} style={{ padding: "6px 0", borderBottom: "1px solid " + T.border + "88", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", fontSize: 10 }}>
+            <div style={{ minWidth: 200, flex: 1 }}>
+              <div style={{ color: T.text, fontWeight: 700 }}>{p.label} {p.side.toUpperCase()} {p.rules && <span style={{ color: T.green, fontWeight: 400 }}>✓ managed</span>}</div>
+              <div style={{ fontSize: 8, color: T.muted }}>{p.game}</div>
+            </div>
+            <div style={{ color: T.text }}>{p.count}× {p.avgCost}¢ → {p.bid == null ? "—" : p.bid + "¢"} <span style={{ color: (pnl || 0) >= 0 ? T.green : T.red }}>{pnl != null ? fmtSigned$(pnl) : ""}</span></div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", color: T.muted, fontSize: 9, flexWrap: "wrap" }}>
+              sell at <input style={inp} value={d.tp} onChange={e => set(p, "tp", e.target.value)} />¢
+              stop at <input style={inp} value={d.sl} onChange={e => set(p, "sl", e.target.value)} />¢
+              trail <input style={inp} placeholder="off" value={d.give} onChange={e => set(p, "give", e.target.value)} />¢ after +<input style={inp} placeholder="0" value={d.arm} onChange={e => set(p, "arm", e.target.value)} />¢
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              {(!p.rules || dirty) && <button disabled={busy} onClick={() => save(p)} style={{ ...btnBase, padding: "4px 10px", fontSize: 8, color: T.accent, borderColor: T.accent }}>{p.rules ? "SAVE" : "MANAGE"}</button>}
+              {p.rules && <button disabled={busy} onClick={() => call("manage", { ticker: p.ticker, rules: null })} style={{ ...btnBase, padding: "4px 10px", fontSize: 8, color: T.muted }}>STOP MANAGING</button>}
+            </div>
+            {p.rules && !isLive && p.shadowDone && <div style={{ width: "100%", fontSize: 8, color: T.gold }}>paper: its rule hit, see "would have sold" below. Save the rules again to keep watching.</div>}
+            {p.rules && !p.live && <div style={{ width: "100%", fontSize: 8, color: T.dim }}>acts once the game is live{running ? "" : " and the auto trader is started"}</div>}
+          </div>);
+      })}
     </div>
   );
 }
