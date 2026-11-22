@@ -170,6 +170,8 @@
   const h = R.createElement, { useState, useEffect } = R;
   const gv = (g) => ({ "--g": g && g.color ? g.color : "var(--none)" });
   const pct = (x) => Math.round(x) + "%";
+  // cents: whole numbers, one decimal for long shots under 10¢ that aren't whole (golf trades in tenths)
+  const cents = (x) => (x < 10 && Math.abs(x - Math.round(x)) > 0.05 ? x.toFixed(1) : String(Math.round(x))) + "¢";
   const signed = (x, d) => (x >= 0 ? "+" : "−") + Math.abs(x).toFixed(d == null ? 1 : d);
 
   function useSettings() {
@@ -191,7 +193,7 @@
   function ChanceLine({ g }) {
     if (!g) return null;
     return h("span", { className: "small text-2" },
-      h("b", { style: { color: g.color } }, pct(g.chance) + " chance to cash"), " · costs " + Math.round(g.price) + "¢ · edge " + signed(g.edge) + "¢" + (g.longShot ? " · long shot" : ""));
+      h("b", { style: { color: g.color } }, pct(g.chance) + " chance to cash"), " · costs " + cents(g.price) + " · edge " + signed(g.edge) + "¢" + (g.longShot ? " · long shot" : ""));
   }
   // The model's chance to cash as a bar, with Kalshi's price as a tick on the same 0-100 scale.
   // The striped gap between the tick and the end of the bar is the edge.
@@ -199,7 +201,7 @@
     if (!g) return null;
     const c = clamp(g.chance, 0, 100), p = clamp(g.price, 0, 100);
     const lo = Math.min(c, p), hi = Math.max(c, p);
-    const label = `Model ${pct(c)} chance to cash, Kalshi price ${Math.round(p)}¢, edge ${signed(g.edge)}¢`;
+    const label = `Model ${pct(c)} chance to cash, Kalshi price ${cents(p)}, edge ${signed(g.edge)}¢`;
     const track = h("div", { className: "cvp-track", role: "img", "aria-label": label },
       h("div", { className: "cvp-fill", style: { width: lo + "%" } }),
       g.edge > 0 && h("div", { className: "cvp-gap", style: { left: lo + "%", width: (hi - lo) + "%" } }),
@@ -210,7 +212,7 @@
       h("div", { className: "cvp-nums" },
         h("div", { className: "cvp-num" }, h("div", { className: "v" }, pct(c)), h("div", { className: "l" }, "Model chance")),
         h("div", { className: "cvp-num c cvp-edge" }, h("div", { className: "v" }, signed(g.edge) + "¢"), h("div", { className: "l" }, "Edge")),
-        h("div", { className: "cvp-num r" }, h("div", { className: "v" }, Math.round(p) + "¢"), h("div", { className: "l" }, "Kalshi price"))),
+        h("div", { className: "cvp-num r" }, h("div", { className: "v" }, cents(p)), h("div", { className: "l" }, "Kalshi price"))),
       track,
       h("div", { className: "cvp-scale" }, h("span", null, "0"), h("span", null, "50"), h("span", null, "100")));
   }
@@ -339,7 +341,7 @@
       chart !== false && UI && UI.RecordChart && hist.length >= 2 && h("div", { style: { marginTop: 14 } }, h(UI.RecordChart, { hist, base: sport ? settings.baseBet[sport] : 20 })));
   }
 
-  root.SharpBets = Object.assign(api(), { useSettings, useKalshi, GradeBadge, ChanceLine, ChanceBar, GradeLegend, BetButton, SortTh, sortRows, RecordCard, history });
+  root.SharpBets = Object.assign(api(), { useSettings, useKalshi, GradeBadge, ChanceLine, ChanceBar, GradeLegend, BetButton, SortTh, sortRows, RecordCard, history, cents });
 
   function api() {
     return { SPORTS, DEFAULTS, COLORS: C, HEX, LABELS: LABEL, BLURBS: BLURB, ORDER, getSettings, onSettings, loadSettings, saveSettings, grade, stake, ticket, money,

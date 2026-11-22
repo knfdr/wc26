@@ -108,7 +108,7 @@
         h("div", { className: "pr-title" }, title, meaning ? h("span", { className: "pr-mean" }, " · " + meaning) : null),
         (meta || badge || note) ? h("div", { className: "pr-meta" }, badge && g ? h(SB.GradeBadge, { g, small: true }) : null, meta ? h("span", null, meta) : null, note ? h("span", null, note) : null) : null),
       g ? h("div", { className: "pr-bar" },
-        h("div", { className: "pr-nums" }, h("b", null, Math.round(g.chance) + "%"), h("span", { style: { color: g.edge > 0 ? "var(--g)" : "var(--muted)", fontWeight: 600 } }, (g.edge >= 0 ? "+" : "−") + Math.abs(g.edge).toFixed(1) + "¢"), h("span", { className: "muted" }, Math.round(g.price) + "¢")),
+        h("div", { className: "pr-nums" }, h("b", null, Math.round(g.chance) + "%"), h("span", { style: { color: g.edge > 0 ? "var(--g)" : "var(--muted)", fontWeight: 600 } }, (g.edge >= 0 ? "+" : "−") + Math.abs(g.edge).toFixed(1) + "¢"), h("span", { className: "muted" }, SB.cents ? SB.cents(g.price) : Math.round(g.price) + "¢")),
         h(SB.ChanceBar, { g, compact: true })) : h("div", { className: "pr-bar tiny muted" }, "No price"),
       pick ? h(SB.BetButton, { pick, compact: true }) : h("span", { style: { gridArea: "btn" } }));
   }

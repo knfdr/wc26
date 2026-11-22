@@ -5,17 +5,28 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sharp Sim — WNBA</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="js/bets.js"></script>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/sharp.css">
+<meta name="theme-color" content="#0b0d10">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="js/bets.js"></script>
+<script src="js/ui.js"></script>
 <style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html,body{min-height:100vh;background:#070b14;font-family:'IBM Plex Mono','Courier New',monospace;color:#dde5f0;zoom:1.2}
-::-webkit-scrollbar{width:6px;height:6px}
-::-webkit-scrollbar-track{background:#0c1526}
-::-webkit-scrollbar-thumb{background:#1a2a3e;border-radius:3px}
+/* WNBA page only */
+.empty { text-align: center; padding: 28px var(--pad) 24px; }
+.empty-ico { width: 48px; height: 48px; border-radius: 14px; background: var(--surface-2); display: grid; place-items: center; font-size: 24px; margin: 0 auto 12px; }
+.empty-title { font-size: 17px; font-weight: 650; letter-spacing: -0.2px; }
+.empty-body { font-size: 14px; color: var(--text-2); line-height: 1.5; margin: 6px auto 0; max-width: 44ch; }
+.empty-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 16px; }
+.match-title { font-size: 19px; font-weight: 700; letter-spacing: -0.3px; line-height: 1.25; }
+.parlay-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.parlay-card .pick-list { border-radius: var(--r); }
+.parlay-card .pick-row { grid-template-columns: 1fr 0; column-gap: 0; }
+.parlay-card + .parlay-card { margin-top: var(--gap); }
+@media (min-width: 760px) { .picks-grid.two { grid-template-columns: 1fr 1fr; } }
 </style>
 </head>
 <body>
@@ -23,6 +34,7 @@ html,body{min-height:100vh;background:#070b14;font-family:'IBM Plex Mono','Couri
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useRef, useMemo } = React;
 const SB = window.SharpBets;
+const UI = window.SharpUI;
 const { GradeBadge, ChanceLine, GradeLegend, BetButton, SortTh, sortRows, RecordCard } = SB;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -34,45 +46,6 @@ const WIDE_GAP = 6;                   // bid/ask gap (cents) above which a price
 const SIM_CACHE_KEY = "sharp_sim_cache_wnba_v2_" + new Date().toLocaleDateString("en-CA");
 const LEAGUE_AVG = 103;
 const HCA = 2.5;
-
-// ── Theme ─────────────────────────────────────────────────────────────────────
-const T = {
-  bg:"#070b14", navy:"#101d30", border:"#1a2a3e",
-  text:"#dde5f0", muted:"#4b6280",
-  green:"#22c55e", red:"#ef4444", blue:"#3b82f6",
-  gold:"#e8c547", yellow:"#fbbf24", purple:"#a78bfa",
-  accent:"#e879f9",
-};
-
-const S = {
-  wrap:{ minHeight:"100vh", background:T.bg, color:T.text },
-  header:{ background:"linear-gradient(160deg,#0c1526 0%,#070b14 100%)", borderBottom:"1px solid "+T.border, padding:"28px 20px 22px", textAlign:"center", position:"relative", overflow:"hidden" },
-  glow:{ position:"absolute", top:0, left:0, right:0, bottom:0, background:"radial-gradient(ellipse at 50% -10%,rgba(232,121,249,0.08) 0%,transparent 65%)", pointerEvents:"none" },
-  badge:(c)=>({ display:"inline-block", background:c+"1a", border:"1px solid "+c+"44", color:c, fontSize:"9px", letterSpacing:"2px", padding:"2px 10px", borderRadius:2, marginBottom:12 }),
-  title:{ fontSize:"clamp(20px,4vw,32px)", fontWeight:700, letterSpacing:-0.5, marginBottom:6 },
-  vs:{ color:T.muted, margin:"0 10px" },
-  meta:{ fontSize:10, color:T.muted, marginTop:4 },
-  modelTag:{ display:"inline-block", background:"rgba(167,139,250,0.08)", border:"1px solid rgba(167,139,250,0.2)", color:T.purple, fontSize:"8px", letterSpacing:"1.5px", padding:"2px 10px", borderRadius:2, marginTop:8 },
-  body:{ maxWidth:960, margin:"0 auto", padding:"20px 16px 60px" },
-  tabBar:{ display:"flex", borderBottom:"1px solid "+T.border, overflowX:"auto", background:T.navy, flexWrap:"nowrap" },
-  tab:(active)=>({ background:"none", border:"none", color:active?T.text:T.muted, fontSize:"9px", letterSpacing:"1px", padding:"12px 14px", cursor:"pointer", borderBottom:active?"2px solid "+T.accent:"2px solid transparent", whiteSpace:"nowrap", fontFamily:"inherit", fontWeight:active?700:400 }),
-  sec:{ marginBottom:16 },
-  secLabel:{ fontSize:"8px", letterSpacing:"2.5px", color:T.muted, textTransform:"uppercase", marginBottom:8, paddingBottom:6, borderBottom:"1px solid "+T.border },
-  card:{ background:T.navy, border:"1px solid "+T.border, borderRadius:6, padding:"12px 14px" },
-  g2:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 },
-  g3:{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:10 },
-  sL:{ fontSize:"9px", color:T.muted, letterSpacing:"1px", textTransform:"uppercase", marginBottom:4 },
-  sV:{ fontSize:22, fontWeight:700 },
-  sSub:{ fontSize:"9px", color:T.muted, marginTop:2 },
-  barWrap:{ display:"flex", height:28, borderRadius:4, overflow:"hidden", marginTop:10 },
-  btn:(active,c)=>({ background:active?c+"22":T.navy, border:"1px solid "+(active?c:T.border), color:active?c:T.muted, padding:"10px 18px", borderRadius:4, cursor:"pointer", fontSize:"10px", fontWeight:700, letterSpacing:"1px", marginBottom:16, fontFamily:"inherit", width:"100%" }),
-  table:{ width:"100%", borderCollapse:"collapse", fontSize:10 },
-  th:{ textAlign:"left", color:T.muted, fontSize:"8px", letterSpacing:"1px", paddingBottom:6, borderBottom:"1px solid "+T.border, textTransform:"uppercase" },
-  td:{ padding:"5px 0", borderBottom:"1px solid "+T.border+"44", color:T.text },
-  ktd:{ padding:"7px 10px", borderBottom:"1px solid "+T.border+"66", color:T.text, whiteSpace:"nowrap", verticalAlign:"middle" },
-  note:{ background:T.navy, border:"1px solid "+T.border, borderRadius:6, padding:"12px 14px", fontSize:10, color:T.muted, lineHeight:1.6 },
-  disclaimer:{ fontSize:"9px", color:T.muted, marginTop:16, padding:10, borderTop:"1px solid "+T.border, lineHeight:1.7 },
-};
 
 // ── Team Parameters (2025 WNBA Season) ───────────────────────────────────────
 // ortg: offensive rating (pts per 100 poss), drtg: defensive rating, pace: possessions per 40 min
@@ -341,233 +314,224 @@ function formatAge(ts) {
 }
 
 // ── Shared UI ────────────────────────────────────────────────────────────────
-function StatCard({ label, value, sub, color }) {
+const abbr = (team) => (TEAM_PARAMS[team] && TEAM_PARAMS[team].abbr) || String(team || "").split(" ").pop();
+const tipoff = (iso) => new Date(iso).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
+const pickOf = (r) => ({ ticker: r.ticker, side: r.side, price: r.price, chance: r.chance, label: r.label, sub: r.away + " @ " + r.home + " · " + r.what, sport: SPORT, grade: r.g });
+const rowMeta = (r) => r.what + " · " + r.side.toUpperCase() + " on Kalshi" + (r.g.longShot ? " · long shot" : "");
+const isOffseason = () => { const m = new Date().getMonth(); return m >= 9 || m <= 3; };   // Oct–Apr: no regular-season games
+
+// Friendly empty state: a title, one or two sentences and where to go instead
+function Empty({ ico, title, children, links }) {
   return (
-    <div style={S.card}>
-      <div style={S.sL}>{label}</div>
-      <div style={{ ...S.sV, color: color || T.text }}>{value}</div>
-      {sub && <div style={S.sSub}>{sub}</div>}
+    <div className="card empty">
+      {ico && <div className="empty-ico" aria-hidden="true">{ico}</div>}
+      <div className="empty-title">{title}</div>
+      {children && <div className="empty-body">{children}</div>}
+      {links && <div className="empty-actions">{links.map(([href, label]) => <a key={href} href={href} className="btn btn-sm">{label}</a>)}</div>}
     </div>
   );
 }
+const ELSEWHERE = [["nfl.html", "NFL picks"], ["cfb.html", "College picks"], ["parlays.html", "All-sport parlays"]];
 
-const sortGet = (r, k) => k === "grade" ? -r.g.rank : r[k];
-
-// Sortable table of Kalshi-priced picks. showGame adds the matchup column (Top Picks tab).
-function KalshiTable({ rows, showGame }) {
-  const [sort, setSort] = useState({ k: "edge", dir: -1 });
-  const sorted = sortRows(rows, sort, sortGet);
-  const P = { sort, setSort };
+// What to show when there are no games to grade, depending on why
+function NoGames({ kx }) {
+  const noMarkets = kx.status === "ok" && !kx.markets.length;
   return (
-    <div style={{ ...S.card, padding:0, overflowX:"auto" }}>
-      <table style={{ ...S.table, minWidth: showGame ? 720 : 640 }}>
-        <thead><tr>
-          {showGame && <SortTh k="match" {...P}>Game</SortTh>}
-          <SortTh k="label" {...P}>Pick</SortTh>
-          <SortTh k="grade" {...P}>Grade</SortTh>
-          <SortTh k="chance" {...P}>Chance to cash</SortTh>
-          <SortTh k="price" {...P}>Price</SortTh>
-          <SortTh k="edge" {...P}>Edge</SortTh>
-          <SortTh k="stake" {...P}>Suggested</SortTh>
-          <SortTh {...P}>{""}</SortTh>
-        </tr></thead>
-        <tbody>
-          {sorted.map(r => (
-            <tr key={r.key}>
-              {showGame && <td style={{ ...S.ktd, color:T.muted, fontSize:9 }}>{r.match}</td>}
-              <td style={{ ...S.ktd, whiteSpace:"normal", minWidth:150 }}>
-                <div style={{ fontWeight:700 }}>{r.label}</div>
-                <div style={{ fontSize:8, color:T.muted, marginTop:2 }}>{r.what} · {r.side.toUpperCase()} on Kalshi{r.g.longShot ? " · long shot" : ""}</div>
-              </td>
-              <td style={S.ktd}><GradeBadge g={r.g} small/></td>
-              <td style={{ ...S.ktd, color:r.g.color, fontWeight:700 }}>model: {r.chance.toFixed(0)}%</td>
-              <td style={S.ktd}>{r.price}¢</td>
-              <td style={{ ...S.ktd, color: r.edge >= 0 ? T.green : T.red, fontWeight:700 }}>{(r.edge >= 0 ? "+" : "") + r.edge.toFixed(1)}¢</td>
-              <td style={{ ...S.ktd, color: r.stake ? T.text : T.muted }}>{r.stake ? SB.money(r.stake) : "—"}</td>
-              <td style={{ ...S.ktd, textAlign:"right" }}>
-                <BetButton compact pick={{ ticker:r.ticker, side:r.side, price:r.price, chance:r.chance, label:r.label, sub:r.away + " @ " + r.home + " · " + r.what, sport:SPORT, grade:r.g }}/>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <Empty ico="🏀" title={isOffseason() ? "The WNBA is in its off-season" : "No WNBA games today"} links={ELSEWHERE}>
+      {isOffseason()
+        ? "There are no games on today's schedule" + (noMarkets ? " and Kalshi has no WNBA markets open, which is normal until next season. " : ". ") + "Picks show up here automatically once games are back. Football is in season now."
+        : "Nothing on today's schedule" + (noMarkets ? " and no Kalshi markets open" : "") + ". Check back on the next game day."}
+      {kx.status === "error" && <div className="tiny muted" style={{ marginTop: 8 }}>Kalshi prices couldn't be loaded either ({kx.error}).</div>}
+    </Empty>
   );
 }
 
 function KalshiNote({ kx }) {
-  if (kx.status === "error") return <div style={{ ...S.note, color:T.yellow }}>Kalshi prices couldn't be loaded ({kx.error}). Picks need a Kalshi price to be graded, so none are shown. Try ⟳ Refresh.</div>;
-  if (kx.status === "loading") return <div style={S.note}>Loading Kalshi prices…</div>;
+  if (kx.status === "error") return <div className="note warn">Kalshi prices couldn't be loaded ({kx.error}). Picks need a Kalshi price to be graded, so none are shown. Try Refresh at the top.</div>;
+  if (kx.status === "loading") return <UI.Status>Loading Kalshi prices…</UI.Status>;
   return null;
+}
+
+// Win chances as one split bar: away on the left, home on the right
+function WinSplit({ game, agg }) {
+  const a = +agg.aWPct, hm = +agg.hWPct;
+  return (
+    <div>
+      <div className="row" style={{ justifyContent: "space-between", marginBottom: 6 }}>
+        <div><div className="num" style={{ fontSize: 22, fontWeight: 700 }}>{a.toFixed(0)}%</div><div className="tiny muted">{abbr(game.awayTeam)} win</div></div>
+        <div style={{ textAlign: "right" }}><div className="num" style={{ fontSize: 22, fontWeight: 700 }}>{hm.toFixed(0)}%</div><div className="tiny muted">{abbr(game.homeTeam)} win</div></div>
+      </div>
+      <div role="img" aria-label={`${abbr(game.awayTeam)} ${a.toFixed(0)}%, ${abbr(game.homeTeam)} ${hm.toFixed(0)}%`} style={{ display: "flex", gap: 2, height: 10 }}>
+        <div style={{ width: a + "%", background: "var(--series-b)", borderRadius: "999px 0 0 999px" }} />
+        <div style={{ width: hm + "%", background: "var(--series-a)", borderRadius: "0 999px 999px 0" }} />
+      </div>
+    </div>
+  );
+}
+
+// Final margin or game total across every simulated game, from the sim's histograms
+function Outcomes({ game, agg }) {
+  const [mode, setMode] = useState("margin");
+  if (!agg.marginHist || !agg.totalHist) return null;
+  const A = abbr(game.awayTeam), H = abbr(game.homeTeam);
+  let bars, labelOf, note;
+  if (mode === "margin") {
+    bars = [];
+    for (let m = -25; m <= 25; m++) {
+      if (!m) continue;
+      const p = (agg.marginHist[m] || 0) / agg.n * 100;
+      bars.push({ v: p, m, color: m > 0 ? "var(--series-a)" : "var(--series-b)", tip: `${m > 0 ? H : A} by ${Math.abs(m)}: ${p.toFixed(1)}%` });
+    }
+    labelOf = (i, b) => Math.abs(b.m) % 5 === 0 ? Math.abs(b.m) : null;
+    note = "How much the game is won by. Left of center the away team wins, right of center the home team wins.";
+  } else {
+    const keys = Object.keys(agg.totalHist).map(Number).sort((x, y) => x - y);
+    let c = 0, lo = keys[0], hi = keys[keys.length - 1];
+    for (const k of keys) { c += agg.totalHist[k]; if (c / agg.n < 0.01) lo = k; if (c / agg.n <= 0.99) hi = k; }
+    const avg = Math.round(+agg.avgTotal);
+    bars = [];
+    for (let t = lo; t <= hi; t++) {
+      const p = (agg.totalHist[t] || 0) / agg.n * 100;
+      bars.push({ v: p, t, color: "var(--series-a)", strong: t === avg, dim: t !== avg, tip: `${t} total points: ${p.toFixed(1)}%` });
+    }
+    labelOf = (i, b) => b.t % 10 === 0 ? b.t : null;
+    note = `Combined points for both teams. The bright bar is the average, about ${agg.avgTotal}.`;
+  }
+  return (
+    <div className="card" style={{ marginBottom: 12 }}>
+      <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", marginBottom: 4 }}>
+        <div style={{ fontWeight: 650 }}>How the game ends</div>
+        <UI.Seg options={[["margin", "Margin"], ["total", "Total"]]} value={mode} onChange={setMode} />
+      </div>
+      <div className="small text-2" style={{ marginBottom: 10 }}>{note}</div>
+      <UI.BarChart bars={bars} height={140} yFmt={v => v + "%"} ariaLabel={mode === "margin" ? "Final margin distribution" : "Game total distribution"} labelOf={labelOf} />
+      {mode === "margin" && <div className="legend"><span><i style={{ background: "var(--series-b)" }} />{A} wins by</span><span><i style={{ background: "var(--series-a)" }} />{H} wins by</span></div>}
+    </div>
+  );
 }
 
 // ── Game Sim View ─────────────────────────────────────────────────────────────
 function GameSimView({ game, agg, running, onRun, runCount, kx, rowsInfo }) {
-  const commenceStr = game ? new Date(game.commenceTime).toLocaleString("en-US", { weekday:"short", month:"short", day:"numeric", hour:"numeric", minute:"2-digit", timeZoneName:"short" }) : "";
+  const [sort, setSort] = useState({ k: "edge", dir: -1 });
   const { match, rows } = rowsInfo || { match: null, rows: [] };
   const best = rows.filter(r => r.g.key === "STRONG" || r.g.key === "GOOD").sort((a, b) => b.edge - a.edge);
+  const sorted = sortRows(rows, sort, (r, k) => r[k]);
+  const when = new Date(game.commenceTime).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const A = abbr(game.awayTeam), H = abbr(game.homeTeam);
+  const spread = agg ? +agg.avgSpread : 0;
 
   return (
     <div>
-      <div style={S.header}>
-        <div style={S.glow}/>
-        <div style={S.badge(T.accent)}>🏀 WNBA · POSSESSION SIM</div>
-        <div style={S.title}>
-          <span>{game ? game.awayTeam : "—"}</span>
-          <span style={S.vs}>@</span>
-          <span>{game ? game.homeTeam : "—"}</span>
-        </div>
-        <div style={S.meta}>{commenceStr || "Select a game"}</div>
-        <div style={S.modelTag}>POSSESSION-BY-POSSESSION · OffRtg/DefRtg/Pace · 100,000 ITERATIONS</div>
-      </div>
-
-      <div style={S.body}>
-        {game && (
-          <button style={S.btn(running, T.accent)} onClick={onRun} disabled={running}>
-            {running ? "⟳ Running Possession Sim (100,000 iterations)..." : ("↻ Re-Run Simulation" + (runCount > 0 ? " (Run #" + runCount + ")" : ""))}
+      <div className="card" style={{ marginBottom: 12 }}>
+        <div className="row" style={{ alignItems: "flex-start" }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="match-title">{game.awayTeam} <span className="muted" style={{ fontWeight: 400 }}>@</span> {game.homeTeam}</div>
+            <div className="small muted" style={{ marginTop: 2 }}>{when}</div>
+          </div>
+          <button className="btn btn-sm" onClick={onRun} disabled={running} style={{ flex: "none" }}>
+            {running ? "Simulating…" : "Run again"}
           </button>
-        )}
-
-        <div style={S.sec}>
-          <div style={S.secLabel}>Bets on Kalshi</div>
-          {kx.status !== "ok" ? <KalshiNote kx={kx}/>
-            : !match ? <div style={S.note}>No Kalshi markets open for this game.</div>
-            : !agg ? <div style={S.note}>Waiting for the simulation to finish…</div>
-            : !rows.length ? <div style={S.note}>Kalshi has markets for this game, but none have a real price right now (no asks, or the bid/ask gap is wider than {WIDE_GAP}¢).</div>
-            : <>
-                {best.length > 0 && (
-                  <div style={{ ...S.card, marginBottom:10, borderLeft:"3px solid "+best[0].g.color }}>
-                    <div style={S.sL}>Best bet this game</div>
-                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-                      <div>
-                        <div style={{ fontSize:14, fontWeight:700, marginBottom:4 }}>{best[0].label} <GradeBadge g={best[0].g}/></div>
-                        <ChanceLine g={best[0].g}/>
-                      </div>
-                      <BetButton pick={{ ticker:best[0].ticker, side:best[0].side, price:best[0].price, chance:best[0].chance, label:best[0].label, sub:game.awayTeam + " @ " + game.homeTeam + " · " + best[0].what, sport:SPORT, grade:best[0].g }}/>
-                    </div>
-                  </div>
-                )}
-                <KalshiTable rows={rows}/>
-              </>}
         </div>
-
-        {game && (
-          <div style={S.sec}>
-            <div style={S.secLabel}>Model Inputs (2025 Season)</div>
-            <div style={S.card}>
-              <table style={S.table}>
-                <thead><tr>
-                  <th style={S.th}>Team</th>
-                  <th style={S.th}>Role</th>
-                  <th style={S.th}>Off Rtg</th>
-                  <th style={S.th}>Def Rtg</th>
-                  <th style={S.th}>Net Rtg</th>
-                  <th style={S.th}>Pace</th>
-                </tr></thead>
-                <tbody>
-                  {[{ t:game.awayTeam, role:"Away", c:T.blue }, { t:game.homeTeam, role:"Home", c:T.green }].map(({ t, role, c }) => {
-                    const p = TEAM_PARAMS[t] || {};
-                    return (
-                      <tr key={t}>
-                        <td style={{ ...S.td, color:c, fontWeight:700 }}>{t}</td>
-                        <td style={S.td}>{role}</td>
-                        <td style={S.td}>{p.ortg}</td>
-                        <td style={S.td}>{p.drtg}</td>
-                        <td style={{ ...S.td, color: p.ortg - p.drtg >= 0 ? T.green : T.red }}>{p.ortg - p.drtg >= 0 ? "+" : ""}{p.ortg - p.drtg}</td>
-                        <td style={S.td}>{p.pace}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {agg && (
-          <div>
-            <div style={S.sec}>
-              <div style={S.secLabel}>Win Probabilities (n=100,000)</div>
-              <div style={S.g2}>
-                <StatCard label={agg.awayTeam + " Win"} value={agg.aWPct + "%"} sub={agg.aWins.toLocaleString() + " / 100,000 sims"} color={T.blue}/>
-                <StatCard label={agg.homeTeam + " Win"} value={agg.hWPct + "%"} sub={agg.hWins.toLocaleString() + " / 100,000 sims"} color={T.green}/>
-              </div>
-              <div style={S.barWrap}>
-                <div style={{ width:agg.aWPct+"%", background:"linear-gradient(90deg,#1d4ed8,#3b82f6)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700, color:T.text }}>
-                  {parseFloat(agg.aWPct)>8 ? agg.awayTeam+" "+agg.aWPct+"%" : ""}
-                </div>
-                <div style={{ width:agg.hWPct+"%", background:"linear-gradient(90deg,#16a34a,#22c55e)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700, color:"#070b14" }}>
-                  {parseFloat(agg.hWPct)>8 ? agg.homeTeam+" "+agg.hWPct+"%" : ""}
-                </div>
-              </div>
-            </div>
-
-            <div style={S.sec}>
-              <div style={S.secLabel}>Scoring</div>
-              <div style={S.g3}>
-                <StatCard label={agg.awayTeam + " Avg Pts"} value={agg.avgAway} color={T.blue}/>
-                <StatCard label="Avg Total" value={agg.avgTotal} color={T.gold}/>
-                <StatCard label={agg.homeTeam + " Avg Pts"} value={agg.avgHome} color={T.green}/>
-              </div>
-              <div style={{ ...S.g2, marginTop:10 }}>
-                <StatCard label="Avg H1 Total" value={agg.avgH1} color={T.purple}/>
-                <StatCard label="Avg Spread (Home)" value={(parseFloat(agg.avgSpread)>=0?"+":"")+agg.avgSpread} color={parseFloat(agg.avgSpread)>=0?T.green:T.blue}/>
-              </div>
-              <div style={{ ...S.card, marginTop:9 }}>
-                <div style={S.sL}>Score Distribution — Away @ Home (Top 8)</div>
-                {agg.topScores.map(({ score, count, pct }) => (
-                  <div key={score} style={{ marginTop:7 }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:2 }}>
-                      <span>{score}</span><span style={{ color:T.muted }}>{count.toLocaleString()}× ({pct}%)</span>
-                    </div>
-                    <div style={{ height:4, background:T.border, borderRadius:2 }}>
-                      <div style={{ height:"100%", width:Math.min(parseFloat(pct)*5,100)+"%", background:parseFloat(pct)>=8?T.green:T.blue, borderRadius:2 }}/>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ background:"#0a0f1a", border:"1px solid "+T.purple+"33", borderRadius:6, padding:"11px 14px", fontSize:"10px", color:T.muted, marginTop:18, lineHeight:1.8 }}>
-              <div style={{ color:T.purple, fontWeight:700, fontSize:"9px", letterSpacing:"2px", marginBottom:7 }}>MODEL METHODOLOGY</div>
-              <div><span style={{ color:T.text }}>Possession Model:</span> Quarter-by-quarter simulation using team offensive rating, opponent defensive rating, and pace (possessions per 40 min). Each quarter drawn from a calibrated normal distribution.</div>
-              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Efficiency Adjustment:</span> Multiplicative model — (TeamOrtg / LeagueAvg) × (OppDrtg / LeagueAvg) × LeagueAvg. League average: {LEAGUE_AVG} pts/100 poss.</div>
-              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Home Court:</span> {HCA} point advantage applied to home team expected scoring.</div>
-              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Pricing:</span> Every Kalshi winner, spread and total market for the game is priced from the sim's full margin and total distributions. Each row shows the side (YES or NO) with the bigger edge, at that side's current ask.</div>
-            </div>
-            <div style={S.disclaimer}>
-              Simulation parameters from 2025 WNBA season statistics. Schedule from ESPN; prices from Kalshi's public market data. Not professional betting advice. Gamble responsibly.
-            </div>
-          </div>
-        )}
+        <div style={{ marginTop: 14 }}>
+          {agg ? <WinSplit game={game} agg={agg} /> : <div className="row small text-2"><span className="spinner" />Simulating 100,000 games…</div>}
+        </div>
+        {agg && <div className="tiny muted" style={{ marginTop: 8 }}>{agg.n.toLocaleString()} simulated games{runCount > 1 ? ` · run ${runCount}` : ""}</div>}
       </div>
+
+      {agg && <div className="tiles" style={{ marginBottom: 12 }}>
+        <UI.Tile label="Model spread" value={Math.abs(spread) < 0.05 ? "Even" : `${spread > 0 ? H : A} −${Math.abs(spread).toFixed(1)}`} sub="average winning margin" />
+        <UI.Tile label="Model total" value={agg.avgTotal} sub={`first half ${agg.avgH1}`} />
+        <UI.Tile label={`${A} points`} value={agg.avgAway} sub="average, away" />
+        <UI.Tile label={`${H} points`} value={agg.avgHome} sub="average, home" />
+      </div>}
+
+      {agg && <Outcomes game={game} agg={agg} />}
+
+      <UI.H2 aside={match && agg && rows.length ? `${rows.length} markets` : null}>Bets on Kalshi</UI.H2>
+      {kx.status !== "ok" ? <KalshiNote kx={kx} />
+        : !match ? <div className="note">No Kalshi markets are open for this game yet. They usually open a day or two before tipoff.</div>
+        : !agg ? <UI.Status>Waiting for the simulation to finish…</UI.Status>
+        : !rows.length ? <div className="note">Kalshi has markets for this game, but none have a real price right now (no asks, or the buy and sell prices are more than {WIDE_GAP}¢ apart).</div>
+        : <>
+            {best.length > 0 && <div style={{ marginBottom: 12 }}>
+              <UI.PickCard top g={best[0].g} title={best[0].label} meaning={rowMeta(best[0])} meta={`${game.awayTeam} @ ${game.homeTeam}`} when={tipoff(game.commenceTime)} pick={pickOf(best[0])} />
+            </div>}
+            <div className="row" style={{ marginBottom: 10, flexWrap: "wrap" }}>
+              <span className="small muted">Sort by</span>
+              <UI.Seg options={[["edge", "Best edge"], ["chance", "Most likely"], ["price", "Cheapest"]]} value={sort.k} onChange={k => setSort({ k, dir: k === "price" ? 1 : -1 })} />
+            </div>
+            <UI.PickList>
+              {sorted.map(r => <UI.PickRow key={r.key} g={r.g} title={r.label} meta={rowMeta(r)} badge pick={pickOf(r)} />)}
+            </UI.PickList>
+          </>}
+
+      <UI.H2>Model inputs</UI.H2>
+      <div className="tbl-wrap">
+        <table className="tbl">
+          <thead><tr><th>Team</th><th className="r">Offense</th><th className="r">Defense</th><th className="r">Net</th><th className="r">Pace</th></tr></thead>
+          <tbody>
+            {[{ t: game.awayTeam, role: "Away" }, { t: game.homeTeam, role: "Home" }].map(({ t, role }) => {
+              const p = TEAM_PARAMS[t] || {}, net = p.ortg - p.drtg;
+              return (
+                <tr key={t}>
+                  <td><div style={{ fontWeight: 600 }}>{abbr(t)}</div><div className="sub">{role}</div></td>
+                  <td className="r num">{p.ortg}</td>
+                  <td className="r num">{p.drtg}</td>
+                  <td className="r num" style={{ fontWeight: 600 }}>{net >= 0 ? "+" : "−"}{Math.abs(net)}</td>
+                  <td className="r num">{p.pace}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="tiny muted" style={{ marginTop: 6 }}>Points scored and allowed per 100 possessions, and possessions per 40 minutes, from the 2025 season. Lower defense is better.</div>
+
+      {agg && agg.topScores && agg.topScores.length > 0 && <>
+        <UI.H2>Most likely final scores</UI.H2>
+        <div className="small text-2" style={{ marginBottom: 10 }}>Basketball scores spread out a lot: even the most common final score happens in only {agg.topScores[0].pct}% of simulated games.</div>
+        <div className="wrap-row">
+          {agg.topScores.map(({ score, pct }) => {
+            const [as, hs] = score.split("-");
+            return <span key={score} className="chip num" style={{ height: 30 }}>{A} {as} – {H} {hs}<span className="muted" style={{ fontWeight: 500 }}>{pct}%</span></span>;
+          })}
+        </div>
+      </>}
     </div>
   );
 }
 
 // ── Top Picks Tab ─────────────────────────────────────────────────────────────
-function TopPicksTab({ games, simData, kx, allRows }) {
+function TopPicksTab({ games, simData, kx, allRows, settings }) {
   const simsReady = games.filter(g => simData[g.homeTeam + "|" + g.awayTeam]).length;
-  const top = allRows.filter(r => r.g.key === "STRONG" || r.g.key === "GOOD" || r.g.key === "SMALL");
+  const byId = {}; games.forEach(g => { byId[g.id] = g; });
+  const top = allRows.filter(r => r.g.key === "STRONG" || r.g.key === "GOOD" || r.g.key === "SMALL")
+    .sort((a, b) => a.g.rank - b.g.rank || b.edge - a.edge);
+  const best = top.filter(r => r.g.rank <= 1), rest = top.filter(r => r.g.rank > 1);
+  const when = (r) => byId[r.gameId] ? tipoff(byId[r.gameId].commenceTime) : null;
   return (
-    <div style={S.body}>
-      {simsReady < games.length && (
-        <div style={{ ...S.note, textAlign:"center", marginBottom:12 }}>{simsReady}/{games.length} sims complete…</div>
-      )}
-      {kx.status !== "ok" ? <KalshiNote kx={kx}/>
-        : !allRows.length ? <div style={{ ...S.note, textAlign:"center" }}>No Kalshi markets open for today's games, so there's nothing to grade.</div>
-        : !top.length ? <div style={{ ...S.note, textAlign:"center" }}>Every Kalshi price today is about right or too high. No bets worth making.</div>
-        : <div style={S.sec}>
-            <div style={S.secLabel}>Bets with an edge ({top.length})</div>
-            <KalshiTable rows={top} showGame/>
-          </div>}
+    <div>
+      {simsReady < games.length && <UI.Status>{simsReady} of {games.length} games simulated…</UI.Status>}
+      {kx.status !== "ok" ? <KalshiNote kx={kx} />
+        : !allRows.length ? <div className="note">No Kalshi markets are open for today's games yet, so there's nothing to grade. They usually open a day or two before tipoff.</div>
+        : !top.length ? <div className="note">Every Kalshi price today is about right or too high. No bets worth making. A bet shows up here once the model's chance to cash beats the price by at least {settings.small.minEdge}¢.</div>
+        : <>
+            <UI.H2 aside={best.length ? `${best.length} strong or good` : null}>Best bets right now</UI.H2>
+            {best.length ? <div className="picks-grid two">
+              {best.map((r, i) => <UI.PickCard key={r.key} top={i === 0} g={r.g} title={r.label} meaning={rowMeta(r)} when={when(r)} meta={`${r.away} @ ${r.home}`} pick={pickOf(r)} />)}
+            </div> : <div className="note">No STRONG or GOOD bets right now. The smaller edges below are close calls: bet small or skip.</div>}
+            {rest.length > 0 && <>
+              <UI.H2 aside={`${rest.length}`}>Smaller edges</UI.H2>
+              <UI.PickList>
+                {rest.map(r => <UI.PickRow key={r.key} g={r.g} title={r.label} meta={`${r.match}${when(r) ? " · " + when(r) : ""} · ${r.what}`} pick={pickOf(r)} />)}
+              </UI.PickList>
+            </>}
+          </>}
     </div>
   );
 }
 
 // ── Parlay Builder (STRONG / GOOD legs only, one per game) ───────────────────
-const PARLAY_SIZE_LABELS = { 2:"2-Leg", 3:"3-Leg", 4:"4-Leg", 5:"5-Leg" };
-
 function buildWNBAParlays(legs) {
   function buildCombos(size) {
     const results = [];
@@ -589,19 +553,18 @@ function buildWNBAParlays(legs) {
   return parlays.sort((a,b) => b.jointProb - a.jointProb);
 }
 
-function WNBAParlayTab({ kx, allRows }) {
+function WNBAParlayTab({ kx, allRows, noGames }) {
   const [filterSize, setFilterSize] = useState("all");
   const legs = allRows.filter(r => r.g.key === "STRONG" || r.g.key === "GOOD");
   const games = new Set(legs.map(l => l.gameId)).size;
 
-  if (kx.status !== "ok") return <div style={S.body}><KalshiNote kx={kx}/></div>;
+  if (noGames) return <NoGames kx={kx} />;
+  if (kx.status !== "ok") return <KalshiNote kx={kx} />;
   if (games < 2) {
     return (
-      <div style={S.body}>
-        <div style={{ ...S.note, textAlign:"center", padding:"32px 20px" }}>
-          Parlays are built from STRONG and GOOD bets in at least 2 different games. Right now there {legs.length === 1 ? "is 1 such bet" : "are " + legs.length + " such bets"} across {games} game{games === 1 ? "" : "s"}.
-        </div>
-      </div>
+      <Empty title="Not enough bets for a parlay yet" links={[["parlays.html", "All-sport parlays"]]}>
+        Parlays are built from STRONG and GOOD bets in at least 2 different games. Right now there {legs.length === 1 ? "is 1 such bet" : "are " + legs.length + " such bets"} across {games} game{games === 1 ? "" : "s"}.
+      </Empty>
     );
   }
 
@@ -609,62 +572,47 @@ function WNBAParlayTab({ kx, allRows }) {
   const filtered = filterSize==="all" ? parlays : parlays.filter(p=>p.size===parseInt(filterSize));
 
   return (
-    <div style={{ maxWidth:920, margin:"0 auto", padding:"20px 14px 48px" }}>
-      <div style={S.sec}>
-        <div style={{ ...S.card, background:"#0a1020", border:"1px solid "+T.accent+"33" }}>
-          <div style={{ fontSize:11, color:T.accent, fontWeight:700, letterSpacing:"1px" }}>WNBA PARLAY BUILDER</div>
-          <div style={{ fontSize:10, color:T.muted, marginTop:3 }}>
-            {legs.length} STRONG / GOOD legs across {games} games · one leg per game · sorted by combined chance to cash
-          </div>
-        </div>
+    <div>
+      <div className="small text-2" style={{ marginBottom: 10 }}>
+        {legs.length} STRONG or GOOD bets across {games} games, one per game, ranked by the chance every leg cashes.
+      </div>
+      <div className="row" style={{ marginBottom: 12, flexWrap: "wrap" }}>
+        <UI.Seg options={[["all", "All"], ["2", "2 legs"], ["3", "3 legs"], ["4", "4 legs"], ["5", "5 legs"]]} value={filterSize} onChange={setFilterSize} />
+        <span className="tiny muted" style={{ marginLeft: "auto" }}>{filtered.length} parlays</span>
       </div>
 
-      <div style={{ ...S.sec, display:"flex", gap:6, flexWrap:"wrap" }}>
-        {["all","2","3","4","5"].map(v=>(
-          <button key={v} onClick={()=>setFilterSize(v)} style={{ padding:"6px 14px", fontSize:10, fontWeight:700, letterSpacing:"1px", background:filterSize===v?T.accent:T.navy, color:filterSize===v?"#070b14":T.muted, border:"1px solid "+(filterSize===v?T.accent:T.border), borderRadius:4, cursor:"pointer", fontFamily:"inherit" }}>
-            {v==="all"?"ALL":v+"-LEG"}
-          </button>
-        ))}
-        <div style={{ marginLeft:"auto", fontSize:10, color:T.muted, alignSelf:"center" }}>Showing {filtered.length} parlays</div>
-      </div>
-
-      {filtered.length===0 && <div style={{ ...S.note, textAlign:"center", padding:32 }}>Not enough games with STRONG / GOOD bets for {filterSize}-leg parlays.</div>}
+      {filtered.length===0 && <div className="note">Not enough games with STRONG or GOOD bets for a {filterSize}-leg parlay.</div>}
 
       {filtered.map((parlay,pi) => {
         const jp = parlay.jointProb;
         const fairOdds = jp > 0 ? (jp < 0.5 ? "+" + Math.round((1/jp-1)*100) : "-" + Math.round((jp/(1-jp))*100)) : "—";
         return (
-          <div key={pi} style={{ ...S.card, marginTop:10 }}>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10, flexWrap:"wrap", gap:6 }}>
-              <div style={{ background:T.purple+"1a", border:"1px solid "+T.purple+"33", color:T.purple, fontSize:9, padding:"2px 8px", borderRadius:3, letterSpacing:"1px" }}>#{pi+1} · {PARLAY_SIZE_LABELS[parlay.size]}</div>
-              <div style={{ textAlign:"right" }}>
-                <div style={{ fontSize:20, fontWeight:700, color:jp>0.4?T.green:jp>0.2?T.gold:T.red }}>model: {(jp*100).toFixed(1)}%</div>
-                <div style={{ fontSize:9, color:T.muted }}>combined chance to cash · fair odds {fairOdds}</div>
+          <div key={pi} className="card parlay-card">
+            <div className="parlay-head">
+              <div>
+                <div style={{ fontWeight: 650 }}>{parlay.size}-leg parlay</div>
+                <div className="tiny muted">#{pi + 1} · fair odds {fairOdds}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div className="num" style={{ fontSize: 22, fontWeight: 700, lineHeight: 1.1 }}>{(jp*100).toFixed(1)}%</div>
+                <div className="tiny muted">chance all cash</div>
               </div>
             </div>
-            <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
-              {parlay.legs.map((leg,li) => (
-                <div key={li} style={{ display:"flex", alignItems:"center", gap:8, background:T.bg, borderRadius:4, padding:"7px 10px", borderLeft:"2px solid "+leg.g.color, flexWrap:"wrap" }}>
-                  <GradeBadge g={leg.g} small/>
-                  <div style={{ fontSize:9, color:T.muted, minWidth:80 }}>{leg.match}</div>
-                  <div style={{ flex:1, fontSize:11, fontWeight:600 }}>{leg.label}</div>
-                  <div style={{ fontSize:10, color:leg.g.color, fontWeight:700 }}>{leg.chance.toFixed(0)}% · {leg.price}¢</div>
-                </div>
-              ))}
-            </div>
+            <UI.PickList>
+              {parlay.legs.map(leg => <UI.PickRow key={leg.key} g={leg.g} title={leg.label} meta={leg.match + " · " + leg.what} badge />)}
+            </UI.PickList>
           </div>
         );
       })}
-      <div style={S.disclaimer}>Legs assumed independent across games. Kalshi doesn't sell these as one parlay; place each leg on its own game page. Not professional betting advice. Gamble responsibly.</div>
+      <div className="tiny muted" style={{ marginTop: 12 }}>Legs are treated as independent because they're in different games. Kalshi doesn't sell these as one parlay: place each leg on its game's tab.</div>
     </div>
   );
 }
 
-// ── Main App ──────────────────────────────────────────────────────────────────
 function App() {
   const settings = SB.useSettings();
   const [games, setGames] = useState([]);
-  const [activeTab, setActiveTab] = useState("game_0");
+  const [activeTab, setActiveTab] = useState("top_picks");
   const [simData, setSimData] = useState(() => {
     try { return JSON.parse(localStorage.getItem(SIM_CACHE_KEY) || "{}"); } catch(e) { return {}; }
   });
@@ -760,67 +708,37 @@ function App() {
   const gameKey = activeGame ? activeGame.homeTeam + "|" + activeGame.awayTeam : null;
   const edgeCount = allRows.filter(r => r.g.key === "STRONG" || r.g.key === "GOOD" || r.g.key === "SMALL").length;
 
+  const noGames = !loadingGames && games.length === 0 && !gamesError;
+  const tabs = [
+    ["top_picks", "Top picks", { count: edgeCount }],
+    ["parlays", "Parlays"],
+    ...games.map((g, i) => { const k = g.homeTeam + "|" + g.awayTeam; return ["game_" + i, `${abbr(g.awayTeam)} @ ${abbr(g.homeTeam)}`, { pending: runningId === k || (!simData[k] && !!TEAM_PARAMS[g.homeTeam] && !!TEAM_PARAMS[g.awayTeam]) }]; }),
+  ];
+
   return (
-    <div style={S.wrap}>
-      {/* Nav */}
-      <div style={{ background:T.navy, borderBottom:"1px solid "+T.border, padding:"10px 16px", display:"flex", alignItems:"center", gap:12, justifyContent:"space-between" }}>
-        <a href="index.html" style={{ fontSize:9, color:T.muted, letterSpacing:"1px" }}>← SHARP SIM</a>
-        <div style={{ flex:1 }}/>
-        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-          {lastFetched && <span style={{ fontSize:9, color:T.muted }}>fetched {formatAge(lastFetched)}</span>}
-          <button style={{ background:"none", border:"1px solid "+T.border, color:T.muted, fontSize:9, padding:"4px 10px", borderRadius:3, cursor:"pointer", fontFamily:"inherit" }}
-            onClick={loadAll} disabled={loadingGames}>
-            {loadingGames ? "..." : "⟳ Refresh"}
-          </button>
-          <a href="settings.html" style={{ fontSize:9, color:T.muted, letterSpacing:"1px", textDecoration:"none", border:"1px solid "+T.border, padding:"4px 10px", borderRadius:3 }}>⚙ SETTINGS</a>
-        </div>
-      </div>
+    <UI.Shell active="wnba">
+      <UI.PageHead eyebrow={"WNBA · priced on Kalshi" + (lastFetched ? " · updated " + formatAge(lastFetched) : "")}
+        title="WNBA picks"
+        sub="Every game simulated 100,000 times from team ratings and pace, then compared with Kalshi's price on every market."
+        right={<button className="btn btn-sm" onClick={loadAll} disabled={loadingGames}>{loadingGames ? "Loading…" : "Refresh"}</button>} />
+      <UI.Tabs tabs={tabs} value={activeTab} onChange={setActiveTab} />
 
-      {/* Game tabs */}
-      <div style={S.tabBar}>
-        {games.map((g, i) => (
-          <button key={g.id} style={S.tab(activeTab === "game_" + i)} onClick={() => setActiveTab("game_" + i)}>
-            {(TEAM_PARAMS[g.awayTeam]?.abbr || g.awayTeam.split(" ").pop())} @ {(TEAM_PARAMS[g.homeTeam]?.abbr || g.homeTeam.split(" ").pop())}
-            {runningId === (g.homeTeam + "|" + g.awayTeam) ? " ⟳" : !simData[g.homeTeam + "|" + g.awayTeam] ? " ·" : ""}
-          </button>
-        ))}
-        <div style={{ flex:1 }}/>
-        <button style={{ ...S.tab(activeTab === "top_picks"), color:activeTab==="top_picks"?T.green:T.muted, borderBottom:activeTab==="top_picks"?"2px solid "+T.green:"2px solid transparent", borderLeft:"1px solid "+T.border }}
-          onClick={() => setActiveTab("top_picks")}>
-          ⭐ TOP PICKS {edgeCount > 0 ? "(" + edgeCount + ")" : ""}
-        </button>
-        <button style={{ ...S.tab(activeTab === "parlays"), color:activeTab==="parlays"?T.purple:T.muted, borderBottom:activeTab==="parlays"?"2px solid "+T.purple:"2px solid transparent", borderLeft:"1px solid "+T.border }}
-          onClick={() => setActiveTab("parlays")}>
-          🎲 PARLAYS
-        </button>
-      </div>
+      {gamesError && <div className="note bad" style={{ marginBottom: 12 }}>Today's games couldn't be loaded from ESPN ({gamesError}). Try Refresh.</div>}
+      {loadingGames && games.length === 0 && <UI.Status>Loading today's WNBA games…</UI.Status>}
 
-      <div style={{ maxWidth:960, margin:"0 auto", padding:"16px 16px 0" }}>
-        <GradeLegend sport={SPORT}/>
-        <RecordCard sport={SPORT}/>
-      </div>
-
-      {gamesError && (
-        <div style={{ background:T.red+"22", border:"1px solid "+T.red+"44", color:T.red, padding:"10px 16px", fontSize:10 }}>
-          Error loading games from ESPN: {gamesError}
+      {activeTab === "top_picks" && <>
+        <GradeLegend sport={SPORT} />
+        {noGames ? <NoGames kx={kx} /> : games.length > 0 && <TopPicksTab games={games} simData={simData} kx={kx} allRows={allRows} settings={settings} />}
+        <UI.H2>Pick record</UI.H2>
+        <RecordCard sport={SPORT} />
+      </>}
+      {activeTab === "parlays" && !(loadingGames && games.length === 0) && <WNBAParlayTab kx={kx} allRows={allRows} noGames={noGames} />}
+      {!isSpecialTab && noGames && <NoGames kx={kx} />}
+      {!isSpecialTab && activeGame && (!TEAM_PARAMS[activeGame.homeTeam] || !TEAM_PARAMS[activeGame.awayTeam]) && (
+        <div className="note warn" style={{ marginBottom: 12 }}>
+          {activeGame.awayTeam} @ {activeGame.homeTeam} can't be simulated yet: one of these teams isn't in the model's ratings.
         </div>
       )}
-
-      {loadingGames && games.length === 0 && (
-        <div style={{ padding:40, textAlign:"center", color:T.muted, fontSize:10 }}>Loading today's WNBA games...</div>
-      )}
-
-      {!loadingGames && games.length === 0 && !gamesError && !isSpecialTab && (
-        <div style={{ maxWidth:960, margin:"0 auto", padding:"8px 16px 40px" }}>
-          <div style={{ ...S.note, textAlign:"center", padding:30 }}>
-            No WNBA games today.{kx.status === "ok" && !kx.markets.length ? " Kalshi has no WNBA markets open either, which is normal in the offseason." : ""}
-            {kx.status === "error" && <div style={{ color:T.yellow, marginTop:6 }}>Kalshi prices couldn't be loaded ({kx.error}).</div>}
-          </div>
-        </div>
-      )}
-
-      {activeTab === "top_picks" && <TopPicksTab games={games} simData={simData} kx={kx} allRows={allRows}/>}
-      {activeTab === "parlays" && <WNBAParlayTab kx={kx} allRows={allRows}/>}
       {!isSpecialTab && activeGame && (
         <GameSimView
           game={activeGame}
@@ -832,12 +750,12 @@ function App() {
           rowsInfo={rowsByGame[activeGame.id]}
         />
       )}
-      {!isSpecialTab && activeGame && (!TEAM_PARAMS[activeGame.homeTeam] || !TEAM_PARAMS[activeGame.awayTeam]) && (
-        <div style={{ padding:20, color:T.yellow, fontSize:10 }}>
-          Team not in model: {activeGame.homeTeam} or {activeGame.awayTeam} — parameters not yet calibrated.
-        </div>
-      )}
-    </div>
+
+      <div className="ss-foot">
+        <div>How it works: each quarter is simulated from the two teams' offensive and defensive ratings and pace, with {HCA} points for home court (league average {LEAGUE_AVG} points per 100 possessions). Every Kalshi winner, spread and total market is priced from the full spread of simulated results; each row shows the side, YES or NO, with the bigger edge at its current price.</div>
+        <div style={{ marginTop: 6 }}>Ratings from the 2025 WNBA season. Schedule from ESPN, prices from Kalshi's public market data. Edge is the model's chance minus Kalshi's price in cents. Not betting advice.</div>
+      </div>
+    </UI.Shell>
   );
 }
 

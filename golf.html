@@ -5,18 +5,62 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sharp Sim — Golf</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="js/bets.js"></script>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/sharp.css">
+<meta name="theme-color" content="#0b0d10">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="js/bets.js"></script>
+<script src="js/ui.js"></script>
 <style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html,body{min-height:100vh;background:#070b14;font-family:'IBM Plex Mono','Courier New',monospace;color:#dde5f0;zoom:1.2}
-::-webkit-scrollbar{width:6px;height:6px}
-::-webkit-scrollbar-track{background:#0c1526}
-::-webkit-scrollbar-thumb{background:#1a2a3e;border-radius:3px}
-a{text-decoration:none;color:inherit}
+/* Golf page only. Colors come from css/sharp.css tokens. */
+.g-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: -6px 0 16px; }
+.g-bar .chip.live { color: var(--text); }
+.g-bar .live-dot { width: 6px; height: 6px; border-radius: 3px; background: var(--avoid); }
+.g-bar .spacer { flex: 1; }
+.g-sortrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.g-sortrow .seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.g-sortrow .seg button { flex: none; }
+
+/* finish-chances table: ladder bar per golfer; extra number columns only on wide screens */
+.g-tbl th, .g-tbl td { padding: 10px 6px; }
+.g-tbl tr > :first-child { padding-left: 12px; }
+.g-tbl tr > :last-child { padding-right: 12px; }
+.g-tbl td.pos { color: var(--muted); font-size: 13px; width: 36px; }
+.g-tbl td.who { min-width: 0; max-width: 128px; }
+.g-tbl .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.g-tbl .nm .mk { color: var(--muted); font-weight: 400; font-size: 12px; }
+.g-tbl td.lad { min-width: 84px; }
+.g-tbl td.lad > div { min-width: 0 !important; }
+.g-tbl td.win { text-align: right; font-weight: 700; width: 48px; }
+.g-tbl tr.out td { opacity: .5; }
+.g-tbl tr.tap { cursor: pointer; }
+.g-tbl tr.detail td { padding-top: 0; color: var(--text-2); font-size: 12px; }
+.g-tbl tr.has-detail td { border-bottom: 0; }
+.g-tbl .wide { display: none; }
+@media (min-width: 760px) {
+  .g-tbl .wide { display: table-cell; }
+  .g-tbl tr.detail { display: none; }
+  .g-tbl tr.has-detail td { border-bottom: 1px solid var(--line); }
+  .g-tbl th, .g-tbl td { padding: 10px 10px; }
+  .g-tbl td.who { max-width: 220px; }
+  .g-tbl td.lad { width: 30%; }
+}
+.g-legend i { width: 14px; }
+@media (min-width: 760px) { .mob-only { display: none; } }
+
+/* head-to-head */
+.h2h-pick { display: grid; grid-template-columns: 1fr; gap: 8px; align-items: center; }
+.h2h-pick .field { width: 100%; min-width: 0; height: 44px; }
+.h2h-pick .vs { text-align: center; font-size: 13px; color: var(--muted); }
+@media (min-width: 640px) { .h2h-pick { grid-template-columns: 1fr auto 1fr auto; } .h2h-pick .field { height: 40px; } }
+.h2h-res { margin-top: 16px; }
+.h2h-side .v { font-size: 26px; font-weight: 700; letter-spacing: -0.4px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.h2h-side .n { font-size: 13px; color: var(--text-2); }
+.h2h-split { display: flex; gap: 2px; height: 12px; margin-top: 8px; }
+.h2h-split > div { min-width: 2px; }
 </style>
 </head>
 <body>
@@ -24,33 +68,8 @@ a{text-decoration:none;color:inherit}
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useRef, useMemo } = React;
 const SB = window.SharpBets;
-const { GradeBadge, ChanceLine, GradeLegend, BetButton, RecordCard, SortTh, sortRows, useSettings, money } = SB;
-
-
-const T = {
-  bg:"#070b14", navy:"#0c1526", card:"#101d30", border:"#1a2a3e",
-  text:"#dde5f0", muted:"#4b6280", green:"#22c55e", red:"#ef4444",
-  gold:"#e8c547", blue:"#3b82f6", purple:"#a78bfa", yellow:"#fbbf24",
-  accent:"#4ade80",
-};
-
-const S = {
-  wrap:{ minHeight:"100vh", background:T.bg, fontFamily:"'IBM Plex Mono','Courier New',monospace", color:T.text },
-  header:{ background:"linear-gradient(160deg,#0c1526 0%,#070b14 100%)", borderBottom:"1px solid "+T.border, padding:"28px 20px", textAlign:"center", position:"relative", overflow:"hidden" },
-  glow:{ position:"absolute", top:0, left:0, right:0, bottom:0, background:"radial-gradient(ellipse at 50% -10%,rgba(74,222,128,0.07) 0%,transparent 65%)", pointerEvents:"none" },
-  body:{ maxWidth:1100, margin:"0 auto", padding:"0 14px 60px" },
-  sec:{ marginTop:20 },
-  secLabel:{ fontSize:"9px", letterSpacing:"3px", color:T.muted, textTransform:"uppercase", marginBottom:10, paddingBottom:6, borderBottom:"1px solid "+T.border },
-  card:{ background:T.card, border:"1px solid "+T.border, borderRadius:6, padding:"12px 14px" },
-  table:{ width:"100%", borderCollapse:"collapse", fontSize:10 },
-  th:{ padding:"7px 8px", textAlign:"left", color:T.muted, fontSize:"8px", letterSpacing:"1px", textTransform:"uppercase", borderBottom:"1px solid "+T.border, whiteSpace:"nowrap", cursor:"pointer", userSelect:"none" },
-  thR:{ padding:"7px 8px", textAlign:"right", color:T.muted, fontSize:"8px", letterSpacing:"1px", textTransform:"uppercase", borderBottom:"1px solid "+T.border, whiteSpace:"nowrap", cursor:"pointer", userSelect:"none" },
-  td:{ padding:"8px 8px", borderBottom:"1px solid "+T.border+"44", verticalAlign:"middle" },
-  tdR:{ padding:"8px 8px", borderBottom:"1px solid "+T.border+"44", textAlign:"right", verticalAlign:"middle" },
-  btn:(active)=>({ background:active?"none":"none", border:"1px solid "+(active?T.accent:T.border), color:active?T.accent:T.muted, padding:"4px 12px", borderRadius:4, fontSize:9, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }),
-  disclaimer:{ fontSize:"9px", color:T.muted, marginTop:16, padding:10, borderTop:"1px solid "+T.border, lineHeight:1.7 },
-  select:{ background:T.navy, border:"1px solid "+T.border, color:T.text, fontSize:10, padding:"6px 10px", borderRadius:4, fontFamily:"'IBM Plex Mono','Courier New',monospace", cursor:"pointer" },
-};
+const UI = window.SharpUI;
+const { GradeBadge, GradeLegend, BetButton, RecordCard, SortTh, sortRows, useSettings, money } = SB;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const SIM_N       = 20000;   // tournament sims per run (field is ~150 golfers)
@@ -566,136 +585,173 @@ function betPick(row, eventName) {
   };
 }
 
-function ModelLine({ row }) {
-  return (
-    <span style={{ fontSize:10, color:T.muted }}>
-      <b style={{ color: row.g ? row.g.color : T.text }}>model: {pctFmt(row.chance)} chance to cash</b>
-      {" · costs "}{centsFmt(row.price)}{" · edge "}{edgeFmt(row.edge)}
-    </span>
-  );
+// Where a golfer stands right now: "T5 · −8 · 12" (position, score to par, holes played), or null before he tees off
+function standing(r, pos) {
+  const d = r && r.d;
+  if (!d || d.toPar == null) return null;
+  const p = pos && pos.rank != null ? pos.label + " · " : "";
+  return p + toParFmt(d.toPar) + (d.thruDisplay && d.thru > 0 && d.thru < 18 ? " · " + d.thruDisplay : "");
+}
+const mdefOf = (k) => MARKETS.find(m => m.key === k);
+
+// Best bets: STRONG and GOOD first (cards), then the biggest SMALL edges (rows)
+function splitBest(rows) {
+  const ok = rows.filter(r => r.g && r.rank <= 2).sort((a, b) => b.edge - a.edge);
+  return { best: ok.filter(r => r.rank <= 1), rest: ok.filter(r => r.rank === 2).slice(0, 6) };
 }
 
 function BestBets({ rows, eventName }) {
-  const top = rows.filter(r => r.g && r.rank <= 2).sort((a, b) => b.edge - a.edge).slice(0, 6);
-  if (!top.length) return (
-    <div style={{ ...S.card, color:T.muted, fontSize:10, lineHeight:1.7 }}>
-      Nothing priced below the model right now. Every Kalshi golf price is within {SB.getSettings().small.minEdge}¢ of the model's chance (or above it). Check back after the next round of scores.
-    </div>
+  const { best, rest } = splitBest(rows);
+  if (!best.length && !rest.length) return (
+    <div className="note">Nothing priced below the model right now. Every Kalshi golf price is within {SB.getSettings().small.minEdge}¢ of the model's chance (or above it). Check back after the next round of scores.</div>
   );
   return (
-    <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-      {top.map(r => {
-        const mdef = MARKETS.find(m => m.key === r.mkey);
-        return (
-          <div key={r.key} style={{ background:T.navy, border:"1px solid "+T.border, borderLeft:"3px solid "+r.g.color, borderRadius:4, padding:"10px 12px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-            <GradeBadge g={r.g}/>
-            <div style={{ flex:1, minWidth:180 }}>
-              <div style={{ fontWeight:700, fontSize:11 }}>{r.golfer} to {mdef.verb}</div>
-              <div style={{ marginTop:3 }}><ModelLine row={r}/></div>
-              {r.g.longShot && <div style={{ fontSize:9, color:T.muted, marginTop:2 }}>Long shot: it loses most of the time, so keep the bet small.</div>}
-            </div>
-            <BetButton pick={betPick(r, eventName)}/>
-          </div>
-        );
-      })}
+    <div>
+      <UI.H2 aside={best.length ? `${best.length} strong or good` : null}>Best bets right now</UI.H2>
+      {best.length ? <div className="picks-grid">
+        {best.map((r, i) => {
+          const md = mdefOf(r.mkey);
+          return (
+            <UI.PickCard key={r.key} top={i === 0} g={r.g} title={`${r.golfer} to ${md.verb}`}
+              meaning={standing(r.r, r.pos) ? "Now " + standing(r.r, r.pos) : "Hasn't teed off yet"}
+              when={md.label} meta={eventName} pick={betPick(r, eventName)}>
+              {r.g.longShot && <div className="tiny muted" style={{ marginTop: 8 }}>Long shot: it loses most of the time, so keep the bet small.</div>}
+            </UI.PickCard>
+          );
+        })}
+      </div> : <div className="note">No STRONG or GOOD golf bets right now. The smaller edges below are close calls: bet small or skip.</div>}
+      {rest.length > 0 && <>
+        <UI.H2 aside={`${rest.length}`}>Smaller edges</UI.H2>
+        <UI.PickList>
+          {rest.map(r => {
+            const md = mdefOf(r.mkey);
+            return <UI.PickRow key={r.key} g={r.g} title={`${r.golfer} to ${md.verb}`}
+              meta={[standing(r.r, r.pos), r.g.capped ? "no stats on this golfer" : null].filter(Boolean).join(" · ") || null}
+              pick={betPick(r, eventName)} />;
+          })}
+        </UI.PickList>
+      </>}
+      <div className="tiny muted" style={{ marginTop: 10 }}>Golf bets are long shots: even a good one usually loses. Most will grade SMALL EDGE, and that's honest. Bet small.</div>
     </div>
   );
 }
 
-function BetsTable({ rows, mkey, eventName, hidden, cutKnown }) {
+// Every Kalshi price for one market, as compact rows (works at phone width), sortable
+function BetsList({ rows, mkey, eventName, hidden }) {
   const [sort, setSort] = useState({ k: "edge", dir: -1 });
   const sorted = sortRows(rows, sort, (r, k) => k === "grade" ? -r.rank : k === "pos" ? (r.pos && r.pos.rank != null ? -r.pos.rank : null) : r[k]);
-  const mdef = MARKETS.find(m => m.key === mkey);
-  if (!rows.length) return <div style={{ color:T.muted, fontSize:10, padding:"10px 0" }}>No {mdef.label.toLowerCase()} prices to show{hidden ? ` (${hidden} hidden for wide bid/ask gaps)` : ""}.</div>;
+  const mdef = mdefOf(mkey);
+  if (!rows.length) return <div className="note">No {mdef.label.toLowerCase()} prices to show{hidden ? ` (${hidden} hidden for wide bid/ask gaps)` : ""}.</div>;
   return (
-    <div style={{ overflowX:"auto" }}>
-      <table style={S.table}>
-        <thead>
-          <tr>
-            <SortTh k="grade" sort={sort} setSort={setSort}>Grade</SortTh>
-            <SortTh k="golfer" sort={sort} setSort={setSort}>Golfer</SortTh>
-            <SortTh k="pos" sort={sort} setSort={setSort}>Pos</SortTh>
-            <SortTh k="chance" sort={sort} setSort={setSort}>Chance to cash</SortTh>
-            <SortTh k="price" sort={sort} setSort={setSort}>Price</SortTh>
-            <SortTh k="edge" sort={sort} setSort={setSort}>Edge</SortTh>
-            <SortTh k="stake" sort={sort} setSort={setSort}>Suggested bet</SortTh>
-            <SortTh sort={sort} setSort={setSort}>Bet</SortTh>
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map((r, i) => {
-            const d = r.r.d;
-            return (
-              <tr key={r.key} style={{ background: i % 2 ? T.navy + "44" : "transparent" }}>
-                <td style={S.td}><GradeBadge g={r.g} small/></td>
-                <td style={S.td}>
-                  <div style={{ fontWeight:700 }}>{r.golfer}{!r.r.hasData && <span title="No strokes-gained data for this golfer; the model treats him as an average tour player" style={{ color:T.muted, fontWeight:400 }}> *</span>}</div>
-                  {d && <div style={{ fontSize:8, color:T.muted, marginTop:1 }}>{toParFmt(d.toPar)}{d.thruDisplay && d.thru < 18 && d.thru > 0 ? " · " + d.thruDisplay : ""}</div>}
-                </td>
-                <td style={{ ...S.td, color:T.muted, fontSize:9 }}>{r.pos ? r.pos.label : "—"}</td>
-                <td style={{ ...S.td, color: r.g ? r.g.color : T.text, fontWeight:700 }}>{pctFmt(r.chance)}</td>
-                <td style={{ ...S.td, color:T.gold }}>{centsFmt(r.price)}</td>
-                <td style={{ ...S.td, color: r.edge > 0 ? T.green : r.edge < -2 ? T.red : T.muted, fontWeight: r.edge >= 2 ? 700 : 400 }}>{edgeFmt(r.edge)}</td>
-                <td style={{ ...S.td, color: r.stake ? T.text : T.muted }}>{r.stake ? money(r.stake) : "—"}</td>
-                <td style={S.td}>{r.rank <= 2 ? <BetButton pick={betPick(r, eventName)} compact/> : <span style={{ fontSize:9, color:T.muted }}>—</span>}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      <div style={{ fontSize:8, color:T.muted, marginTop:8, lineHeight:1.7 }}>
-        Chance to cash: how often the golfer {mdef.verb === "win" ? "wins" : mdef.verb.replace("finish", "finishes").replace("make", "makes")} in {SIM_N.toLocaleString()} simulations{mkey.startsWith("top") ? " (ties count, as on Kalshi)" : ""}. Price: Kalshi's current ask for YES. Edge = chance − price. * = no stats for this golfer (graded no higher than SMALL EDGE).
-        {hidden > 0 && ` ${hidden} golfer${hidden > 1 ? "s" : ""} hidden: bid/ask gap wider than ${WIDE_GAP}¢ (change in Settings).`}
+    <div>
+      <div className="g-sortrow">
+        <span className="small muted">Sort by</span>
+        <UI.Seg options={[["edge", "Edge"], ["chance", "Chance"], ["price", "Price"], ["pos", "Position"]]} value={sort.k}
+          onChange={k => setSort({ k, dir: k === "price" ? 1 : -1 })} />
+      </div>
+      <UI.PickList>
+        {sorted.map(r => (
+          <UI.PickRow key={r.key} g={r.g} badge={r.rank <= 2}
+            title={<>{r.golfer}{!r.r.hasData && <span className="muted" title="No strokes-gained data for this golfer; the model treats him as an average tour player" style={{ fontWeight: 400 }}> *</span>}</>}
+            meta={standing(r.r, r.pos)}
+            pick={r.rank <= 2 ? betPick(r, eventName) : null} />
+        ))}
+      </UI.PickList>
+      <div className="tiny muted" style={{ marginTop: 8, lineHeight: 1.6 }}>
+        Chance: how often the golfer {mdef.verb === "win" ? "wins" : mdef.verb.replace("finish", "finishes").replace("make", "makes")} in {SIM_N.toLocaleString()} simulations{mkey.startsWith("top") ? " (ties count, as on Kalshi)" : ""}. Price: Kalshi's current ask for YES. Edge = chance − price. * = no stats for this golfer (graded no higher than SMALL EDGE).
+        {hidden > 0 && <> {hidden} golfer{hidden > 1 ? "s" : ""} hidden: bid/ask gap wider than {WIDE_GAP}¢ (change in <a href="settings.html" className="link">Settings</a>).</>}
       </div>
     </div>
   );
 }
 
-function SimTable({ sim, pos, curRound, cutKnown }) {
+// Finish ladder steps for one golfer, widest first
+function ladderSteps(r, showCut) {
+  return [
+    ...(showCut ? [{ label: "Make cut", p: r.cut / 100 }] : []),
+    { label: "Top 20", p: r.top20 / 100 }, { label: "Top 10", p: r.top10 / 100 },
+    { label: "Top 5", p: r.top5 / 100 }, { label: "Win", p: r.win / 100 },
+  ];
+}
+// Legend swatches use the same shading as SharpUI.ProbLadder (more solid = harder finish)
+function LadderLegend({ showCut }) {
+  const labels = (showCut ? ["Make cut"] : []).concat(["Top 20", "Top 10", "Top 5", "Win"]), n = labels.length;
+  const items = labels.map((l, i) => ({ l, o: 0.22 + 0.78 * (i + 1) / n })).reverse();
+  return (
+    <div className="legend g-legend" style={{ marginTop: 0 }}>
+      {items.map(x => <span key={x.l}><i style={{ background: "var(--series-a)", opacity: x.o }} />{x.l}</span>)}
+    </div>
+  );
+}
+
+function FinishTable({ sim, pos, curRound, cutKnown }) {
   const [sort, setSort] = useState({ k: "pos", dir: -1 });
+  const [open, setOpen] = useState(null);
   const rows = sim.map(r => ({ ...r, pos: pos[r.name] }));
   const sorted = sortRows(rows, sort, (r, k) => k === "pos" ? (r.pos && r.pos.rank != null ? -r.pos.rank : null) : k === "toPar" ? (r.d && r.d.toPar != null ? -r.d.toPar : null) : r[k]);
   const showCut = !cutKnown;
+  const rounds = [1, 2, 3, 4].filter(k => k <= curRound);
+  const th = (k, label, cls) => <SortTh k={k} sort={sort} setSort={setSort} right={cls === "r"}>{label}</SortTh>;
   return (
-    <div style={{ overflowX:"auto" }}>
-      <table style={S.table}>
-        <thead>
-          <tr>
-            <SortTh k="pos" sort={sort} setSort={setSort}>Pos</SortTh>
-            <SortTh k="name" sort={sort} setSort={setSort}>Golfer</SortTh>
-            <SortTh k="sg" sort={sort} setSort={setSort}>SG</SortTh>
-            <SortTh k="toPar" sort={sort} setSort={setSort}>Score</SortTh>
-            {[1, 2, 3, 4].filter(k => k <= curRound).map(k => <SortTh key={k} sort={sort} setSort={setSort}>R{k}</SortTh>)}
-            <SortTh k="win" sort={sort} setSort={setSort}>Win</SortTh>
-            <SortTh k="top5" sort={sort} setSort={setSort}>Top 5</SortTh>
-            <SortTh k="top10" sort={sort} setSort={setSort}>Top 10</SortTh>
-            <SortTh k="top20" sort={sort} setSort={setSort}>Top 20</SortTh>
-            {showCut && <SortTh k="cut" sort={sort} setSort={setSort}>Cut</SortTh>}
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map((r, i) => {
-            const d = r.d || {};
-            return (
-              <tr key={r.name} style={{ background: r.out ? "rgba(239,68,68,0.04)" : i % 2 ? T.navy + "44" : "transparent", opacity: r.out ? 0.5 : 1 }}>
-                <td style={{ ...S.td, color:T.muted, fontSize:9 }}>{r.pos ? r.pos.label : "—"}</td>
-                <td style={{ ...S.td, fontWeight:700 }}>{r.name}{r.est && <span title="SG estimated (LIV / DP World Tour)" style={{ color:T.muted, fontWeight:400 }}> est</span>}{!r.hasData && <span title="No strokes-gained data" style={{ color:T.muted, fontWeight:400 }}> *</span>}</td>
-                <td style={{ ...S.td, color: !r.hasData ? T.muted : r.sg >= 1 ? T.green : T.text, fontSize:9 }}>{r.hasData ? (r.sg > 0 ? "+" : "") + r.sg.toFixed(2) : "—"}</td>
-                <td style={S.td}>
-                  <span style={{ fontWeight:700, color: d.toPar == null ? T.muted : d.toPar < 0 ? T.accent : d.toPar > 0 ? T.red : T.text }}>{toParFmt(d.toPar)}</span>
-                  {d.thruDisplay && d.thru > 0 && d.thru < 18 && <span style={{ fontSize:8, color:T.muted }}> {d.thruDisplay}</span>}
-                </td>
-                {[d.r1, d.r2, d.r3, d.r4].slice(0, curRound).map((v, k) => <td key={k} style={{ ...S.td, color:T.muted, fontSize:9 }}>{v ?? "—"}</td>)}
-                <td style={{ ...S.td, color:T.accent, fontWeight:700 }}>{pctFmt(r.win)}</td>
-                <td style={S.td}>{pctFmt(r.top5)}</td>
-                <td style={S.td}>{pctFmt(r.top10)}</td>
-                <td style={{ ...S.td, color:T.muted }}>{pctFmt(r.top20)}</td>
-                {showCut && <td style={{ ...S.td, color:T.muted }}>{pctFmt(r.cut)}</td>}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <div>
+      <div className="card" style={{ marginBottom: 12 }}>
+        <div style={{ fontWeight: 650, marginBottom: 2 }}>Who can win, and who just makes the cut</div>
+        <div className="small text-2" style={{ marginBottom: 10 }}>Each bar is one golfer. The solid tip is the golfer's chance to win; each fainter band adds the next finish{showCut ? ", out to making the cut" : ""}. A long faint bar with a short solid tip means a likely good finish but probably won't win. <span className="mob-only">Tap a golfer for the exact numbers.</span></div>
+        <LadderLegend showCut={showCut} />
+      </div>
+      <div className="g-sortrow">
+        <span className="small muted">Sort by</span>
+        <UI.Seg options={[["pos", "Leaderboard"], ["win", "Win"], ["top10", "Top 10"], showCut ? ["cut", "Make cut"] : ["top20", "Top 20"]]} value={sort.k}
+          onChange={k => setSort({ k, dir: -1 })} />
+      </div>
+      <div className="tbl-wrap">
+        <table className="tbl g-tbl">
+          <thead>
+            <tr>
+              {th("pos", "Pos")}
+              {th("name", "Golfer")}
+              <th className="wide sortable" onClick={() => setSort(sort.k === "toPar" ? { k: "toPar", dir: -sort.dir } : { k: "toPar", dir: -1 })} aria-sort={sort.k === "toPar" ? (sort.dir < 0 ? "descending" : "ascending") : "none"}>Score<span className="arrow">{sort.k === "toPar" ? (sort.dir < 0 ? "▼" : "▲") : "↕"}</span></th>
+              <th>Finish chances</th>
+              <SortTh k="win" sort={sort} setSort={setSort} right>Win</SortTh>
+              {[["top5", "Top 5"], ["top10", "Top 10"], ["top20", "Top 20"], ...(showCut ? [["cut", "Cut"]] : []), ["sg", "SG"]].map(([k, l]) => (
+                <th key={k} className={"wide sortable r"} onClick={() => setSort(sort.k === k ? { k, dir: -sort.dir } : { k, dir: -1 })} aria-sort={sort.k === k ? (sort.dir < 0 ? "descending" : "ascending") : "none"}>{l}<span className="arrow">{sort.k === k ? (sort.dir < 0 ? "▼" : "▲") : "↕"}</span></th>
+              ))}
+              {rounds.map(k => <th key={k} className="wide r">R{k}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map(r => {
+              const d = r.d || {};
+              const isOpen = open === r.name;
+              const score = d.toPar == null ? null : toParFmt(d.toPar) + (d.thruDisplay && d.thru > 0 && d.thru < 18 ? " · " + d.thruDisplay : "");
+              const sg = r.hasData ? "SG " + (r.sg > 0 ? "+" : "") + r.sg.toFixed(2) : "no stats";
+              const nums = ladderSteps(r, showCut).slice().reverse().map(s => `${s.label} ${pctFmt(s.p * 100)}`).join(" · ");
+              return (
+                <React.Fragment key={r.name}>
+                  <tr className={"tap" + (r.out ? " out" : "") + (isOpen ? " has-detail" : "")} onClick={() => setOpen(isOpen ? null : r.name)} aria-expanded={isOpen}>
+                    <td className="pos">{r.pos ? r.pos.label : "—"}</td>
+                    <td className="who">
+                      <div className="nm">{r.name}{r.est && <span className="mk" title="SG estimated (LIV / DP World Tour)"> est</span>}{!r.hasData && <span className="mk" title="No strokes-gained data"> *</span>}</div>
+                      <div className="sub mob-only">{[score, sg].filter(Boolean).join(" · ")}</div>
+                    </td>
+                    <td className="wide" style={{ whiteSpace: "nowrap" }}><b>{toParFmt(d.toPar)}</b>{score && d.thru > 0 && d.thru < 18 && <span className="sub"> {d.thruDisplay}</span>}</td>
+                    <td className="lad">{r.out ? <span className="tiny muted">{d.withdrew ? "Withdrew" : "Missed cut"}</span> : <UI.ProbLadder steps={ladderSteps(r, showCut)} />}</td>
+                    <td className="win num">{pctFmt(r.win)}</td>
+                    <td className="wide r">{pctFmt(r.top5)}</td>
+                    <td className="wide r">{pctFmt(r.top10)}</td>
+                    <td className="wide r">{pctFmt(r.top20)}</td>
+                    {showCut && <td className="wide r">{pctFmt(r.cut)}</td>}
+                    <td className="wide r muted">{r.hasData ? (r.sg > 0 ? "+" : "") + r.sg.toFixed(2) : "—"}</td>
+                    {[d.r1, d.r2, d.r3, d.r4].slice(0, curRound).map((v, k) => <td key={k} className="wide r muted">{v ?? "—"}</td>)}
+                  </tr>
+                  {isOpen && <tr className="detail"><td></td><td colSpan={3}>{nums}</td></tr>}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="tiny muted" style={{ marginTop: 8 }}>SG = strokes gained per round vs an average PGA Tour pro (2026 season). est = estimated (LIV / DP World Tour). * = no stats, plays like an average tour pro.</div>
     </div>
   );
 }
@@ -717,26 +773,29 @@ function H2HMatchup({ state, sim }) {
   }
   const fav = res ? (res.a >= res.b ? res.a : res.b) : 0;
   return (
-    <div style={S.card}>
-      <div style={{ fontSize:10, color:T.accent, fontWeight:700, letterSpacing:"1px", marginBottom:10 }}>WHO FINISHES AHEAD? (MODEL ONLY)</div>
-      <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"center", marginBottom:10 }}>
-        <select value={a} onChange={e => { setA(e.target.value); setRes(null); }} style={S.select}>{names.map(p => <option key={p} value={p}>{p}</option>)}</select>
-        <span style={{ color:T.muted, fontSize:11 }}>vs</span>
-        <select value={b} onChange={e => { setB(e.target.value); setRes(null); }} style={S.select}>{names.map(p => <option key={p} value={p}>{p}</option>)}</select>
-        <button onClick={run} disabled={running || a === b} style={{ background:"none", border:"1px solid "+T.accent, color:T.accent, padding:"6px 14px", borderRadius:4, fontSize:9, cursor:"pointer", fontFamily:"inherit" }}>
-          {running ? "Running..." : "↻ Compare"}
-        </button>
+    <div className="card">
+      <div style={{ fontWeight: 650, marginBottom: 2 }}>Who finishes ahead?</div>
+      <div className="small text-2" style={{ marginBottom: 12 }}>Pick two golfers and the model plays the tournament {H2H_N.toLocaleString()} times to see who beats whom over 72 holes. Model only: Kalshi doesn't price these.</div>
+      <div className="h2h-pick">
+        <select className="field" aria-label="First golfer" value={a} onChange={e => { setA(e.target.value); setRes(null); }}>{names.map(p => <option key={p} value={p}>{p}</option>)}</select>
+        <span className="vs">vs</span>
+        <select className="field" aria-label="Second golfer" value={b} onChange={e => { setB(e.target.value); setRes(null); }}>{names.map(p => <option key={p} value={p}>{p}</option>)}</select>
+        <button className="btn btn-primary" style={{ minHeight: 44 }} onClick={run} disabled={running || a === b}>{running ? "Running…" : "Compare"}</button>
       </div>
+      {a === b && <div className="tiny muted" style={{ marginTop: 8 }}>Pick two different golfers.</div>}
       {res && (
-        <div>
-          <div style={{ display:"flex", gap:4, height:28, borderRadius:4, overflow:"hidden", marginBottom:8 }}>
-            <div style={{ width:res.a + "%", background:"linear-gradient(90deg,#1d4ed8,#3b82f6)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700 }}>{res.a > 12 ? pctFmt(res.a) : ""}</div>
-            {res.tie > 0.5 && <div style={{ width:res.tie + "%", background:T.border, fontSize:8, color:T.muted, display:"flex", alignItems:"center", justifyContent:"center" }}>{res.tie > 4 ? "TIE" : ""}</div>}
-            <div style={{ width:res.b + "%", background:"linear-gradient(90deg,#16a34a,#22c55e)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700, color:"#070b14" }}>{res.b > 12 ? pctFmt(res.b) : ""}</div>
+        <div className="h2h-res">
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-end" }}>
+            <div className="h2h-side" style={{ minWidth: 0 }}><div className="v">{pctFmt(res.a)}</div><div className="n"><span className="legend" style={{ display: "inline", margin: 0 }}><i style={{ background: "var(--series-a)" }} /></span>{res.na}</div></div>
+            <div className="h2h-side" style={{ textAlign: "right", minWidth: 0 }}><div className="v">{pctFmt(res.b)}</div><div className="n">{res.nb}<span className="legend" style={{ display: "inline", margin: 0 }}><i style={{ background: "var(--series-b)", margin: "0 0 0 5px" }} /></span></div></div>
           </div>
-          <div style={{ fontSize:10, color:T.muted, lineHeight:1.7 }}>
-            <span style={{ color:"#3b82f6", fontWeight:700 }}>{res.na}</span> {pctFmt(res.a)} · <span style={{ color:T.green, fontWeight:700 }}>{res.nb}</span> {pctFmt(res.b)}{res.tie > 0.5 ? ` · tie ${pctFmt(res.tie)}` : ""}
-            <br/>Model: {res.a >= res.b ? res.na : res.nb} has a {pctFmt(fav)} chance to finish ahead (a golfer who misses the cut loses to one who makes it). Kalshi lists round-by-round 3-balls, not 72-hole matchups, so this one isn't priced.
+          <div className="h2h-split" role="img" aria-label={`${res.na} ${pctFmt(res.a)}, ${res.nb} ${pctFmt(res.b)}${res.tie > 0.5 ? ", tie " + pctFmt(res.tie) : ""}`}>
+            <div style={{ width: res.a + "%", background: "var(--series-a)", borderRadius: "999px 0 0 999px" }} />
+            {res.tie > 0.5 && <div style={{ width: res.tie + "%", background: "var(--faint)" }} title={`Tie ${pctFmt(res.tie)}`} />}
+            <div style={{ width: res.b + "%", background: "var(--series-b)", borderRadius: "0 999px 999px 0" }} />
+          </div>
+          <div className="small text-2" style={{ marginTop: 10 }}>
+            {res.a >= res.b ? res.na : res.nb} has a {pctFmt(fav)} chance to finish ahead{res.tie > 0.5 ? ` (tie ${pctFmt(res.tie)})` : ""}. A golfer who misses the cut loses to one who makes it.
           </div>
         </div>
       )}
@@ -757,6 +816,7 @@ function App() {
   const [state, setState] = useState(null);
   const [running, setRunning] = useState(false);
   const [tab, setTab] = useState("win");
+  const [view, setView] = useState("picks");
   const liveRef = useRef(null);
 
   async function refreshScores() {
@@ -826,96 +886,75 @@ function App() {
 
   useEffect(() => { if (avail.length && !avail.some(m => m.key === tab)) setTab(avail[0].key); }, [avail.map(m => m.key).join(",")]);
 
-  const statusLine = !live ? "" : live.eventStatus === "scheduled" ? "Starts soon · pre-tournament" : live.eventStatus === "final" ? "Final" : `Round ${live.currentRound} in progress`;
+  const statusLine = !live ? "" : live.eventStatus === "scheduled" ? "Starts soon" : live.eventStatus === "final" ? "Final" : `Round ${live.currentRound} in progress`;
   const tbl = tables[tab];
+  const inProgress = live && live.eventStatus === "in_progress";
+  const priced = sim && kal && kal.event;
+  const nBest = priced ? (({ best, rest }) => best.length + rest.length)(splitBest(allRows)) : null;
+  const cutLabel = !state ? null : state.cutKnown ? "Cut made" : state.cutSpots ? `Cut: top ${state.cutSpots} and ties` : "No cut";
+
+  const views = [
+    ["picks", "Best bets", nBest != null ? { count: nBest } : { pending: !sim }],
+    ["field", "Finish chances", field ? { count: field.length } : { pending: true }],
+    ["prices", "Every price", sim && avail.length ? { count: allRows.length } : { pending: !kal }],
+    ["h2h", "Head-to-head"],
+  ];
 
   return (
-    <div style={S.wrap}>
-      <div style={{ background:T.navy, borderBottom:"1px solid "+T.border, padding:"8px 16px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-        <a href="index.html" style={{ fontSize:9, color:T.muted, letterSpacing:"1px" }}>← Sharp Sim</a>
-        <div style={{ flex:1 }}/>
-        {live && scoresTs && <span style={{ fontSize:8, color: live.eventStatus === "in_progress" ? T.accent : T.muted }}>{live.eventStatus === "in_progress" ? "● LIVE R" + live.currentRound + " · " : "scores "}{formatAge(scoresTs)}</span>}
-        {scoresErr && <span style={{ fontSize:8, color:T.red }}>scores unavailable</span>}
-        {kalTs && <span style={{ fontSize:8, color:T.muted }}>Kalshi {formatAge(kalTs)}</span>}
-        <a href="settings.html" style={{ fontSize:9, color:T.muted, letterSpacing:1 }}>⚙ SETTINGS</a>
-        <button onClick={() => { refreshScores().then(refreshPrices); }} style={{ background:"none", border:"1px solid "+T.border, color:T.muted, fontSize:9, padding:"4px 10px", borderRadius:3, cursor:"pointer", fontFamily:"inherit" }}>⟳ Refresh</button>
+    <UI.Shell active="golf">
+      <UI.PageHead
+        eyebrow={<>PGA Tour{statusLine ? " · " + statusLine : ""} · priced on Kalshi</>}
+        title={eventName}
+        sub={`${field ? field.length + " golfers, each" : "Every golfer"} simulated ${SIM_N.toLocaleString()} times from strokes gained${state && state.curRound > 1 ? " and live scores" : ""}, then compared with Kalshi's price to win, finish top 5/10/20 and make the cut.`} />
+      <div className="g-bar">
+        {live && scoresTs && <span className={"chip" + (inProgress ? " live" : "")}>{inProgress && <span className="live-dot" />}{inProgress ? `Live R${live.currentRound} · ` : "Scores "}{formatAge(scoresTs)}</span>}
+        {scoresErr && <span className="chip" style={{ color: "var(--avoid)" }}>Scores unavailable</span>}
+        {kalTs && <span className="chip">Kalshi {formatAge(kalTs)}</span>}
+        {cutLabel && <span className="chip">{cutLabel}</span>}
+        <span className="spacer" />
+        <button className="btn btn-sm" onClick={() => { refreshScores().then(refreshPrices); }}>Refresh</button>
+        <button className="btn btn-sm" onClick={runSim} disabled={running || !field}>{running ? "Simulating…" : !field ? "Loading field…" : "Re-run sim"}</button>
       </div>
+      <UI.Tabs tabs={views} value={view} onChange={setView} />
 
-      <div style={S.header}>
-        <div style={S.glow}/>
-        <div style={{ display:"inline-block", background:"rgba(74,222,128,0.1)", border:"1px solid rgba(74,222,128,0.25)", color:T.accent, fontSize:"9px", letterSpacing:"3px", padding:"3px 12px", borderRadius:2, marginBottom:14 }}>⛳ PGA TOUR · PRICED ON KALSHI</div>
-        <div style={{ fontSize:"clamp(22px,4vw,36px)", fontWeight:700, letterSpacing:"-1px", background:"linear-gradient(135deg,#4ade80 0%,#dde5f0 60%)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", backgroundClip:"text", marginBottom:6 }}>{eventName}</div>
-        <div style={{ fontSize:10, color:T.muted, letterSpacing:"1px", marginBottom:12 }}>{statusLine}{field ? ` · ${field.length} golfers` : ""}</div>
-        <div style={{ display:"inline-block", background:"rgba(167,139,250,0.08)", border:"1px solid rgba(167,139,250,0.2)", color:T.purple, fontSize:"8px", letterSpacing:"2px", padding:"2px 10px", borderRadius:2 }}>
-          {SIM_N.toLocaleString()} SIMULATIONS · {state && state.cutKnown ? "CUT MADE" : state && state.cutSpots ? `CUT TOP ${state.cutSpots}+TIES` : "NO CUT"}{state && state.curRound > 1 ? " · USES LIVE SCORES" : ""}
+      {kalErr && <div className="note warn" style={{ marginBottom: 12 }}>Kalshi prices can't load right now ({kalErr}). The model's chances are on the Finish chances tab, but there's nothing to grade until prices come back.</div>}
+      {kal && !kal.event && <div className="note warn" style={{ marginBottom: 12 }}>Kalshi has no open winner market for {eventName} yet{kal.events.length ? ` (open now: ${kal.events.join(", ")})` : ""}. Model chances are on the Finish chances tab; grades appear once Kalshi lists this event.</div>}
+
+      {!sim && (live === null || running
+        ? <UI.Status>Loading the leaderboard and running the simulation…</UI.Status>
+        : <div className="note bad">Couldn't load the field (ESPN and Kalshi both unavailable).</div>)}
+
+      {view === "picks" && <>
+        <GradeLegend sport="golf" />
+        {priced && <BestBets rows={allRows} eventName={eventName} />}
+        <UI.H2>Pick record</UI.H2>
+        <RecordCard sport="golf" />
+      </>}
+
+      {view === "field" && sim && <FinishTable sim={sim} pos={pos} curRound={state ? state.curRound : 1} cutKnown={state && state.cutKnown} />}
+
+      {view === "prices" && sim && (avail.length > 0 ? <>
+        <div className="g-sortrow">
+          <span className="small muted">Market</span>
+          <UI.Seg options={avail.map(m => [m.key, `${m.label} · ${(tables[m.key] || { rows: [] }).rows.length}`])} value={tab} onChange={setTab} />
         </div>
-        <div style={{ marginTop:16 }}>
-          <button onClick={runSim} disabled={running || !field} style={{ background:running ? "none" : T.accent, color:running ? T.muted : "#070b14", border:"1px solid "+(running ? T.border : T.accent), borderRadius:4, padding:"8px 22px", fontSize:10, fontWeight:700, cursor:running ? "default" : "pointer", fontFamily:"inherit", letterSpacing:"1px" }}>
-            {running ? "⟳ Simulating..." : !field ? "Loading field..." : "↻ Re-run simulation"}
-          </button>
+        {tbl && <BetsList key={tab} rows={tbl.rows} mkey={tab} eventName={eventName} hidden={tbl.hidden} />}
+        {unmatched.length > 0 && <div className="tiny muted" style={{ marginTop: 6 }}>On Kalshi but not on ESPN's leaderboard (not graded): {unmatched.slice(0, 12).join(", ")}{unmatched.length > 12 ? "…" : ""}</div>}
+      </> : kal && <div className="note">No Kalshi golf prices to show for this event yet.</div>)}
+
+      {view === "h2h" && sim && <H2HMatchup state={state} sim={sim} />}
+
+      <details className="explain" style={{ marginTop: 28 }}>
+        <summary><span className="chip">?</span>How the model works</summary>
+        <div className="body small text-2" style={{ display: "grid", gap: 8, lineHeight: 1.55 }}>
+          <div><b style={{ color: "var(--text)" }}>Skill:</b> each golfer's expected round is this week's field average minus his strokes gained per round (2026 PGA Tour SG:Total; LIV / DP World Tour players estimated). Golfers without stats play like an average tour pro and are marked *.</div>
+          <div><b style={{ color: "var(--text)" }}>Live scores:</b> holes already played count as played (ESPN leaderboard). Only the holes left are simulated, so a golfer 5 shots clear with 9 holes left is a big favorite.</div>
+          <div><b style={{ color: "var(--text)" }}>Cut:</b> top 65 and ties after 36 holes, simulated until ESPN shows the real cut. Top 5/10/20 count ties, the way Kalshi settles them. Tied leaders split the win like a playoff.</div>
+          <div><b style={{ color: "var(--text)" }}>Prices:</b> Kalshi's YES ask for each golfer (winner, top 5/10/20, make cut). Edge = model chance − price. Golfers Kalshi has already settled (missed cut, out of contention) are skipped.</div>
         </div>
-      </div>
-
-      <div style={S.body}>
-        <div style={{ marginTop:16 }}>
-          <GradeLegend sport="golf"/>
-          <RecordCard sport="golf"/>
-        </div>
-
-        {kalErr && <div style={{ ...S.card, color:T.gold, fontSize:10, marginTop:12 }}>Kalshi prices can't load right now ({kalErr}). The model's chances are below, but there's nothing to grade until prices come back.</div>}
-        {kal && !kal.event && <div style={{ ...S.card, color:T.gold, fontSize:10, marginTop:12, lineHeight:1.7 }}>Kalshi has no open winner market for {eventName} yet{kal.events.length ? ` (open now: ${kal.events.join(", ")})` : ""}. Model chances are below; grades appear once Kalshi lists this event.</div>}
-
-        {sim && kal && kal.event && (
-          <div style={S.sec}>
-            <div style={S.secLabel}>Best bets right now</div>
-            <BestBets rows={allRows} eventName={eventName}/>
-            <div style={{ fontSize:9, color:T.muted, marginTop:8, lineHeight:1.7 }}>Golf bets are long shots: even a good one usually loses. Most will grade SMALL EDGE, and that's honest. Bet small.</div>
-          </div>
-        )}
-
-        {sim && avail.length > 0 && (
-          <div style={S.sec}>
-            <div style={S.secLabel}>Every Kalshi price · tap a column to sort</div>
-            <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:10 }}>
-              {avail.map(m => <button key={m.key} onClick={() => setTab(m.key)} style={S.btn(tab === m.key)}>{m.label.toUpperCase()} ({(tables[m.key] || { rows: [] }).rows.length})</button>)}
-            </div>
-            <div style={S.card}>
-              {tbl && <BetsTable key={tab} rows={tbl.rows} mkey={tab} eventName={eventName} hidden={tbl.hidden} cutKnown={state && state.cutKnown}/>}
-            </div>
-            {unmatched.length > 0 && <div style={{ fontSize:8, color:T.muted, marginTop:6 }}>On Kalshi but not on ESPN's leaderboard (not graded): {unmatched.slice(0, 12).join(", ")}{unmatched.length > 12 ? "…" : ""}</div>}
-          </div>
-        )}
-
-        {!sim && (
-          <div style={{ textAlign:"center", padding:"40px 24px", color:T.muted, fontSize:11 }}>
-            {live === null || running ? "Loading the leaderboard and running the simulation…" : "Couldn't load the field (ESPN and Kalshi both unavailable)."}
-          </div>
-        )}
-
-        {sim && (
-          <div style={S.sec}>
-            <div style={S.secLabel}>Model chances for every golfer</div>
-            <div style={S.card}><SimTable sim={sim} pos={pos} curRound={state ? state.curRound : 1} cutKnown={state && state.cutKnown}/></div>
-          </div>
-        )}
-
-        {sim && (
-          <div style={S.sec}>
-            <div style={S.secLabel}>Head-to-head</div>
-            <H2HMatchup state={state} sim={sim}/>
-          </div>
-        )}
-
-        <div style={{ ...S.sec, background:"#0a0f1a", border:"1px solid "+T.purple+"33", borderRadius:6, padding:"11px 14px", fontSize:"10px", color:T.muted, marginTop:24, lineHeight:1.8 }}>
-          <div style={{ color:T.purple, fontWeight:700, fontSize:"9px", letterSpacing:"2px", marginBottom:7 }}>HOW THE MODEL WORKS</div>
-          <div><span style={{ color:T.text }}>Skill:</span> each golfer's expected round is this week's field average minus his strokes gained per round (2026 PGA Tour SG:Total; LIV / DP World Tour players estimated). Golfers without stats play like an average tour pro and are marked *.</div>
-          <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Live scores:</span> holes already played count as played (ESPN leaderboard). Only the holes left are simulated, so a golfer 5 shots clear with 9 holes left is a big favorite.</div>
-          <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Cut:</span> top 65 and ties after 36 holes, simulated until ESPN shows the real cut. Top 5/10/20 count ties, the way Kalshi settles them. Tied leaders split the win like a playoff.</div>
-          <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Prices:</span> Kalshi's YES ask for each golfer (winner, top 5/10/20, make cut). Edge = model chance − price. Golfers Kalshi has already settled (missed cut, out of contention) are skipped.</div>
-        </div>
-        <div style={S.disclaimer}>Model inputs are public 2026 PGA Tour stats; ratings for some players are estimates. Not professional betting advice. Gamble responsibly.</div>
-      </div>
-    </div>
+      </details>
+      <div className="ss-foot">Model inputs are public 2026 PGA Tour stats; ratings for some players are estimates. Not professional betting advice. Gamble responsibly.</div>
+    </UI.Shell>
   );
 }
 
