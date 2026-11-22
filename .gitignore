@@ -2,3 +2,4 @@ node_modules/
 .wrangler/
 tools/paper-log.jsonl
 tools/paper-run.log
+tools/paper-run-*.log

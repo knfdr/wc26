@@ -1,0 +1,19 @@
+# Sharp Sim server-side runner (Worker + Durable Object). Deploy: cd runner && npx wrangler@3 deploy
+name = "wc26-runner"
+main = "index.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "RUNNER"
+class_name = "Runner"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Runner"]
+
+[observability]
+enabled = true
+
+# Secrets (wrangler secret put ...): RUNNER_TOKEN, KALSHI_API_KEY_ID, KALSHI_PRIVATE_KEY,
+# optional KALSHI_TRADING_ENABLED ("1" to allow live orders) and KALSHI_MAX_ORDER_DOLLARS.

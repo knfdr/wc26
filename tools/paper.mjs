@@ -82,7 +82,7 @@ function merged() {
     const sig = [out.home.score, out.away.score, out.period, out.clock, out.possession, out.down, out.yardsToGoal].join("|");
     const scoreSig = out.home.score + "-" + out.away.score;
     if (gs.sig !== sig) { gs.sig = sig; gs.midAtChange = gs.lastMid; }
-    if (gs.scoreSig && gs.scoreSig !== scoreSig) { gs.lastScoreChangeTs = now; say(`${g.shortName} score ${gs.scoreSig} -> ${scoreSig} (${out.feed})`); }
+    if (gs.scoreSig && gs.scoreSig !== scoreSig) { gs.lastScoreChangeTs = now; say(`${g.shortName} score ${gs.scoreSig} -> ${scoreSig} (${out.feed}${out.playWallclock ? `, feed lag ${((now - out.playWallclock) / 1000).toFixed(0)}s` : ""})`); }
     gs.scoreSig = scoreSig; gs.dataTs = ts;
     return out;
   });
@@ -109,6 +109,13 @@ function act(games) {
       st.realized -= fee;
       say(`BUY  ${a.count}x ${L} ${a.side.toUpperCase()} @ ${a.limit}c — ${a.reason} [${g.shortName} ${g.away.score}-${g.home.score} Q${g.period} ${g.clock}]`);
       log({ type: "buy", game: g.shortName, label: L, ...a, state: { s: `${g.away.score}-${g.home.score}`, q: g.period, clock: g.clock, feed: g.feed } });
+      if (a.diag) say(`     diag: prices moved ${a.diag.preMove}c before the feed showed the score, ${a.diag.sinceMove}c since; ${a.diag.sinceKey}s after the score; feed lag ${a.diag.feedLagSecs ?? "?"}s; anchor ${a.diag.anchorAgeSecs}s old; this rung was ${a.diag.rungMidAtAnchor ?? "?"}c at the anchor`);
+      for (const d of [30, 60]) setTimeout(() => {
+        const m2 = (st.markets[a.gameId] || []).find(m => m.ticker === a.ticker); if (!m2) return;
+        const q2 = CFB.sideQuotes(m2, a.side); const md = q2.bid != null && q2.ask != null ? (q2.bid + q2.ask) / 2 : null;
+        say(`     +${d}s ${L} ${a.side.toUpperCase()}: mid ${md ?? "?"}c (entry ask ${a.limit}c, model fair ${a.fair.toFixed(0)}c)`);
+        log({ type: "follow", ticker: a.ticker, after: d, mid: md, entry: a.limit, fair: a.fair });
+      }, d * 1000);
     } else {
       const p = st.positions[a.ticker]; if (!p) continue;
       const pnl = (a.limit - p.avgCost) * p.count / 100 - fee - p.fees;

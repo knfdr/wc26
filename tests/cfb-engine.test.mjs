@@ -149,13 +149,17 @@ test("decide: feed lead — a fresh score the market hasn't priced yet is tradab
   run("L1", {}, markets, t0);                         // first sight: anchor fitted at 14-10, home ball
   run("L1", {}, markets, t0 + 25000);
   // home scores a TD (21-10, away ball) per the core feed; Kalshi prices unchanged
-  const b = run("L1", { home: team("h", "TENN", "Tennessee", "Tennessee", 21), possession: "away", yardsToGoal: 75 }, markets, t0 + 26000);
+  const td = { home: team("h", "TENN", "Tennessee", "Tennessee", 21), possession: "away", yardsToGoal: 75 };
+  const b = run("L1", { ...td, playWallclock: t0 + 24000 }, markets, t0 + 26000);   // feed 2s behind the play
   assert.ok(b.length === 1 && /FEED LEAD/.test(b[0].reason) && b[0].side === "yes", JSON.stringify(b));
   // same, but the moneyline had already jumped before the feed showed the score: no lead entry
   run("L2", {}, markets, t0); run("L2", {}, markets, t0 + 25000);
   const moved = markets.map(m => m.kind === "win" ? { ...m, yesBid: m.side === "home" ? 74 : 24, yesAsk: m.side === "home" ? 76 : 26 } : m);
-  const b2 = run("L2", { home: team("h", "TENN", "Tennessee", "Tennessee", 21), possession: "away", yardsToGoal: 75 }, moved, t0 + 26000);
+  const b2 = run("L2", { ...td, playWallclock: t0 + 24000 }, moved, t0 + 26000);
   assert.equal(b2.filter(a => /FEED LEAD/.test(a.reason)).length, 0);
+  // a feed that showed the score 20s after the play: the market has had time to see it on TV
+  run("L4", {}, markets, t0); run("L4", {}, markets, t0 + 25000);
+  assert.equal(run("L4", { ...td, playWallclock: t0 + 6000 }, markets, t0 + 26000).filter(a => /FEED LEAD/.test(a.reason)).length, 0);
   // lead-only mode (default): no entry without a fresh score
   run("L3", {}, markets, t0); assert.equal(run("L3", {}, markets, t0 + 25000).length, 0);
 });

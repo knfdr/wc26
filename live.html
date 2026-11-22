@@ -231,6 +231,15 @@ function App() {
 
   // ESPN core API: /status + /situation every pass for games we care about, the play only when lastPlay changes.
   const CORE = "https://sports.core.api.espn.com/v2/sports/football/leagues/college-football/events/";
+  // ESPN core sometimes answers without CORS headers; after a failed direct fetch, go through our proxy for a minute.
+  let coreProxyUntil = 0;
+  async function coreJSON(url) {
+    const rel = url.replace(/^https?:\/\/sports\.core\.api\.espn\.com\/v2\/sports\/football\/leagues\/college-football\//, "").replace(/\?.*$/, "");
+    const viaProxy = () => getJSON("/api/espn-core/" + rel + "?_=" + Date.now());
+    if (Date.now() < coreProxyUntil) return viaProxy();
+    try { return await getJSON(url); }
+    catch (e) { coreProxyUntil = Date.now() + 60000; return viaProxy(); }
+  }
   async function refreshCore(pass) {
     const st = S.current, en = R.current.enabled || {};
     const live = (st.espnGames || []).filter(g => g.state === "in" || (g.state === "pre" && new Date(g.date) - Date.now() < 900e3));
@@ -239,11 +248,11 @@ function App() {
     await Promise.all(list.map(async g => {
       const base = CORE + g.id + "/competitions/" + g.id + "/";
       try {
-        const [status, situation] = await Promise.all([getJSON(base + "status?_=" + Date.now()), getJSON(base + "situation?_=" + Date.now())]);
+        const [status, situation] = await Promise.all([coreJSON(base + "status?_=" + Date.now()), coreJSON(base + "situation?_=" + Date.now())]);
         const prev = st.core[g.id] || {};
         let play = prev.play, playRef = prev.playRef;
         const ref = situation && situation.lastPlay && situation.lastPlay.$ref;
-        if (ref && ref !== playRef) { try { play = await getJSON(ref.replace(/^http:/, "https:")); playRef = ref; } catch (e) {} }
+        if (ref && ref !== playRef) { try { play = await coreJSON(ref.replace(/^http:/, "https:")); playRef = ref; } catch (e) {} }
         st.core[g.id] = { status, situation, play, playRef, fetchedTs: Date.now() };
       } catch (e) {}
     }));
@@ -777,6 +786,8 @@ function App() {
 
         {showCfg && <ConfigPanel cfg={cfg} setCfg={setCfg} mode={mode} onResetPaper={resetPaper} server={server} />}
 
+        <ServerRunner cfg={cfg} enabled={enabled} />
+
         {/* Stats */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 10, marginBottom: 14 }}>
           <Stat label="Session P&L" value={fmtSigned$(realized + unreal)} color={realized + unreal >= 0 ? T.green : T.red} sub={`realized ${fmtSigned$(realized)} · open ${fmtSigned$(unreal)}`} />
@@ -997,6 +1008,76 @@ const CFG_FIELDS = [
     ["holdToSettleAt", "Hold to settlement above (¢)"], ["exitSlippage", "Cash-out limit below bid (¢)"],
   ]],
 ];
+
+
+// ── Server-side runner (Cloudflare Durable Object) ───────────────────────────
+// Runs the same engine on Cloudflare, so trading doesn't depend on this tab staying open.
+function ServerRunner({ cfg, enabled }) {
+  const [st, setSt] = useState(null), [err, setErr] = useState(""), [open, setOpen] = useState(() => load("sharp_runner_open", true)), [busy, setBusy] = useState(false);
+  const refresh = useCallback(() => getJSON("/api/runner/status").then(d => { setSt(d); setErr(""); }).catch(e => setErr(e.message)), []);
+  useEffect(() => { refresh(); const id = setInterval(refresh, 4000); return () => clearInterval(id); }, [refresh]);
+  useEffect(() => save("sharp_runner_open", open), [open]);
+  const enabledMap = () => { const ids = Object.keys(enabled).filter(k => enabled[k]); return ids.length ? Object.fromEntries(ids.map(k => [k, true])) : { all: true }; };
+  async function call(path, body) {
+    setBusy(true);
+    try { await sendJSON("POST", "/api/runner/" + path, body || {}); setErr(""); refresh(); }
+    catch (e) { setErr(e.message); alert("Server runner: " + e.message); }
+    finally { setBusy(false); }
+  }
+  function startLive() {
+    if (!st || !st.credentials) return alert("The runner doesn't have Kalshi credentials yet (KALSHI_PRIVATE_KEY on the wc26-runner Worker).");
+    if (!st.tradingEnabled) return alert("KALSHI_TRADING_ENABLED is not 1 on the wc26-runner Worker, so orders would be rejected.");
+    const typed = prompt("SERVER LIVE MODE places real orders on Kalshi from Cloudflare, even with this tab closed.\n\nMax per entry: $" + Math.min(cfg.maxStake, 25) + " · max open: $" + cfg.maxTotalExposure + " · stop for the night at -$" + cfg.maxDailyLoss + "\n\nType LIVE to start.");
+    if (typed === "LIVE") call("start", { mode: "live", confirm: "LIVE", cfg, enabled: enabledMap() });
+  }
+  const ago = (ts) => ts ? Math.max(0, Math.round((Date.now() - ts) / 1000)) + "s ago" : "never";
+  const stale = st && st.running && st.lastTick && Date.now() - st.lastTick > 90000;
+  const pnl = st ? (st.realized || 0) + (st.open || 0) : 0;
+  const color = st && st.running ? (st.mode === "live" ? T.red : T.green) : T.muted;
+  return (
+    <div style={{ background: T.navy2, border: "1px solid " + (st && st.running ? color : T.border), borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: T.text, cursor: "pointer" }} onClick={() => setOpen(o => !o)}>{open ? "▾" : "▸"} SERVER RUNNER</span>
+        <span style={{ fontSize: 9, color: T.muted }}>runs on Cloudflare · no tab needed</span>
+        {err && <span style={{ fontSize: 9, color: T.red }}>{err}</span>}
+        {st && <span style={{ fontSize: 9, color, fontWeight: 700 }}>
+          {st.running ? "● " + st.mode.toUpperCase() + (st.killed ? " · KILLING" : "") + " · tick " + ago(st.lastTick) + " (" + st.tickMs + "ms) · " + st.games + " live" : "○ stopped"}{stale ? " · ⚠ no tick for 90s" : ""}</span>}
+        {st && <span style={{ fontSize: 9, color: pnl >= 0 ? T.green : T.red }}>{st.mode} P&L {fmtSigned$(pnl)} · {st.record.n} trades ({st.record.wins}W)</span>}
+        <div style={{ flex: 1 }} />
+        {st && !st.running && <button disabled={busy} onClick={() => call("start", { mode: "paper", cfg, enabled: enabledMap() })} style={{ ...btnBase, color: T.green, borderColor: T.green }}>▶ SERVER PAPER</button>}
+        {st && !st.running && <button disabled={busy} onClick={startLive} style={{ ...btnBase, color: T.red, borderColor: T.red }}>▶ SERVER LIVE $</button>}
+        {st && st.running && <button disabled={busy} onClick={() => call("config", { cfg, enabled: enabledMap() })} style={{ ...btnBase, color: T.muted }}>⇪ SEND RULES</button>}
+        {st && st.running && <button disabled={busy} onClick={() => call("stop")} style={{ ...btnBase, color: T.gold, borderColor: T.gold }}>■ STOP</button>}
+        {st && <button disabled={busy} onClick={() => { if (confirm("Cash out every server-runner position and stop?")) call("kill"); }} style={{ ...btnBase, color: T.red, borderColor: T.red }}>✕ KILL</button>}
+      </div>
+      {open && st && (
+        <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 9, color: T.muted, marginBottom: 4 }}>POSITIONS ({st.positions.length})</div>
+            {st.positions.length === 0 && <div style={{ fontSize: 9, color: T.dim }}>none</div>}
+            {st.positions.map(p => (
+              <div key={p.ticker} style={{ fontSize: 9, color: T.text, display: "flex", gap: 6 }}>
+                <span style={{ flex: 1 }}>{p.label} {p.side.toUpperCase()}{p.lead ? " ⚡" : ""}{p.unmanaged ? " (yours)" : ""}</span>
+                <span>{p.count}× {p.avgCost}¢ → {p.bid == null ? "—" : p.bid}¢</span>
+                <span style={{ color: p.bid != null && p.bid >= p.avgCost ? T.green : T.red }}>{p.bid != null ? fmtSigned$((p.bid - p.avgCost) * p.count / 100) : ""}</span>
+              </div>))}
+            <div style={{ fontSize: 9, color: T.muted, margin: "8px 0 4px" }}>RECENT TRADES</div>
+            {st.trades.slice(0, 8).map((t, i) => (
+              <div key={i} style={{ fontSize: 9, color: T.text, display: "flex", gap: 6 }}>
+                <span style={{ flex: 1 }}>{new Date(t.ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} {t.label}{t.lead ? " ⚡" : ""}</span>
+                <span>{t.entry}→{t.exit}¢</span><span style={{ color: t.pnl >= 0 ? T.green : T.red }}>{fmtSigned$(t.pnl)}</span>
+              </div>))}
+          </div>
+          <div style={{ maxHeight: 180, overflowY: "auto" }}>
+            <div style={{ fontSize: 9, color: T.muted, marginBottom: 4 }}>SERVER LOG</div>
+            {(st.log || []).slice(0, 40).map((l, i) => (
+              <div key={i} style={{ fontSize: 9, color: l.kind === "error" || l.kind === "loss" ? T.red : l.kind === "win" ? T.green : T.muted }}>
+                {new Date(l.ts).toLocaleTimeString()} {l.msg}</div>))}
+          </div>
+        </div>)}
+    </div>
+  );
+}
 
 function ConfigPanel({ cfg, setCfg, mode, onResetPaper, server }) {
   const set = (k, v) => setCfg(c => ({ ...c, [k]: v }));

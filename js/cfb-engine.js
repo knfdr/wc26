@@ -199,6 +199,7 @@ function applyEspnCore(g, c) {
     } else out.downDistanceText = null;
   }
   if (pl && pl.text) out.lastPlay = pl.text;
+  if (pl && pl.wallclock) { const w = Date.parse(pl.wallclock); if (isFinite(w)) out.playWallclock = w; }   // real-world time of the play
   return out;
 }
 
@@ -694,7 +695,9 @@ const DEFAULT_CONFIG = {
   anchorHoldSecs: 20,      // after a score/possession change, price the new state with the pre-change calibration this long
   leadEntries: true,       // allow entries in that window when the market hasn't moved yet (paper-test first)
   leadEntryEdge: 6,
-  leadEntryWindowSecs: 10, // lead entries only this soon after the score (the market usually reprices in 10-30s)        // edge needed for a feed-lead entry (¢, after fee)
+  leadEntryWindowSecs: 10,
+  leadMaxFeedLagSecs: 12,  // ...and only if our feed showed the score within this long of the play's real-world time
+  leadRequireWallclock: true, // lead entries only this soon after the score (the market usually reprices in 10-30s)        // edge needed for a feed-lead entry (¢, after fee)
   leadTargetFrac: 0.8,     // feed-lead take-profit = this share of the entry edge...
   leadMinTarget: 4,        // ...but at least this many ¢
   leadMaxHoldSecs: 180,    // the catch-up is over by then: flatten a lead trade unless it's down more than leadMaxGiveBack
@@ -775,16 +778,26 @@ function decide(input) {
     const maxMove = (a, b) => { let m = 0; if (!a || !b) return 99; for (const k in a) if (b[k] != null) m = Math.max(m, Math.abs(a[k] - b[k])); return m; };
     let hist = _midHist.get(g.id); if (!hist) { hist = []; _midHist.set(g.id, hist); }
     if (!hist.length || now - hist[hist.length - 1].ts >= 1000) hist.push({ ts: now, mids });
-    while (hist.length > 1 && now - hist[1].ts > cfg.anchorQuietSecs * 1000) hist.shift();
-    const quiet = hist.length > 0 && now - hist[0].ts >= cfg.anchorQuietSecs * 1000 * 0.75 && maxMove(hist[0].mids, mids) < cfg.leadMaxPreMove;
+    while (hist.length > 1 && now - hist[1].ts > 90000) hist.shift();
+    const snapAt = (ts) => { let best = null; for (const h of hist) { if (h.ts <= ts) best = h; else break; } return best; };
+    const qs = snapAt(now - cfg.anchorQuietSecs * 1000);
+    const quiet = !!qs && maxMove(qs.mids, mids) < cfg.leadMaxPreMove;
     const keySig = [g.home.score, g.away.score, g.possession, g.period > 4 ? "ot" : ""].join("|");
     let ks = _keyState.get(g.id);
-    if (!ks || ks.sig !== keySig) { ks = { sig: keySig, ts: ks ? now : 0, midsAtChange: mids }; _keyState.set(g.id, ks); }
+    if (!ks || ks.sig !== keySig) {
+      // how late our feed is: seconds between the play's real-world time and when we first saw the new score
+      const lag = g.playWallclock ? (now - g.playWallclock) / 1000 : null;
+      const before = g.playWallclock ? snapAt(g.playWallclock - 3000) : null;   // prices just before the play happened
+      ks = { sig: keySig, ts: ks ? now : 0, midsAtChange: mids, lag, preMids: before && before.mids };
+      _keyState.set(g.id, ks);
+    }
     const sinceKey = (now - ks.ts) / 1000;
     const anchor = _anchors.get(g.id);
     // Hold only if the market hadn't already moved before our feed showed the change (else the old calibration would
     // count the score twice), and only until the market reacts.
-    const preMoveOk = anchor && maxMove(anchor.mids, ks.midsAtChange) < cfg.leadMaxPreMove;
+    const preMoveOk = anchor && maxMove(anchor.mids, ks.midsAtChange) < cfg.leadMaxPreMove
+                   && (!ks.preMids || maxMove(ks.preMids, ks.midsAtChange) < cfg.leadMaxPreMove);
+    const feedTimely = ks.lag == null ? !cfg.leadRequireWallclock : ks.lag <= cfg.leadMaxFeedLagSecs;
     const reacted = maxMove(ks.midsAtChange, mids) >= 2 * cfg.leadMaxPreMove;
     const holding = cfg.anchorHoldSecs > 0 && g.state === "in" && anchor && anchor.keySig !== keySig && sinceKey < cfg.anchorHoldSecs && preMoveOk && !reacted;
     const live = liveDistribution(g, G.pre, markets, holding ? { ...cfg, hold: anchor } : cfg);
@@ -793,7 +806,7 @@ function decide(input) {
     const scoreMoved = anchor && anchor.keySig.split("|").slice(0, 2).join("|") !== keySig.split("|").slice(0, 2).join("|");
     // quotes must be fresh: after a stall (a frozen background tab), old quotes next to a new score look like huge fake edges
     const marketFresh = !G.marketTs || (now - G.marketTs) / 1000 <= cfg.maxMarketAgeSecs;
-    const leadOk = holding && scoreMoved && sinceKey <= cfg.leadEntryWindowSecs && cfg.leadEntries && feedFast(g) && !g.reviewPending && marketFresh;
+    const leadOk = holding && scoreMoved && feedTimely && sinceKey <= cfg.leadEntryWindowSecs && cfg.leadEntries && feedFast(g) && !g.reviewPending && marketFresh;
     // a key change we can't trade on: block entries until the hold window passes (data / market catching up)
     const catchingUp = anchor && anchor.keySig !== keySig && sinceKey < cfg.anchorHoldSecs && !leadOk;
     const proj = live.dist; proj.cal = live.cal; proj.eff = live.eff; proj.target = live.target; proj.held = holding;
@@ -895,6 +908,8 @@ function decide(input) {
       ev.note = `candidate ${best.edge.toFixed(1)}¢`;
       cands.push({ type: "buy", ticker: mk.ticker, side: best.side, count, limit: best.q.ask, kind: mk.kind,
                    reason: `${leadOk ? "FEED LEAD " : ""}edge ${best.edge.toFixed(1)}¢ (fair ${best.fairSide.toFixed(0)}¢ vs ask ${best.q.ask}¢)`, lead: leadOk,
+                   diag: leadOk ? { preMove: +maxMove(anchor.mids, ks.midsAtChange).toFixed(1), sinceMove: +maxMove(ks.midsAtChange, mids).toFixed(1),
+                                    sinceKey: +sinceKey.toFixed(1), feedLagSecs: ks.lag != null ? +ks.lag.toFixed(1) : null, anchorAgeSecs: Math.round((now - anchor.ts) / 1000), rungMidAtAnchor: anchor.mids[mk.ticker] } : undefined,
                    gameId: g.id, fair: best.fairSide, edge: best.edge, cost: count * c,
                    takeProfitPrice: Math.min(99, best.q.ask + (leadOk ? Math.max(cfg.leadMinTarget, Math.round(best.edge * cfg.leadTargetFrac)) : cfg.takeProfit)) });
     }
