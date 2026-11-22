@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MLB Sim · Sharp Sim</title>
+<title>Sharp Sim — MLB</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
@@ -161,66 +161,50 @@
 })(typeof window !== "undefined" ? window : globalThis);
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/sharp.css">
+<meta name="theme-color" content="#0b0d10">
+<script src="js/ui.js"></script>
 <style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html,body,#root{min-height:100vh;background:#070b14}
-body{font-family:'IBM Plex Mono','Courier New',monospace;zoom:1.2}
-::-webkit-scrollbar{width:6px;height:6px}
-::-webkit-scrollbar-track{background:#0c1526}
-::-webkit-scrollbar-thumb{background:#1a2a3e;border-radius:3px}
+/* MLB page: parlay legs, model-number rows, score list */
+.kv { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.kv:first-child { border-top: 0; padding-top: 2px; }
+.kv .k { color: var(--text-2); min-width: 0; }
+.kv .v { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.score-row { display: grid; grid-template-columns: 56px 1fr 48px; gap: 10px; align-items: center; padding: 5px 0; font-size: 14px; font-variant-numeric: tabular-nums; }
+.score-row .bar { height: 6px; border-radius: 999px; background: var(--track); overflow: hidden; }
+.score-row .bar > i { display: block; height: 100%; border-radius: 999px; background: var(--series-a); }
+.parlay { margin-top: var(--gap); }
+.parlay-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; }
+.parlay-p { margin-left: auto; text-align: right; }
+.parlay-p .v { font-size: 24px; font-weight: 700; letter-spacing: -0.4px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.leg { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; padding: 10px 12px; border-radius: var(--r); background: var(--surface-2); }
+.leg + .leg { margin-top: 6px; }
+.leg-title { font-size: 14px; font-weight: 600; min-width: 0; }
+.leg-meta { font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 2px; }
+.leg-p { text-align: right; font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.leg-p .s { display: block; font-size: 12px; font-weight: 400; color: var(--muted); }
+.leg .cvp { grid-column: 1 / -1; min-width: 0; margin-top: 4px; }
+.parlay-foot { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+.parlay-foot .l { font-size: 12px; color: var(--muted); }
+.parlay-foot .v { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.empty { text-align: center; padding: 28px var(--pad); }
+.empty .ico { font-size: 30px; line-height: 1; margin-bottom: 10px; }
+.empty .t { font-size: 17px; font-weight: 650; letter-spacing: -0.2px; }
+.empty .d { font-size: 14px; color: var(--text-2); margin: 6px auto 0; max-width: 46ch; line-height: 1.5; }
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback, useRef } = React;
+const UI = window.SharpUI;
 
-// ════════════════════════════════════════════════════════════════════════════════
-// THEME (identical to WC26 design system)
-// ════════════════════════════════════════════════════════════════════════════════
+// Colors come from css/sharp.css tokens so both themes follow
 const T = {
-  bg:"#070b14", navy:"#0c1526", card:"#101d30", border:"#1a2a3e",
-  gold:"#e8c547", blue:"#3b82f6", muted:"#4b6280", text:"#dde5f0",
-  green:"#22c55e", red:"#ef4444", yellow:"#fbbf24", purple:"#a78bfa",
-};
-const S = {
-  wrap:{ background:T.bg, minHeight:"100vh", fontFamily:"'IBM Plex Mono','Courier New',monospace", color:T.text, paddingBottom:48 },
-  tabBar:{ background:T.navy, borderBottom:"1px solid "+T.border, padding:"0 12px", overflowX:"auto", display:"flex", gap:2, flexWrap:"nowrap" },
-  tab:(a)=>({ padding:"11px 13px", fontSize:"10px", letterSpacing:"0.8px", cursor:"pointer", whiteSpace:"nowrap",
-    color:a?T.gold:T.muted, background:"none", border:"none",
-    borderBottom:a?"2px solid "+T.gold:"2px solid transparent",
-    fontFamily:"'IBM Plex Mono','Courier New',monospace", transition:"color 0.15s" }),
-  header:{ background:"linear-gradient(160deg,"+T.navy+" 0%,#0a1520 100%)", padding:"22px 20px 16px", textAlign:"center", position:"relative", overflow:"hidden" },
-  glow:{ position:"absolute", top:0, left:0, right:0, bottom:0, background:"radial-gradient(ellipse at 50% 0%,rgba(34,197,94,0.06) 0%,transparent 65%)", pointerEvents:"none" },
-  badge:(c)=>({ display:"inline-block", background:(c||T.green)+"1a", border:"1px solid "+(c||T.green)+"33", color:c||T.green, fontSize:"9px", letterSpacing:"2.5px", padding:"2px 10px", borderRadius:2, marginBottom:9 }),
-  title:{ fontSize:"clamp(15px,3.2vw,24px)", fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center", gap:9, flexWrap:"wrap", marginBottom:5 },
-  vs:{ color:T.muted, fontSize:12, fontWeight:400 },
-  meta:{ fontSize:10, color:T.muted, letterSpacing:"0.4px", marginTop:3 },
-  modelTag:(c)=>({ display:"inline-block", background:(c||T.purple)+"1a", border:"1px solid "+(c||T.purple)+"33", color:c||T.purple, fontSize:"8px", letterSpacing:"2px", padding:"2px 8px", borderRadius:2, marginTop:6 }),
-  body:{ maxWidth:920, margin:"0 auto", padding:"0 14px" },
-  sec:{ marginTop:20 },
-  secLabel:{ fontSize:"9px", letterSpacing:"3px", color:T.muted, textTransform:"uppercase", marginBottom:9, paddingBottom:5, borderBottom:"1px solid "+T.border },
-  g2:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:9 },
-  g3:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:9 },
-  g4:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:9 },
-  card:{ background:T.card, border:"1px solid "+T.border, borderRadius:6, padding:13 },
-  sL:{ fontSize:"9px", color:T.muted, letterSpacing:"2px", textTransform:"uppercase", marginBottom:3 },
-  sV:{ fontSize:22, fontWeight:700, lineHeight:1.1 },
-  sSub:{ fontSize:10, color:T.muted, marginTop:3 },
-  btn:(d,c)=>({ display:"block", width:"100%", padding:12, marginTop:16,
-    background:d?"#1a2a3e":"linear-gradient(135deg,"+(c||T.green)+","+(c?c+"aa":"#16a34a")+")",
-    color:d?T.muted:"#070b14", border:"none", borderRadius:6,
-    fontSize:10, fontWeight:700, letterSpacing:"2px", textTransform:"uppercase",
-    cursor:d?"default":"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }),
-  barWrap:{ display:"flex", height:24, borderRadius:4, overflow:"hidden", gap:2, marginTop:9 },
-  betRow:{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"5px 0", borderBottom:"1px solid "+T.border, fontSize:11, gap:8 },
-  pill:(c)=>({ background:c+"1e", border:"1px solid "+c+"44", color:c, padding:"2px 7px", borderRadius:3, fontSize:"8px", fontWeight:700, letterSpacing:"1px", whiteSpace:"nowrap" }),
-  table:{ width:"100%", borderCollapse:"collapse", fontSize:11 },
-  th:{ background:T.navy, padding:"6px 9px", textAlign:"left", color:T.muted, fontSize:"8px", letterSpacing:"1.5px", textTransform:"uppercase", borderBottom:"1px solid "+T.border },
-  td:{ padding:"6px 9px", borderBottom:"1px solid "+T.border },
-  disclaimer:{ background:"#080500", border:"1px solid "+T.gold+"22", borderRadius:6, padding:"9px 13px", fontSize:"9px", color:"#6b5820", marginTop:18, lineHeight:1.8 },
-  input:{ background:T.navy, border:"1px solid "+T.border, borderRadius:4, padding:"10px 12px", color:T.text, fontSize:11, fontFamily:"'IBM Plex Mono','Courier New',monospace", width:"100%", outline:"none" },
+  bg:"var(--bg)", card:"var(--surface)", border:"var(--line)", text:"var(--text)", muted:"var(--muted)",
+  green:"var(--pos)", red:"var(--neg)", away:"var(--series-b)", home:"var(--series-a)",
 };
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -655,75 +639,101 @@ function gamePicks(game, agg, kx, settings) {
 const gradeSortGet = (r, k) => k === "grade" ? -r.g.rank : k === "game" ? r.matchup : r[k];
 const betPick = (r) => ({ ticker: r.ticker, side: r.side, price: r.price, chance: r.chance, label: r.label, sub: r.matchup + " · " + r.sub, sport: "mlb", grade: r.g });
 
-function KalshiNote({ kx, ev, hasAgg, color }) {
-  let msg = null;
-  if (!kx || kx.status === "loading") msg = "Loading Kalshi prices…";
-  else if (kx.status === "down") msg = "Kalshi prices couldn't be loaded" + (kx.error ? " (" + kx.error + ")" : "") + ". Model chances are shown without grades. Try ↻ Refresh.";
-  else if (!ev) msg = "No Kalshi markets open for this game.";
-  else if (!hasAgg) msg = "Running the simulation…";
-  if (!msg) return null;
-  return <div style={{ ...S.card, fontSize:10, color:color || T.muted, lineHeight:1.6 }}>{msg}</div>;
+const startTime = (g) => new Date(g.commenceTime).toLocaleString([], { weekday:"short", hour:"numeric", minute:"2-digit" });
+const abbrOf = (team) => (TEAM_PARAMS[team] && TEAM_PARAMS[team].abbr) || String(team || "").split(" ").pop();
+const pctTxt = (p, d) => (p * 100).toFixed(d == null ? 0 : d) + "%";
+// MLB is off from early November until spring training; Opening Day is late March
+const offSeason = () => { const m = new Date().getMonth(); return m >= 10 || m <= 1; };
+
+function Empty({ ico, title, children }) {
+  return (
+    <div className="card empty">
+      {ico && <div className="ico" aria-hidden="true">{ico}</div>}
+      <div className="t">{title}</div>
+      {children && <div className="d">{children}</div>}
+    </div>
+  );
+}
+// Friendly empty state for a day without games
+function NoGames() {
+  return offSeason()
+    ? <Empty ico="⚾" title="It's the MLB off-season">No games until spring. Picks come back with the regular season in late March, simulated and graded against Kalshi's prices every game day.</Empty>
+    : <Empty ico="⚾" title="No MLB games today">Picks show up here on game days, simulated and graded against Kalshi's prices. Check back tomorrow.</Empty>;
 }
 
-// Sortable table of graded Kalshi bets (one game, or the whole slate when showGame)
-function PicksTable({ rows, showGame }) {
-  const [sort, setSort] = useState({ k:"edge", dir:-1 });
-  const sorted = sortRows(rows, sort, gradeSortGet);
-  const td = { ...S.td, fontSize:11, verticalAlign:"middle" };
+function KalshiNote({ kx, ev, hasAgg }) {
+  if (!kx || kx.status === "loading") return <UI.Status>Loading Kalshi prices…</UI.Status>;
+  if (kx.status === "down") return <div className="note warn">Kalshi prices couldn't be loaded{kx.error ? " (" + kx.error + ")" : ""}. Model chances are shown without grades. Try Refresh.</div>;
+  if (!ev) return <div className="note">Kalshi has no markets open for this game yet.</div>;
+  if (!hasAgg) return <UI.Status>Running the simulation…</UI.Status>;
+  return null;
+}
+
+// One graded Kalshi bet as a compact row (title, chance bar vs price, bet button)
+function BetRow({ r, showGame }) {
+  return <UI.PickRow g={r.g} title={r.label} badge={r.g.rank <= 2}
+    meta={showGame ? r.matchup + " · " + startTime(r.game) : r.kindLabel + (r.stake ? " · suggested " + SB.money(r.stake) : "")}
+    note={r.wide ? "wide quote, price may not be real" : null} dim={r.wide}
+    pick={r.g.edge > 0 ? betPick(r) : null} />;
+}
+function BetCard({ r, top }) {
+  return <UI.PickCard g={r.g} top={top} title={r.label} meaning={r.kindLabel + (r.g.longShot ? " · long shot" : "") + (r.wide ? " · wide quote" : "")}
+    when={startTime(r.game)} meta={r.game.awayTeam + " @ " + r.game.homeTeam} pick={betPick(r)} />;
+}
+
+// Win chances as one split bar: away on the left, home on the right
+function WinSplit({ game, agg }) {
+  const a = agg.aWins / agg.n * 100, hm = agg.hWins / agg.n * 100, t = Math.max(0, 100 - a - hm);
+  const aw = abbrOf(game.awayTeam), hw = abbrOf(game.homeTeam);
   return (
-    <div style={{ ...S.card, padding:0, overflowX:"auto" }}>
-      <table style={{ ...S.table, minWidth:showGame ? 640 : 560 }}>
-        <thead><tr>
-          <SortTh k="grade" sort={sort} setSort={setSort}>Grade</SortTh>
-          {showGame && <SortTh k="game" sort={sort} setSort={setSort}>Game</SortTh>}
-          <SortTh sort={sort} setSort={setSort}>Bet</SortTh>
-          <SortTh k="chance" sort={sort} setSort={setSort}>Chance to cash</SortTh>
-          <SortTh k="price" sort={sort} setSort={setSort}>Price</SortTh>
-          <SortTh k="edge" sort={sort} setSort={setSort}>Edge</SortTh>
-          <SortTh k="stake" sort={sort} setSort={setSort}>Suggested</SortTh>
-          <SortTh sort={sort} setSort={setSort}></SortTh>
-        </tr></thead>
-        <tbody>
-          {sorted.map(r => (
-            <tr key={r.ticker + r.side}>
-              <td style={td}><GradeBadge g={r.g} small/></td>
-              {showGame && <td style={{ ...td, color:T.muted, fontSize:10, whiteSpace:"nowrap" }}>{r.matchup}</td>}
-              <td style={td}>
-                <div style={{ fontWeight:700 }}>{r.label}</div>
-                <div style={{ fontSize:9, color:T.muted }}>{r.kindLabel}{r.wide ? " · wide bid/ask, price may not be real" : ""}</div>
-              </td>
-              <td style={{ ...td, color:r.g.color, fontWeight:700, whiteSpace:"nowrap" }}>model: {r.chance.toFixed(0)}%</td>
-              <td style={{ ...td, whiteSpace:"nowrap" }}>{r.price}¢</td>
-              <td style={{ ...td, color:r.edge >= 0 ? T.green : T.red, whiteSpace:"nowrap" }}>{(r.edge >= 0 ? "+" : "") + r.edge.toFixed(1)}¢</td>
-              <td style={{ ...td, whiteSpace:"nowrap" }}>{r.stake ? SB.money(r.stake) : "—"}</td>
-              <td style={{ ...td, textAlign:"right" }}>{r.g.edge > 0 && <BetButton pick={betPick(r)} compact/>}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div>
+      <div className="row" style={{ justifyContent:"space-between", marginBottom:6 }}>
+        <div><div className="num" style={{ fontSize:22, fontWeight:700 }}>{a.toFixed(0)}%</div><div className="tiny muted">{aw} win</div></div>
+        <div style={{ textAlign:"right" }}><div className="num" style={{ fontSize:22, fontWeight:700 }}>{hm.toFixed(0)}%</div><div className="tiny muted">{hw} win</div></div>
+      </div>
+      <div role="img" aria-label={`${aw} ${a.toFixed(0)}%, ${hw} ${hm.toFixed(0)}%`} style={{ display:"flex", gap:2, height:10 }}>
+        <div style={{ width:a + "%", background:T.away, borderRadius:"999px 0 0 999px" }} />
+        {t > 0.4 && <div style={{ width:t + "%", background:"var(--faint)" }} title={`Still tied after 12 innings ${t.toFixed(1)}%`} />}
+        <div style={{ width:hm + "%", background:T.home, borderRadius:"0 999px 999px 0" }} />
+      </div>
     </div>
   );
 }
 
-// Model chances for bets Kalshi doesn't list (or when its prices are missing). No grade without a price.
-function ModelOnlyRow({ market, pct }) {
+// How the simulated games end: total runs, or the final run margin
+function OutcomeChart({ game, agg }) {
+  const [mode, setMode] = useState("total");
+  if (!agg.totalDist || !agg.marginDist) return null;
+  const aw = abbrOf(game.awayTeam), hw = abbrOf(game.homeTeam);
+  let bars, labelOf, blurb, legend = null;
+  if (mode === "total") {
+    let hi = agg.totalDist.length - 1; while (hi > 8 && agg.totalDist[hi] < 0.003) hi--;
+    bars = agg.totalDist.slice(0, hi + 1).map((p, k) => ({ v:p * 100, color:T.home, k, tip:`${k} run${k === 1 ? "" : "s"}: ${(p * 100).toFixed(1)}%` }));
+    labelOf = (i, b) => b.k % 2 === 0 ? b.k : null;
+    blurb = `Total runs across every simulated game. Average ${agg.avgTotal}.`;
+  } else {
+    const off = agg.marginOffset, M = 10;
+    bars = [];
+    for (let m = -M; m <= M; m++) {
+      const p = agg.marginDist[m + off] || 0;
+      if (m === 0 && p < 0.001) continue;
+      const one = Math.abs(m) === 1;
+      bars.push({ v:p * 100, m, strong:one, dim:!one && m !== 0, color:m > 0 ? T.home : m < 0 ? T.away : "var(--faint)",
+        tip:m === 0 ? `Tied after extras: ${(p * 100).toFixed(1)}%` : `${m > 0 ? hw : aw} by ${Math.abs(m)}: ${(p * 100).toFixed(1)}%` });
+    }
+    labelOf = (i, b) => [1, 3, 5, 10].includes(Math.abs(b.m)) ? Math.abs(b.m) : null;
+    blurb = "Final margin across every simulated game. The bright bars are one-run games: the 1.5-run line is won or lost there.";
+    legend = <div className="legend"><span><i style={{ background:T.away }} />{aw} wins by</span><span><i style={{ background:T.home }} />{hw} wins by</span></div>;
+  }
   return (
-    <div style={S.betRow}>
-      <span style={{ color:T.muted, fontSize:10 }}>{market}</span>
-      <span style={{ fontSize:11 }}>model: <b>{pct}%</b> chance</span>
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════════════
-// UI COMPONENTS
-// ════════════════════════════════════════════════════════════════════════════════
-function StatCard({ label, value, sub, color }) {
-  return (
-    <div style={S.card}>
-      <div style={S.sL}>{label}</div>
-      <div style={{ ...S.sV, color:color||T.text }}>{value}</div>
-      {sub && <div style={S.sSub}>{sub}</div>}
+    <div className="card" style={{ marginBottom:12 }}>
+      <div className="row" style={{ marginBottom:4, flexWrap:"wrap" }}>
+        <div style={{ fontWeight:650, flex:1 }}>How the game ends</div>
+        <UI.Seg options={[["total", "Total runs"], ["margin", "Run margin"]]} value={mode} onChange={setMode} />
+      </div>
+      <div className="small text-2" style={{ marginBottom:10 }}>{blurb}</div>
+      <UI.BarChart bars={bars} height={140} yFmt={v => v + "%"} ariaLabel={mode === "total" ? "Total runs distribution" : "Run margin distribution"} labelOf={labelOf} />
+      {legend}
     </div>
   );
 }
@@ -732,206 +742,154 @@ function StatCard({ label, value, sub, color }) {
 // GAME SIM VIEW
 // ════════════════════════════════════════════════════════════════════════════════
 function GameSimView({ game, agg, running, onRun, runCount, kx, settings }) {
+  const [sort, setSort] = useState({ k:"edge", dir:-1 });
   const commenceStr = game ? new Date(game.commenceTime).toLocaleString("en-US",{weekday:"short",month:"short",day:"numeric",hour:"numeric",minute:"2-digit",timeZoneName:"short"}) : "";
   const { ev, rows } = gamePicks(game, agg, kx, settings);
-  const best = rows.filter(r => r.g.key === "STRONG" || r.g.key === "GOOD").sort((a,b) => b.edge - a.edge);
+  const best = rows.filter(r => r.g.key === "STRONG" || r.g.key === "GOOD").sort((a,b) => a.g.rank - b.g.rank || b.edge - a.edge);
+  const sorted = sortRows(rows, sort, gradeSortGet);
+  const aw = abbrOf(game.awayTeam), hw = abbrOf(game.homeTeam);
+  const kxHome = rows.find(r => r.kind === "win" && r.side === "yes" && r.label === game.homeShort + " to win");
 
   return (
     <div>
-      <div style={S.header}>
-        <div style={S.glow}/>
-        <div style={S.badge(T.green)}>⚾ MLB · MARKOV CHAIN SIM</div>
-        <div style={S.title}>
-          <span>{game ? game.awayTeam : "—"}</span>
-          <span style={S.vs}>@</span>
-          <span>{game ? game.homeTeam : "—"}</span>
+      <div className="card" style={{ marginBottom:12 }}>
+        <div style={{ fontSize:19, fontWeight:700, letterSpacing:-0.3 }}>{game.awayTeam} <span className="muted" style={{ fontWeight:400 }}>@</span> {game.homeTeam}</div>
+        <div className="small muted" style={{ margin:"2px 0 14px" }}>{commenceStr}{game.state === "in" ? " · Live, " + game.statusText : ""}</div>
+        {agg ? <WinSplit game={game} agg={agg} /> : <div className="row small muted"><span className="spinner" />Simulating 100,000 games…</div>}
+        {kxHome && <div className="tiny muted" style={{ marginTop:6 }}>Kalshi charges {kxHome.price}¢ for {hw} to win</div>}
+        <div className="row" style={{ marginTop:12, flexWrap:"wrap" }}>
+          <button className="btn btn-sm" onClick={onRun} disabled={running}>{running ? "Simulating…" : "Re-run simulation"}</button>
+          {runCount > 0 && <span className="tiny muted">Run {runCount} · 100,000 games</span>}
         </div>
-        <div style={S.meta}>{commenceStr || "Select a game"}{game && game.state === "in" ? " · LIVE " + game.statusText : ""}</div>
-        <div style={S.modelTag(T.green)}>MARKOV CHAIN + FIP/xFIP + wRC+ + PARK FACTORS · 100,000 ITERATIONS</div>
       </div>
 
-      <div style={S.body}>
-        {game && <button style={S.btn(running, T.green)} onClick={onRun} disabled={running}>
-          {running ? "⟳ Running Markov Chain (100,000 iterations)..." : ("↻ Re-Run Simulation" + (runCount > 0 ? " (Run #"+runCount+")" : ""))}
-        </button>}
+      {agg && <div className="tiles" style={{ marginBottom:12 }}>
+        <UI.Tile label={aw + " runs"} value={agg.avgAway} sub="average per game" />
+        <UI.Tile label={hw + " runs"} value={agg.avgHome} sub="average per game" />
+        <UI.Tile label="Total runs" value={agg.avgTotal} sub={`over 8.5 in ${agg.over85Pct}%`} />
+        <UI.Tile label="Likeliest score" value={agg.mls} sub={`${aw}–${hw}, ${agg.mlsPct}% of games`} />
+      </div>}
 
-        {/* Best bets for this game */}
-        {best.length > 0 && (
-          <div style={S.sec}>
-            <div style={S.secLabel}>Best bets this game</div>
-            {best.slice(0, 3).map(r => (
-              <div key={r.ticker + r.side} style={{ ...S.card, borderLeft:"3px solid "+r.g.color, marginBottom:8, display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-                <div>
-                  <div style={{ marginBottom:4 }}><GradeBadge g={r.g}/></div>
-                  <div style={{ fontSize:13, fontWeight:700 }}>{r.label}</div>
-                  <div style={{ fontSize:11, marginTop:3 }}><b style={{ color:r.g.color }}>model: {r.chance.toFixed(0)}% chance to cash</b></div>
-                  <div style={{ fontSize:10, color:T.muted, marginTop:2 }}>costs {r.price}¢ · edge {(r.edge >= 0 ? "+" : "") + r.edge.toFixed(1)}¢{r.g.longShot ? " · long shot" : ""}</div>
-                </div>
-                <BetButton pick={betPick(r)}/>
-              </div>
-            ))}
-          </div>
-        )}
+      {agg && <OutcomeChart game={game} agg={agg} />}
 
-        {/* Kalshi table */}
-        <div style={S.sec}>
-          <div style={S.secLabel}>Kalshi bets for this game{kx && kx.ts ? " · prices " + formatAge(kx.ts) : ""}</div>
-          {rows.length > 0 ? <PicksTable rows={rows}/> : <KalshiNote kx={kx} ev={ev} hasAgg={!!agg}/>}
-          {rows.length === 0 && kx && kx.status === "ok" && ev && agg && (
-            <div style={{ ...S.card, fontSize:10, color:T.muted }}>Kalshi has this game, but no market has a usable price right now{settings.hideWide ? " (wide bid/ask markets are hidden in Settings)" : ""}.</div>
-          )}
+      {best.length > 0 && <>
+        <UI.H2 aside={`${best.length}`}>Best bets this game</UI.H2>
+        <div className="picks-grid">{best.slice(0, 3).map((r, i) => <BetCard key={r.ticker + r.side} r={r} top={i === 0} />)}</div>
+      </>}
+
+      <UI.H2 aside={kx && kx.ts ? "prices " + formatAge(kx.ts) : null}>Every Kalshi market</UI.H2>
+      {rows.length > 0 ? <>
+        <div className="row" style={{ marginBottom:10, flexWrap:"wrap" }}>
+          <span className="small muted">Sort by</span>
+          <UI.Seg options={[["edge", "Best edge"], ["chance", "Most likely"], ["price", "Cheapest"]]} value={sort.k} onChange={k => setSort({ k, dir:k === "price" ? 1 : -1 })} />
+        </div>
+        <UI.PickList>{sorted.map(r => <BetRow key={r.ticker + r.side} r={r} />)}</UI.PickList>
+      </> : <KalshiNote kx={kx} ev={ev} hasAgg={!!agg} />}
+      {rows.length === 0 && kx && kx.status === "ok" && ev && agg && (
+        <div className="note">Kalshi has this game, but no market has a usable price right now{settings.hideWide ? " (markets with wide buy/sell gaps are hidden in Settings)" : ""}.</div>
+      )}
+
+      {agg && <>
+        <UI.H2>Likeliest final scores</UI.H2>
+        <div className="card">
+          <div className="tiny muted" style={{ marginBottom:4 }}>{aw}–{hw}</div>
+          {agg.topScores.map(({ score, pct }) => (
+            <div key={score} className="score-row">
+              <span style={{ fontWeight:600 }}>{score}</span>
+              <span className="bar"><i style={{ width:Math.min(100, parseFloat(pct) / parseFloat(agg.topScores[0].pct) * 100) + "%" }} /></span>
+              <span className="muted" style={{ textAlign:"right" }}>{pct}%</span>
+            </div>
+          ))}
         </div>
 
-        {/* Team params */}
-        {game && (
-          <div style={S.sec}>
-            <div style={S.secLabel}>Model Inputs (2025 Season)</div>
-            <div style={{ ...S.card, overflowX:"auto" }}>
-              <table style={S.table}>
-                <thead><tr>
-                  <th style={S.th}>Team</th>
-                  <th style={S.th}>Role</th>
-                  <th style={S.th}>wRC+</th>
-                  <th style={S.th}>Rotation FIP</th>
-                  <th style={S.th}>Bullpen ERA</th>
-                  <th style={S.th}>Park Factor</th>
-                </tr></thead>
-                <tbody>
-                  {[{t:game.awayTeam,role:"Away",c:T.blue},{t:game.homeTeam,role:"Home",c:T.green}].map(({t,role,c})=>{
-                    const p = TEAM_PARAMS[t] || {};
-                    return (
-                      <tr key={t}>
-                        <td style={{ ...S.td, color:c, fontWeight:700 }}>{t}</td>
-                        <td style={S.td}>{role}</td>
-                        <td style={S.td}>{p.wrc}</td>
-                        <td style={S.td}>{p.teamFIP}</td>
-                        <td style={S.td}>{p.bullpenERA}</td>
-                        <td style={S.td}>{p.pf}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+        <UI.H2>More model numbers</UI.H2>
+        <div className="card">
+          <div className="tiny muted" style={{ marginBottom:6 }}>No Kalshi price for these, so no grade.</div>
+          <ModelOnlyRow market={hw + " win by 2+ (−1.5)"} pct={agg.hRLPct}/>
+          <ModelOnlyRow market={aw + " win by 2+ (−1.5)"} pct={agg.aRLPct}/>
+          <ModelOnlyRow market="Over 7.5 runs" pct={agg.over75Pct}/>
+          <ModelOnlyRow market="Over 8.5 runs" pct={agg.over85Pct}/>
+          <ModelOnlyRow market="Over 9.5 runs" pct={agg.over95Pct}/>
+          <ModelOnlyRow market={hw + " lead after 5 innings"} pct={agg.f5HomePct}/>
+          <ModelOnlyRow market={aw + " lead after 5 innings"} pct={agg.f5AwayPct}/>
+          <ModelOnlyRow market="No run in the 1st inning" pct={agg.nrfiPct}/>
+          <ModelOnlyRow market={hw + " shutout win"} pct={agg.homeShutoutPct}/>
+          <ModelOnlyRow market={aw + " shutout win"} pct={agg.awayShutoutPct}/>
+        </div>
+      </>}
 
-        {agg && (
-          <div>
-            {/* Win probabilities */}
-            <div style={S.sec}>
-              <div style={S.secLabel}>Win Probabilities (n=100,000)</div>
-              <div style={S.g2}>
-                <StatCard label={agg.awayTeam + " Win"} value={agg.aWPct+"%"} sub={agg.aWins.toLocaleString()+" / 100,000 sims"} color={T.blue}/>
-                <StatCard label={agg.homeTeam + " Win"} value={agg.hWPct+"%"} sub={agg.hWins.toLocaleString()+" / 100,000 sims"} color={T.green}/>
-              </div>
-              <div style={S.barWrap}>
-                <div style={{ width:agg.aWPct+"%", background:"linear-gradient(90deg,#1d4ed8,#3b82f6)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700, color:T.text, transition:"width 0.4s" }}>
-                  {parseFloat(agg.aWPct)>8 ? agg.awayTeam+" "+agg.aWPct+"%" : ""}
-                </div>
-                <div style={{ width:agg.hWPct+"%", background:"linear-gradient(90deg,#16a34a,#22c55e)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:700, color:"#070b14", transition:"width 0.4s" }}>
-                  {parseFloat(agg.hWPct)>8 ? agg.homeTeam+" "+agg.hWPct+"%" : ""}
-                </div>
-              </div>
-            </div>
-
-            {/* Runs */}
-            <div style={S.sec}>
-              <div style={S.secLabel}>Run Production</div>
-              <div style={S.g3}>
-                <StatCard label={agg.awayTeam+" Avg Runs"} value={agg.avgAway} color={T.blue}/>
-                <StatCard label="Avg Total Runs" value={agg.avgTotal} color={T.gold}/>
-                <StatCard label={agg.homeTeam+" Avg Runs"} value={agg.avgHome} color={T.green}/>
-              </div>
-              <div style={{ ...S.card, marginTop:9 }}>
-                <div style={S.sL}>Score Distribution — Away @ Home (Top 8)</div>
-                {agg.topScores.map(({score,count,pct})=>(
-                  <div key={score} style={{ marginTop:7 }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:2 }}>
-                      <span>{score}</span><span style={{ color:T.muted }}>{count.toLocaleString()}× ({pct}%)</span>
-                    </div>
-                    <div style={{ height:4, background:T.border, borderRadius:2 }}>
-                      <div style={{ height:"100%", width:Math.min(parseFloat(pct)*5,100)+"%", background:parseFloat(pct)>=8?T.green:T.blue, borderRadius:2, transition:"width 0.5s" }}/>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Model-only numbers */}
-            <div style={S.sec}>
-              <div style={S.secLabel}>More model numbers (no Kalshi price, so no grade)</div>
-              <div style={S.card}>
-                <ModelOnlyRow market={agg.homeTeam+" −1.5 (win by 2+)"} pct={agg.hRLPct}/>
-                <ModelOnlyRow market={agg.awayTeam+" −1.5 (win by 2+)"} pct={agg.aRLPct}/>
-                <ModelOnlyRow market="Over 7.5 runs" pct={agg.over75Pct}/>
-                <ModelOnlyRow market="Over 8.5 runs" pct={agg.over85Pct}/>
-                <ModelOnlyRow market="Over 9.5 runs" pct={agg.over95Pct}/>
-                <ModelOnlyRow market={"First 5 innings: "+agg.homeTeam+" lead"} pct={agg.f5HomePct}/>
-                <ModelOnlyRow market={"First 5 innings: "+agg.awayTeam+" lead"} pct={agg.f5AwayPct}/>
-                <ModelOnlyRow market="No run in the 1st inning (NRFI)" pct={agg.nrfiPct}/>
-                <ModelOnlyRow market={agg.homeTeam+" shutout win"} pct={agg.homeShutoutPct}/>
-                <ModelOnlyRow market={agg.awayTeam+" shutout win"} pct={agg.awayShutoutPct}/>
-              </div>
-            </div>
-
-            <div style={{ background:"#0a0f1a", border:"1px solid "+T.purple+"33", borderRadius:6, padding:"11px 14px", fontSize:"10px", color:T.muted, marginTop:18, lineHeight:1.8 }}>
-              <div style={{ color:T.purple, fontWeight:700, fontSize:"9px", letterSpacing:"2px", marginBottom:7 }}>MODEL METHODOLOGY</div>
-              <div><span style={{ color:T.text }}>Markov Chain:</span> 24 base-out states (8 base configs × 3 out counts). Each PA outcome drawn from calibrated probability distributions driven by team wRC+ and rotation FIP.</div>
-              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Pitching Model:</span> FIP-to-R/9 conversion with regression-to-mean. Starter exits after inning 5 (F5 boundary), bullpen ERA used for innings 6-9.</div>
-              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Park Factor:</span> Home team park factor applied to wRC+ for both teams. Factors calibrated from 3-year Baseball Savant data.</div>
-              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Run Expectancy:</span> 2024 MLB RE24 matrix used for base-out state transitions. Walk-off and extra inning (ghost runner) rules applied.</div>
-              <div style={{ marginTop:6 }}><span style={{ color:T.text }}>Pricing:</span> every Kalshi winner, run-line and total-runs market for the game is checked against the simulated score distribution. Edge = model chance − price in cents.</div>
-            </div>
-            <div style={S.disclaimer}>
-              Simulation parameters sourced from publicly available 2025 MLB statistics. Schedule from ESPN, prices from Kalshi. Not professional betting advice. Gamble responsibly.
-            </div>
-          </div>
-        )}
+      <UI.H2>Model inputs</UI.H2>
+      <div className="tbl-wrap">
+        <table className="tbl">
+          <thead><tr><th>Team</th><th className="r">wRC+</th><th className="r">FIP</th><th className="r">Pen ERA</th><th className="r">Park</th></tr></thead>
+          <tbody>
+            {[{ t:game.awayTeam, role:"Away", c:T.away }, { t:game.homeTeam, role:"Home", c:T.home }].map(({ t, role, c }) => {
+              const p = TEAM_PARAMS[t] || {};
+              return (
+                <tr key={t}>
+                  <td style={{ whiteSpace:"nowrap" }}><span style={{ display:"inline-block", width:8, height:8, borderRadius:2, background:c, marginRight:8 }} /><b>{p.abbr || t}</b> <span className="sub">{role}</span></td>
+                  <td className="r">{p.wrc}</td><td className="r">{p.teamFIP}</td><td className="r">{p.bullpenERA}</td><td className="r">{p.pf}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
+      <div className="tiny muted" style={{ marginTop:6 }}>2025 season. wRC+: offense, 100 is average. FIP: the rotation; Pen ERA: the bullpen; lower is better for both. Park above 1.00 favors hitters.</div>
+
+      <details className="explain" style={{ marginTop:14 }}>
+        <summary>How the model works</summary>
+        <div className="body small text-2" style={{ lineHeight:1.6 }}>
+          <p>Every game is played out 100,000 times, one plate appearance at a time, through baseball's 24 base-and-out situations. Each at-bat's chances of a walk, strikeout, hit or home run come from the batting team's wRC+ and the pitching staff's FIP.</p>
+          <p style={{ marginTop:8 }}>The starter pitches the first five innings, then the bullpen takes over. The home park's run factor applies to both lineups. Walk-offs and the extra-inning runner on second are built in.</p>
+          <p style={{ marginTop:8 }}>Every Kalshi winner, run-line and total-runs market for the game is checked against the simulated scores. Edge is the model's chance minus the price in cents.</p>
+        </div>
+      </details>
     </div>
   );
+}
+
+// Model chances for bets Kalshi doesn't list. No grade without a price.
+function ModelOnlyRow({ market, pct }) {
+  return <div className="kv"><span className="k">{market}</span><span className="v">{pct}%</span></div>;
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
 // TOP PICKS TAB — graded Kalshi bets across today's games
 // ════════════════════════════════════════════════════════════════════════════════
-function TopPicksTab({ allRows, games, simData, kx }) {
+function TopPicksTab({ allRows, games, simData, kx, loaded }) {
   const simsReady = games.filter(g => simData[g.homeTeam+"|"+g.awayTeam]).length;
   const shown = allRows.filter(r => r.g.edge > 0 && r.g.rank <= 2);
-  const strong = allRows.filter(r => r.g.key === "STRONG").length, good = allRows.filter(r => r.g.key === "GOOD").length;
+  const best = shown.filter(r => r.g.rank <= 1).sort((a, b) => a.g.rank - b.g.rank || b.edge - a.edge);
+  const rest = shown.filter(r => r.g.rank > 1).sort((a, b) => b.edge - a.edge);
   const matched = games.filter(g => kx && kx.status === "ok" && KX.matchGame(g, kx.idx)).length;
+  const record = <><UI.H2>Pick record</UI.H2><RecordCard sport="mlb"/></>;
 
+  if (loaded && games.length === 0) return <><NoGames />{record}</>;
   return (
-    <div style={{ maxWidth:920, margin:"0 auto", padding:"0 14px 48px" }}>
-      <div style={S.sec}>
-        <div style={{ ...S.card, background:"#0a1020", border:"1px solid "+T.green+"33", marginBottom:12 }}>
-          <div style={{ fontSize:11, color:T.green, fontWeight:700, letterSpacing:"1px" }}>TOP PICKS — TODAY'S SLATE</div>
-          <div style={{ fontSize:10, color:T.muted, marginTop:3, lineHeight:1.6 }}>
-            {simsReady}/{games.length} games simulated · {matched}/{games.length} have Kalshi markets · {strong} strong, {good} good
-            {kx && kx.ts ? " · prices " + formatAge(kx.ts) : ""}
-          </div>
-        </div>
-        <RecordCard sport="mlb"/>
-        <GradeLegend sport="mlb"/>
-      </div>
+    <div>
+      {games.length > 0 && <div className="small muted" style={{ marginBottom:12 }}>
+        {simsReady} of {games.length} games simulated · {matched} with Kalshi markets{kx && kx.ts ? " · prices " + formatAge(kx.ts) : ""}
+      </div>}
+      <GradeLegend sport="mlb"/>
+      {kx && kx.status === "down" && <div className="note warn" style={{ marginBottom:12 }}>Kalshi prices couldn't be loaded{kx.error ? " (" + kx.error + ")" : ""}. Grades need a price, so none are shown. Try Refresh.</div>}
 
-      {kx && kx.status === "down" && <div style={{ ...S.card, marginBottom:12, fontSize:10, color:T.yellow }}>Kalshi prices couldn't be loaded{kx.error ? " (" + kx.error + ")" : ""}. Grades need a price, so none are shown. Try ↻ Refresh.</div>}
-      {simsReady < games.length && <div style={{ ...S.card, marginBottom:12, fontSize:10, color:T.yellow }}>⚠ {games.length - simsReady} game(s) still simulating.</div>}
-
-      <div style={S.sec}>
-        <div style={S.secLabel}>Bets with an edge ({shown.length})</div>
-        {shown.length > 0 ? <PicksTable rows={shown} showGame/> : (
-          <div style={{ ...S.card, textAlign:"center", padding:28, color:T.muted, fontSize:11, lineHeight:1.7 }}>
-            {!kx || kx.status === "loading" ? "Loading Kalshi prices…"
-              : kx.status === "down" ? "No grades without Kalshi prices."
-              : games.length === 0 ? "No MLB games today."
-              : matched === 0 ? "No Kalshi markets open for today's games."
-              : simsReady < games.length ? "Waiting for the simulations…"
-              : "No bet on today's slate is priced below the model's chance."}
-          </div>
-        )}
-      </div>
+      {shown.length > 0 ? <>
+        <UI.H2 aside={best.length ? `${best.length} strong or good` : null}>Best bets right now</UI.H2>
+        {best.length ? <div className="picks-grid">{best.map((r, i) => <BetCard key={r.ticker + r.side} r={r} top={i === 0} />)}</div>
+          : <div className="note">No STRONG or GOOD bets right now. The smaller edges below are close calls: bet small or skip.</div>}
+        {rest.length > 0 && <>
+          <UI.H2 aside={`${rest.length}`}>Smaller edges</UI.H2>
+          <UI.PickList>{rest.map(r => <BetRow key={r.ticker + r.side} r={r} showGame />)}</UI.PickList>
+        </>}
+      </> : (
+        !kx || kx.status === "loading" || !loaded ? <UI.Status>Loading Kalshi prices…</UI.Status>
+          : kx.status === "down" ? null
+          : matched === 0 ? <Empty title="No Kalshi markets yet">Kalshi hasn't opened markets for today's games. They usually appear a day or so before first pitch.</Empty>
+          : simsReady < games.length ? <UI.Status>Waiting for the simulations…</UI.Status>
+          : <Empty title="No bets worth making right now">Nothing on today's slate is priced below the model's chance. A bet shows up here once the model beats Kalshi's price.</Empty>
+      )}
+      {record}
     </div>
   );
 }
@@ -969,87 +927,67 @@ function buildMLBParlays(legs) {
   return parlays.sort((a,b) => b.jointProb - a.jointProb);
 }
 
-function MLBParlayTab({ allRows }) {
+function ParlayCard({ parlay, rank }) {
+  const jp = parlay.jointProb;
+  return (
+    <div className="card parlay">
+      <div className="parlay-head">
+        <div className="wrap-row">
+          <span className="chip" style={rank === 0 ? { background:"var(--text)", color:"var(--bg)" } : null}>#{rank + 1}</span>
+          <span className="chip">{parlay.size} legs</span>
+        </div>
+        <div className="parlay-p"><div className="v">{(jp * 100).toFixed(1)}%</div><div className="tiny muted">chance all legs cash</div></div>
+      </div>
+      {parlay.legs.map((leg, li) => (
+        <div key={li} className="leg">
+          <div style={{ minWidth:0 }}>
+            <div className="leg-title">{leg.market}</div>
+            <div className="leg-meta"><GradeBadge g={leg.g} small/><span>{leg.match}</span></div>
+          </div>
+          <div className="leg-p">{(leg.prob * 100).toFixed(0)}%<span className="s">{leg.price}¢</span></div>
+          <SB.ChanceBar g={leg.g} compact />
+        </div>
+      ))}
+      <div className="parlay-foot">
+        <div><div className="l">Chance to cash</div><div className="v">{(jp * 100).toFixed(1)}%</div></div>
+        <div><div className="l">Leg prices multiplied</div><div className="v">{(parlay.jointPrice * 100).toFixed(1)}¢</div></div>
+        <div><div className="l">Pays per $1 (fair)</div><div className="v">{SB.money(1 / parlay.jointPrice)}</div></div>
+      </div>
+    </div>
+  );
+}
+
+function MLBParlayTab({ allRows, games, loaded }) {
   const [filterSize, setFilterSize] = useState("all");
   const legs = parlayLegs(allRows);
   const parlays = buildMLBParlays(legs);
   const filtered = filterSize==="all" ? parlays : parlays.filter(p=>p.size===parseInt(filterSize));
 
+  if (loaded && games.length === 0) return <NoGames />;
   return (
-    <div style={{ maxWidth:920, margin:"0 auto", padding:"0 14px 48px" }}>
-      <div style={S.sec}>
-        <div style={{ ...S.card, background:"#0a1020", border:"1px solid "+T.green+"33" }}>
-          <div style={{ fontSize:11, color:T.green, fontWeight:700, letterSpacing:"1px" }}>MLB PARLAY BUILDER</div>
-          <div style={{ fontSize:10, color:T.muted, marginTop:3, lineHeight:1.6 }}>
-            Built only from STRONG and GOOD bets, one per game. {legs.length} qualifying legs. Kalshi doesn't sell these as one bet, so place each leg on its own or build it in Kalshi's app.
-          </div>
-        </div>
+    <div>
+      <div className="note" style={{ marginBottom:12 }}>
+        Built only from STRONG and GOOD bets, one per game. Kalshi doesn't sell these as one bet, so place each leg on its own or build it in Kalshi's app.
       </div>
 
-      {legs.length > 0 && (
-        <div style={S.sec}>
-          <div style={S.secLabel}>Legs ({legs.length})</div>
-          <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-            {legs.map((leg,i) => (
-              <div key={i} style={{ background:T.card, border:"1px solid "+T.border, borderLeft:"3px solid "+leg.g.color, borderRadius:4, padding:"5px 10px", fontSize:10, display:"flex", alignItems:"center", gap:6 }}>
-                <GradeBadge g={leg.g} small/>
-                <span style={{ color:T.muted, fontSize:9 }}>{leg.match} ·</span>
-                <span style={{ color:T.text, fontWeight:700 }}>{leg.market}</span>
-                <span style={{ color:leg.g.color, marginLeft:2 }}>{(leg.prob*100).toFixed(0)}%</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {legs.length > 0 && <>
+        <UI.H2 aside={`${legs.length}`}>Qualifying legs</UI.H2>
+        <UI.PickList>
+          {legs.map((leg, i) => <UI.PickRow key={i} g={leg.g} title={leg.market} meta={leg.match} badge />)}
+        </UI.PickList>
+      </>}
 
-      <div style={{ ...S.sec, display:"flex", gap:6, flexWrap:"wrap" }}>
-        {["all","2","3","4","5"].map(v=>(
-          <button key={v} onClick={()=>setFilterSize(v)} style={{ padding:"6px 14px", fontSize:10, fontWeight:700, letterSpacing:"1px", background:filterSize===v?T.green:T.card, color:filterSize===v?"#070b14":T.muted, border:"1px solid "+(filterSize===v?T.green:T.border), borderRadius:4, cursor:"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
-            {v==="all"?"ALL":v+"-LEG"}
-          </button>
-        ))}
-        <div style={{ marginLeft:"auto", fontSize:10, color:T.muted, alignSelf:"center" }}>Showing {filtered.length} parlays</div>
-      </div>
+      <UI.H2 aside={`${filtered.length} parlay${filtered.length === 1 ? "" : "s"}`}>Parlays</UI.H2>
+      <UI.Seg options={[["all", "All"], ["2", "2 legs"], ["3", "3"], ["4", "4"], ["5", "5"]]} value={filterSize} onChange={setFilterSize} />
 
-      {filtered.length===0 && <div style={{ ...S.card, textAlign:"center", padding:32, color:T.muted, fontSize:11, marginTop:12 }}>
-        {legs.length < 2 ? "A parlay needs STRONG or GOOD bets from at least 2 different games." : "Not enough games with STRONG or GOOD bets for " + filterSize + "-leg parlays."}
+      {filtered.length === 0 && <div style={{ marginTop:12 }}>
+        <Empty title={legs.length < 2 ? "No parlays yet" : "None that size"}>
+          {legs.length < 2 ? "A parlay needs STRONG or GOOD bets from at least 2 different games." : "Not enough games with STRONG or GOOD bets for " + filterSize + "-leg parlays."}
+        </Empty>
       </div>}
 
-      {filtered.map((parlay,pi) => {
-        const jp = parlay.jointProb;
-        const rankColor = pi===0?T.gold:pi===1?"#94a3b8":pi===2?"#cd7f32":T.border;
-        return (
-          <div key={pi} style={{ ...S.card, marginTop:10, borderLeft:"3px solid "+(pi<3?rankColor:T.border) }}>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10, flexWrap:"wrap", gap:6 }}>
-              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                <div style={{ background:pi<3?rankColor+"22":T.navy, border:"1px solid "+(pi<3?rankColor:T.border), color:pi<3?rankColor:T.muted, fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:3 }}>#{pi+1}</div>
-                <div style={{ background:T.purple+"1a", border:"1px solid "+T.purple+"33", color:T.purple, fontSize:9, padding:"2px 8px", borderRadius:3, letterSpacing:"1px" }}>{PARLAY_SIZE_LABELS[parlay.size]}</div>
-              </div>
-              <div style={{ textAlign:"right" }}>
-                <div style={{ fontSize:22, fontWeight:700, color:jp>0.4?T.green:jp>0.2?T.gold:T.red }}>{(jp*100).toFixed(1)}%</div>
-                <div style={{ fontSize:9, color:T.muted }}>model: chance all legs cash</div>
-              </div>
-            </div>
-            <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
-              {parlay.legs.map((leg,li) => (
-                <div key={li} style={{ display:"flex", alignItems:"center", gap:8, background:T.navy, borderRadius:4, padding:"7px 10px", borderLeft:"2px solid "+leg.g.color, flexWrap:"wrap" }}>
-                  <GradeBadge g={leg.g} small/>
-                  <div style={{ fontSize:9, color:T.muted, minWidth:90 }}>{leg.match}</div>
-                  <div style={{ flex:1, fontSize:11, color:T.text, fontWeight:600 }}>{leg.market}</div>
-                  <div style={{ fontSize:9, color:T.muted }}>{leg.price}¢</div>
-                  <div style={{ fontSize:11, color:leg.g.color, fontWeight:700, minWidth:44, textAlign:"right" }}>{(leg.prob*100).toFixed(0)}%</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ display:"flex", gap:16, marginTop:10, flexWrap:"wrap" }}>
-              <div><div style={{ fontSize:9, color:T.muted }}>CHANCE TO CASH</div><div style={{ fontSize:13, fontWeight:700 }}>{(jp*100).toFixed(1)}%</div></div>
-              <div><div style={{ fontSize:9, color:T.muted }}>LEG PRICES MULTIPLIED</div><div style={{ fontSize:13, fontWeight:700, color:T.gold }}>{(parlay.jointPrice*100).toFixed(1)}¢</div></div>
-              <div><div style={{ fontSize:9, color:T.muted }}>PAYS PER $1 (FAIR)</div><div style={{ fontSize:13, fontWeight:700, color:T.green }}>{SB.money(1/parlay.jointPrice)}</div></div>
-            </div>
-          </div>
-        );
-      })}
-      <div style={S.disclaimer}>Legs from different games are treated as independent. "Leg prices multiplied" is what the parlay would cost per $1 if each leg were bought at today's Kalshi price. Not professional betting advice. Gamble responsibly.</div>
+      {filtered.map((parlay, pi) => <ParlayCard key={pi} parlay={parlay} rank={pi} />)}
+      {filtered.length > 0 && <div className="tiny muted" style={{ marginTop:12 }}>Legs from different games are treated as independent. "Leg prices multiplied" is what the parlay would cost per $1 if each leg were bought at today's Kalshi price.</div>}
     </div>
   );
 }
@@ -1179,63 +1117,26 @@ function App() {
   const allSimsReady = games.length > 0 && simsLoaded === games.length;
   const busy = loading || !!runningId;
 
+  const tabs = [
+    ["top_picks", "Top picks", strongGood.length > 0 ? { count:strongGood.length } : null],
+    ["parlays", "Parlays"],
+    ...games.map((g, i) => ["game_" + i, abbrOf(g.awayTeam) + " @ " + abbrOf(g.homeTeam), { pending:!simData[g.homeTeam+"|"+g.awayTeam] }]),
+  ];
+
   return (
-    <div style={S.wrap}>
-      {/* TOPBAR */}
-      <div style={{ background:T.navy, borderBottom:"1px solid "+T.border, padding:"8px 16px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-        <a href="index.html" style={{ fontSize:10, color:T.muted, letterSpacing:"1px", textDecoration:"none" }}>← Sharp Sim</a>
-        <div style={{ fontSize:10, color:T.green, fontWeight:700, letterSpacing:"1px" }}>⚾ MLB</div>
-        <div style={{ flex:1 }}/>
-        <div style={{ fontSize:9, color:T.muted }}>{games.length > 0 ? games.length+" games" : loading?"Loading...":""}</div>
-        {kx.ts && <div style={{ fontSize:8, color:T.muted, letterSpacing:"0.5px" }}>Kalshi {formatAge(kx.ts)}{kx.stale ? " (refresh failed)" : ""}</div>}
-        <a href="settings.html" style={{ fontSize:9, color:T.muted, letterSpacing:"1px", textDecoration:"none", border:"1px solid "+T.border, padding:"4px 10px", borderRadius:4 }}>⚙ SETTINGS</a>
-        <button onClick={()=>{ autoRanRef.current=false; loadGames(); loadKalshi(); }} disabled={busy} style={{ background:"none", border:"1px solid "+T.border, color:busy?T.muted:T.green, padding:"4px 10px", borderRadius:4, fontSize:9, cursor:busy?"default":"pointer", fontFamily:"'IBM Plex Mono','Courier New',monospace" }}>
-          {loading?"Loading...":"↻ Refresh"}
-        </button>
-      </div>
+    <UI.Shell active="mlb">
+      <UI.PageHead eyebrow={<>MLB · priced on Kalshi{kx.ts ? <span className="muted">· prices {formatAge(kx.ts)}{kx.stale ? " (refresh failed)" : ""}</span> : null}</>}
+        title="MLB picks"
+        sub="Every game simulated 100,000 times, one at-bat at a time, then compared with Kalshi's price on every market."
+        right={<button className="btn btn-sm" onClick={()=>{ autoRanRef.current=false; loadGames(); loadKalshi(); }} disabled={busy}>{loading ? "Loading…" : "Refresh"}</button>} />
+      <UI.Tabs tabs={tabs} value={activeTab} onChange={setActiveTab} />
 
-      {/* LOADING PROGRESS BAR */}
-      {!allSimsReady && games.length > 0 && (
-        <div style={{ background:T.navy, padding:"8px 16px", borderBottom:"1px solid "+T.border, display:"flex", alignItems:"center", gap:12 }}>
-          <div style={{ flex:1, height:4, background:T.border, borderRadius:2, overflow:"hidden" }}>
-            <div style={{ height:"100%", width:(simsLoaded/games.length*100)+"%", background:"linear-gradient(90deg,"+T.green+","+T.gold+")", borderRadius:2, transition:"width 0.5s" }}/>
-          </div>
-          <div style={{ fontSize:9, color:T.muted, whiteSpace:"nowrap" }}>
-            {runningId ? ("Simulating "+(runningId.split("|")[0])+"...") : "Initializing..."} {simsLoaded}/{games.length}
-          </div>
-        </div>
-      )}
+      {!allSimsReady && games.length > 0 && <UI.Status>{runningId ? "Simulating " + runningId.split("|")[1] + " @ " + runningId.split("|")[0] + "…" : "Getting ready…"} {simsLoaded} of {games.length}</UI.Status>}
+      {loading && !loaded && <UI.Status>Loading today's games…</UI.Status>}
+      {error && <div className="note bad" style={{ marginBottom:12 }}>Today's schedule couldn't be loaded ({error}). Try Refresh.</div>}
 
-      {error && <div style={{ background:"#1a0a0a", border:"1px solid "+T.red+"44", padding:"10px 16px", fontSize:10, color:T.red }}>{error}</div>}
-
-      {/* TABS */}
-      <div style={S.tabBar}>
-        <button style={{ ...S.tab(activeTab==="top_picks"), color:activeTab==="top_picks"?T.green:T.muted, borderBottom:activeTab==="top_picks"?"2px solid "+T.green:"2px solid transparent" }}
-          onClick={()=>setActiveTab("top_picks")}>
-          ⭐ TOP PICKS {strongGood.length>0?"("+strongGood.length+")":""}
-        </button>
-        <button style={{ ...S.tab(activeTab==="parlays"), color:activeTab==="parlays"?T.purple:T.muted, borderBottom:activeTab==="parlays"?"2px solid "+T.purple:"2px solid transparent", borderRight:"1px solid "+T.border }}
-          onClick={()=>setActiveTab("parlays")}>
-          🎰 PARLAYS
-        </button>
-        {games.map((g,i) => (
-          <button key={g.id} style={S.tab(activeTab==="game_"+i)} onClick={()=>setActiveTab("game_"+i)}>
-            {TEAM_PARAMS[g.awayTeam]?.abbr||g.awayTeam.split(" ").pop()} @ {TEAM_PARAMS[g.homeTeam]?.abbr||g.homeTeam.split(" ").pop()}
-            {runningId===(g.homeTeam+"|"+g.awayTeam) ? " ⟳" : !simData[g.homeTeam+"|"+g.awayTeam] ? " ·" : ""}
-          </button>
-        ))}
-      </div>
-
-      {/* CONTENT */}
-      {loaded && !loading && games.length === 0 && !error && activeTab === "top_picks" && (
-        <div style={{ maxWidth:920, margin:"0 auto", padding:"0 14px" }}>
-          <div style={{ ...S.card, marginTop:20, textAlign:"center", padding:"20px 16px", color:T.muted, fontSize:11, lineHeight:1.7 }}>
-            No MLB games today. Picks show up here on game days, graded against Kalshi's prices.
-          </div>
-        </div>
-      )}
-      {activeTab==="top_picks" && <TopPicksTab allRows={allRows} games={games} simData={simData} kx={kx}/>}
-      {activeTab==="parlays" && <MLBParlayTab allRows={allRows}/>}
+      {activeTab==="top_picks" && <TopPicksTab allRows={allRows} games={games} simData={simData} kx={kx} loaded={loaded && !loading && !error}/>}
+      {activeTab==="parlays" && <MLBParlayTab allRows={allRows} games={games} loaded={loaded && !loading && !error}/>}
       {!isSpecialTab && activeGame && TEAM_PARAMS[activeGame.homeTeam] && TEAM_PARAMS[activeGame.awayTeam] && (
         <GameSimView game={activeGame} agg={simData[gameKey]}
           running={runningId === gameKey}
@@ -1245,14 +1146,18 @@ function App() {
         />
       )}
       {!isSpecialTab && activeGame && (!TEAM_PARAMS[activeGame.homeTeam]||!TEAM_PARAMS[activeGame.awayTeam]) && (
-        <div style={{ textAlign:"center", padding:48, color:T.muted, fontSize:11 }}>Team not in model: {activeGame.homeTeam} vs {activeGame.awayTeam}</div>
+        <div className="note">This game isn't in the model yet: {activeGame.awayTeam} @ {activeGame.homeTeam}.</div>
       )}
-      {!isSpecialTab && !activeGame && (
-        <div style={{ textAlign:"center", padding:48, color:T.muted, fontSize:11 }}>{loading?"Loading today's games...":"No games found."}</div>
-      )}
-    </div>
+      {!isSpecialTab && !activeGame && (loading ? <UI.Status>Loading today's games…</UI.Status> : <NoGames />)}
+
+      <div className="ss-foot">
+        <div>Team inputs from public 2025 MLB stats. Schedule from ESPN, prices from Kalshi.</div>
+        <div style={{ marginTop:6 }}>Edge is the model's chance minus Kalshi's price in cents, before Kalshi's small trading fee. Check the price before buying. Not betting advice.</div>
+      </div>
+    </UI.Shell>
   );
 }
+
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
 </script>
