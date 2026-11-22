@@ -196,3 +196,18 @@ test("decide: positions you hand over follow only your price rules", () => {
   // the kill switch cashes them out too
   assert.match(run({ avgCost: 45 }, { killed: true }).reason, /kill/);
 });
+
+test("NFL pregame drive sim: median on the spread and total, key numbers, favourite win rate from the long-run table", () => {
+  const d = CFB.pregameDriveSim(7.5, 44.5, 40000, "nfl");
+  assert.ok(Math.abs(d.pCover("home", 7.5) - 0.5) < 0.03, "half the sims cover a 7.5 spread");
+  assert.ok(Math.abs(d.pOver(44.5) - 0.5) < 0.03, "half go over the total");
+  assert.ok(Math.abs(d.pHome - CFB.nflFavWinPct(7.5)) < 0.02, "7.5-point favourite wins ~76%");
+  const f3 = d.marginFreq(3) + d.marginFreq(-3), f5 = d.marginFreq(5) + d.marginFreq(-5);
+  assert.ok(f3 > 1.5 * f5, "3 is a key number, 5 is not");
+  assert.ok(d.pTie < 0.02);
+  // Kalshi's two-team-city names
+  const g = { home: { location: "Los Angeles", short: "Chargers", name: "Los Angeles Chargers", abbr: "LAC" }, away: { location: "New York", short: "Jets", name: "New York Jets", abbr: "NYJ" } };
+  assert.equal(CFB.sideForName("Los Angeles C", g), "home");
+  assert.equal(CFB.sideForName("New York J", g), "away");
+  assert.ok(CFB.nameScore("Los Angeles R", g.home) < 0.1);
+});

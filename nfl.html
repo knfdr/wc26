@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sharp Sim — NFL</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="js/cfb-engine.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100vh;background:#070b14;font-family:'IBM Plex Mono','Courier New',monospace;color:#dde5f0}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:#0c1526}
+::-webkit-scrollbar-thumb{background:#1a2a3e;border-radius:3px}
+a{color:inherit;text-decoration:none}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo } = React;
+const CFB = window.CFB;
+
+const ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/nfl";
+const SERIES = ["KXNFLGAME", "KXNFLSPREAD", "KXNFLTOTAL"];
+const SEASON = 2026;
+const RATINGS_KEY = "sharp_nfl_ratings_" + new Date().toLocaleDateString("en-CA");
+const SIMS = 100000;
+// blend weights for the final spread/total. The NFL closing line is the sharpest in sports, so it carries even more weight.
+const W = { results: 0.15, fpi: 0.10, market: 0.75 };
+const WT = { results: 0.20, market: 0.80 };
+const HFA = 1.5;   // NFL home-field edge has shrunk to ~1.5 points (2020-25)
+
+const T = { bg:"#070b14", navy:"#101d30", border:"#1a2a3e", text:"#dde5f0", muted:"#4b6280", dim:"#2a3a52",
+  green:"#22c55e", red:"#ef4444", gold:"#e8c547", purple:"#a78bfa", blue:"#3b82f6", orange:"#f97316", accent:"#f97316" };
+const card = { background: T.navy, border: "1px solid " + T.border, borderRadius: 6, padding: "12px 14px" };
+const btn = { background: T.navy, border: "1px solid " + T.border, color: T.muted, padding: "6px 10px", borderRadius: 4, cursor: "pointer", fontSize: 9, fontWeight: 700, letterSpacing: 1, fontFamily: "inherit" };
+
+async function getJSON(url) { const r = await fetch(url, { cache: "no-store" }); if (!r.ok) throw new Error("HTTP " + r.status + " " + url); return r.json(); }
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// ── Ratings from this season's results ───────────────────────────────────────
+// Points model: homePts = mu + O_h + D_a + HFA/2, awayPts = mu + O_a + D_h - HFA/2
+// (O = points scored above average, D = points allowed above average), ridge-shrunk toward 0.
+function fitRatings(games) {
+  const ids = new Set(); games.forEach(g => { ids.add(g.h); ids.add(g.a); });
+  const O = {}, D = {}, n = {}; ids.forEach(i => { O[i] = 0; D[i] = 0; n[i] = 0; });
+  games.forEach(g => { n[g.h]++; n[g.a]++; });
+  const mu = games.reduce((s, g) => s + g.hs + g.as, 0) / (2 * games.length);
+  const lambda = 3.5;   // 17 games a season: shrink harder than college
+  const cap = (x) => Math.max(-24, Math.min(24, x)); // dampen blowouts
+  for (let it = 0; it < 120; it++) {
+    const so = {}, sd = {}; ids.forEach(i => { so[i] = 0; sd[i] = 0; });
+    for (const g of games) {
+      const hfa = g.neutral ? 0 : HFA / 2;
+      const rh = cap(g.hs - mu - hfa), ra = cap(g.as - mu + hfa);
+      so[g.h] += rh - D[g.a]; sd[g.a] += rh - O[g.h];
+      so[g.a] += ra - D[g.h]; sd[g.h] += ra - O[g.a];
+    }
+    ids.forEach(i => { O[i] = so[i] / (n[i] + lambda); D[i] = sd[i] / (n[i] + lambda); });
+  }
+  return { O, D, mu, n };
+}
+
+async function loadRatings(setStatus) {
+  try { const c = JSON.parse(localStorage.getItem(RATINGS_KEY) || "null"); if (c) return c; } catch (e) {}
+  const games = [];
+  for (let wk = 1; wk <= 18; wk++) {
+    setStatus(`Fitting ratings: week ${wk}…`);
+    let d; try { d = await getJSON(`${ESPN}/scoreboard?limit=40&seasontype=2&dates=${SEASON}&week=${wk}`); } catch (e) { continue; }
+    let any = false;
+    for (const e of d.events || []) {
+      const c = e.competitions[0]; if (!e.status.type.completed) continue;
+      const h = c.competitors.find(x => x.homeAway === "home"), a = c.competitors.find(x => x.homeAway === "away");
+      games.push({ h: h.team.id, a: a.team.id, hs: +h.score, as: +a.score, neutral: !!c.neutralSite }); any = true;
+    }
+    if (!any && wk > 3) break;
+    await sleep(60);
+  }
+  const fit = fitRatings(games);
+  const out = { ...fit, nGames: games.length };
+  try { localStorage.setItem(RATINGS_KEY, JSON.stringify(out)); } catch (e) {}
+  return out;
+}
+
+function resultsProjection(rt, g) {
+  const ok = (id) => rt && rt.n[id] >= 3;
+  if (!ok(g.home.id) || !ok(g.away.id)) return null;
+  const hfa = g.neutral ? 0 : HFA / 2;
+  const hp = rt.mu + rt.O[g.home.id] + rt.D[g.away.id] + hfa;
+  const ap = rt.mu + rt.O[g.away.id] + rt.D[g.home.id] - hfa;
+  return { spreadHome: hp - ap, total: hp + ap, hp, ap };
+}
+
+function blend(g, res, fpiHome) {
+  const mk = g.spreadHome != null ? { spreadHome: g.spreadHome, total: g.total } : null;
+  const fpiSpread = fpiHome != null ? CFB.SPORTS.nfl.sigmaMargin * CFB.PhiInv(Math.min(0.995, Math.max(0.005, fpiHome))) : null;
+  let num = 0, den = 0;
+  if (mk) { num += W.market * mk.spreadHome; den += W.market; }
+  if (res) { num += W.results * res.spreadHome; den += W.results; }
+  if (fpiSpread != null) { num += W.fpi * fpiSpread; den += W.fpi; }
+  const spread = den ? num / den : 0;
+  let tn = 0, td = 0;
+  if (mk && mk.total) { tn += WT.market * mk.total; td += WT.market; }
+  if (res) { tn += WT.results * res.total; td += WT.results; }
+  const total = td ? tn / td : 44;
+  return { spreadHome: spread, total, fpiSpread, market: mk, results: res };
+}
+
+function tierFor(edge, p) {
+  if (edge >= 10 && p >= 0.55) return "LOCK";
+  if (edge >= 7) return "HIGH";
+  if (edge >= 4) return "LEAN";
+  return null;
+}
+const TIER_C = { LOCK: T.red, HIGH: T.green, LEAN: T.gold };
+
+function marketLabel(m, g) {
+  const nm = (s) => s === "home" ? g.home.abbr : g.away.abbr;
+  if (m.kind === "win") return `${nm(m.side)} ML`;
+  if (m.kind === "spread") return `${nm(m.side)} -${m.line}`;
+  return `O ${m.line}`;
+}
+
+// ── App ──────────────────────────────────────────────────────────────────────
+function App() {
+  const [status, setStatus] = useState("Loading games…");
+  const [games, setGames] = useState([]);
+  const [rt, setRt] = useState(null);
+  const [extra, setExtra] = useState({});     // gameId -> {fpiHome, markets}
+  const [sims, setSims] = useState({});       // gameId -> sim summary
+  const [tab, setTab] = useState("picks");
+  const [kx, setKx] = useState(null);
+
+  useEffect(() => { (async () => {
+    try {
+      const sb = await getJSON(`${ESPN}/scoreboard?limit=40&_=${Date.now()}`);
+      const all = (sb.events || []).map(e => CFB.parseEspnEvent(e, "nfl")).filter(Boolean);
+      const today = new Date().toLocaleDateString("en-CA");
+      const list = all.filter(g => g.state === "pre" && (new Date(g.date) - Date.now()) < 7 * 86400e3)
+        .sort((a, b) => new Date(a.date) - new Date(b.date));
+      setGames(list);
+      fetch("/api/kx/_status").then(r => r.json()).then(setKx).catch(() => {});
+      const r = await loadRatings(setStatus); setRt(r);
+      setStatus("Matching Kalshi markets…");
+      const ev = await getJSON("/api/kx/events?series_ticker=KXNFLGAME&status=open&limit=200").catch(() => ({ events: [] }));
+      for (const g of list) {
+        const x = {};
+        try { const s = await getJSON(`${ESPN}/summary?event=${g.id}`); const p = s.predictor; if (p && p.homeTeam && p.homeTeam.gameProjection) x.fpiHome = parseFloat(p.homeTeam.gameProjection) / 100; } catch (e) {}
+        let best = null; for (const e of ev.events || []) { const sc = CFB.matchEventScore(e.title, g); if (!best || sc > best.sc) best = { sc, e }; }
+        if (best && best.sc >= 0.6) {
+          const suffix = best.e.event_ticker.split("-").slice(1).join("-");
+          const lists = [];
+          for (const s of SERIES) { lists.push(await getJSON(`/api/kx/markets?limit=200&event_ticker=${s}-${suffix}`).catch(() => ({ markets: [] }))); await sleep(120); }
+          x.markets = lists.flatMap(l => l.markets || []).map(m => CFB.parseKalshiMarket(m, g)).filter(Boolean);
+          x.suffix = suffix;
+        }
+        setExtra(prev => ({ ...prev, [g.id]: x }));
+      }
+      setStatus("");
+    } catch (e) { setStatus("Error: " + e.message); }
+  })(); }, []);
+
+  // run sims as data arrives
+  useEffect(() => {
+    if (!games.length) return;
+    let cancelled = false;
+    (async () => {
+      for (const g of games) {
+        if (cancelled) return;
+        const x = extra[g.id]; if (!x || sims[g.id] && sims[g.id].v === (x.markets || []).length + (rt ? 1 : 0)) continue;
+        const res = resultsProjection(rt, g);
+        const b = blend(g, res, x.fpiHome);
+        const dist = CFB.pregameDriveSim(b.spreadHome, b.total, SIMS, "nfl");
+        const rows = (x.markets || []).filter(m => !m.half && m.status === "active").map(m => {
+          const p = m.kind === "win" ? (m.side === "home" ? dist.pHome : 1 - dist.pHome) : m.kind === "spread" ? dist.pCover(m.side, m.line) : dist.pOver(m.line);
+          const fair = p * 100;
+          const fee = (c) => 0.07 * (c / 100) * (1 - c / 100) * 100;
+          const yesEdge = m.yesAsk != null && m.yesAsk < 100 ? fair - m.yesAsk - fee(m.yesAsk) : null;
+          const noEdge = m.noAsk != null && m.noAsk < 100 ? (100 - fair) - m.noAsk - fee(m.noAsk) : null;
+          const side = (yesEdge ?? -99) >= (noEdge ?? -99) ? "yes" : "no";
+          const edge = side === "yes" ? yesEdge : noEdge;
+          const pSide = side === "yes" ? p : 1 - p;
+          return { ...m, fair, side, edge, pSide, ask: side === "yes" ? m.yesAsk : m.noAsk, tier: edge != null ? tierFor(edge, pSide) : null };
+        });
+        const keys = []; for (let m = -17; m <= 17; m++) if (m) keys.push([m, dist.marginFreq(m)]);
+        setSims(prev => ({ ...prev, [g.id]: { v: (x.markets || []).length + (rt ? 1 : 0), b, pHome: dist.pHome, pAway: dist.pAway, pTie: dist.pTie, sdMargin: dist.sdMargin, sdTotal: dist.sdTotal, keys, rows } }));
+        await sleep(10);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [games, extra, rt]);
+
+  const picks = useMemo(() => {
+    const out = [];
+    for (const g of games) {
+      const s = sims[g.id]; if (!s) continue;
+      // best pick per market type per game, liquid quotes only
+      const byKind = {};
+      for (const r of s.rows) {
+        if (!r.tier || r.ask < 10 || r.ask > 90 || r.yesAsk - r.yesBid > 6 || r.volume < 1000) continue;
+        if (!byKind[r.kind] || r.edge > byKind[r.kind].edge) byKind[r.kind] = r;
+      }
+      Object.values(byKind).forEach(r => out.push({ g, r }));
+    }
+    return out.sort((a, b) => b.r.edge - a.r.edge);
+  }, [games, sims]);
+
+  const tabs = [["picks", `⭐ TOP PICKS (${picks.length})`], ...games.map(g => ["g" + g.id, `${g.away.abbr} @ ${g.home.abbr}`])];
+  const active = games.find(g => "g" + g.id === tab);
+
+  return (
+    <div style={{ minHeight: "100vh", background: T.bg }}>
+      <div style={{ background: T.navy, borderBottom: "1px solid " + T.border, padding: "10px 16px", display: "flex", gap: 14, alignItems: "center" }}>
+        <a href="index.html" style={{ fontSize: 9, color: T.muted, letterSpacing: 1 }}>← SHARP SIM</a>
+        <div style={{ flex: 1 }} />
+        <a href="cfb.html" style={{ fontSize: 9, color: T.muted, letterSpacing: 1 }}>CFB SIM</a>
+        <a href="live.html?sport=nfl" style={{ fontSize: 9, color: T.accent, letterSpacing: 1, fontWeight: 700 }}>⚡ LIVE AUTO →</a>
+      </div>
+      <div style={{ background: "linear-gradient(160deg,#0c1526 0%,#070b14 100%)", borderBottom: "1px solid " + T.border, padding: "24px 16px 18px", textAlign: "center" }}>
+        <div style={{ display: "inline-block", background: T.accent + "1a", border: "1px solid " + T.accent + "44", color: T.accent, fontSize: 9, letterSpacing: 2, padding: "2px 10px", borderRadius: 2, marginBottom: 10 }}>🏈 NFL · KALSHI</div>
+        <div style={{ fontSize: "clamp(20px,4vw,32px)", fontWeight: 700 }}>NFL Sim</div>
+        <div style={{ fontSize: 10, color: T.muted, marginTop: 6 }}>Drive-by-drive game simulation calibrated to the blended line · results ratings + ESPN FPI + closing market · {SIMS.toLocaleString()} sims per game · every Kalshi strike</div>
+        <div style={{ display: "inline-block", background: "rgba(167,139,250,0.08)", border: "1px solid rgba(167,139,250,0.2)", color: T.purple, fontSize: 8, letterSpacing: 1.5, padding: "2px 10px", borderRadius: 2, marginTop: 8 }}>
+          DRIVE SIM · KEY NUMBERS 3/7/10 · LATE-GAME PLAY-CALLING · 2025 OT RULES · HFA {HFA} · BLEND {W.market * 100}% MARKET
+        </div>
+      </div>
+      <div style={{ display: "flex", borderBottom: "1px solid " + T.border, overflowX: "auto", background: T.navy }}>
+        {tabs.map(([k, l]) => (
+          <button key={k} onClick={() => setTab(k)} style={{ background: "none", border: "none", color: tab === k ? T.text : T.muted, fontSize: 9, letterSpacing: 1, padding: "12px 14px", cursor: "pointer", borderBottom: tab === k ? "2px solid " + T.accent : "2px solid transparent", whiteSpace: "nowrap", fontFamily: "inherit", fontWeight: tab === k ? 700 : 400 }}>
+            {l}{k !== "picks" && !sims[k.slice(1)] ? " ·" : ""}
+          </button>
+        ))}
+      </div>
+      <div style={{ maxWidth: 1000, margin: "0 auto", padding: "16px 16px 60px" }}>
+        {status && <div style={{ ...card, fontSize: 10, color: T.muted, marginBottom: 12 }}>{status}</div>}
+        {rt && <div style={{ fontSize: 8, color: T.dim, marginBottom: 10 }}>Ratings fit on {rt.nGames} completed {SEASON} NFL games.</div>}
+        {tab === "picks" && <Picks picks={picks} kx={kx} />}
+        {active && <GameView g={active} s={sims[active.id]} x={extra[active.id]} rt={rt} kx={kx} />}
+        <div style={{ fontSize: 9, color: T.muted, marginTop: 16, padding: 10, borderTop: "1px solid " + T.border, lineHeight: 1.7 }}>
+          Edges are model fair value minus Kalshi's ask, after the taker fee. The market carries most of the weight, so a big edge usually means a thin or stale quote: check the book before buying. Not betting advice.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Picks({ picks, kx }) {
+  if (!picks.length) return <div style={{ ...card, fontSize: 10, color: T.muted }}>No qualifying edges yet (needs ≥4¢ after fees on a liquid Kalshi quote).</div>;
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      {picks.map(({ g, r }) => (
+        <div key={r.ticker} style={{ ...card, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", borderLeft: "3px solid " + TIER_C[r.tier] }}>
+          <span style={{ background: TIER_C[r.tier] + "22", border: "1px solid " + TIER_C[r.tier] + "55", color: TIER_C[r.tier], fontSize: 8, fontWeight: 700, padding: "2px 6px", borderRadius: 2, letterSpacing: 1 }}>{r.tier}</span>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ fontSize: 12, fontWeight: 700 }}>{r.side === "yes" ? marketLabel(r, g) : "NOT " + marketLabel(r, g)}</div>
+            <div style={{ fontSize: 9, color: T.muted }}>{g.away.abbr} @ {g.home.abbr} · {new Date(g.date).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}</div>
+          </div>
+          <div style={{ fontSize: 10, textAlign: "right" }}>
+            <div>model <b style={{ color: T.purple }}>{(r.pSide * 100).toFixed(1)}%</b> · ask <b>{r.ask}¢</b></div>
+            <div style={{ color: T.green }}>edge +{r.edge.toFixed(1)}¢</div>
+          </div>
+          <BuyButton r={r} kx={kx} label={r.side === "yes" ? marketLabel(r, g) : "NOT " + marketLabel(r, g)} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BuyButton({ r, kx, label }) {
+  const [st, setSt] = useState("idle");
+  if (!kx || !kx.credentials || !kx.tradingEnabled) return null;
+  async function buy() {
+    const dollars = parseFloat(prompt(`Buy ${label} at ${r.ask}¢ on Kalshi.\nHow many dollars? (server cap $${kx.maxOrderDollars})`, "10") || "0");
+    if (!(dollars > 0)) return;
+    const count = Math.floor(dollars / (r.ask / 100));
+    if (count < 1) return;
+    if (!confirm(`Place: ${count} contracts of ${label} at ${r.ask}¢ (risk $${(count * r.ask / 100).toFixed(2)})?`)) return;
+    setSt("placing");
+    const yesPrice = r.side === "yes" ? r.ask : 100 - r.ask;
+    try {
+      const res = await fetch("/api/kx/portfolio/events/orders", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticker: r.ticker, side: r.side === "yes" ? "bid" : "ask", price: (yesPrice / 100).toFixed(2), count: String(count), time_in_force: "good_till_canceled" }) });
+      const d = await res.json();
+      if (!res.ok) throw new Error(typeof d.error === "string" ? d.error : JSON.stringify(d.error || d));
+      setSt("ok");
+    } catch (e) { alert(e.message); setSt("idle"); }
+  }
+  if (st === "ok") return <span style={{ fontSize: 8, color: T.green, fontWeight: 700 }}>✓ ORDER SENT</span>;
+  return <button onClick={buy} disabled={st === "placing"} style={{ ...btn, color: T.green, borderColor: T.green + "66" }}>{st === "placing" ? "…" : "BUY ON KALSHI"}</button>;
+}
+
+function GameView({ g, s, x, rt, kx }) {
+  if (!s) return <div style={{ ...card, fontSize: 10, color: T.muted }}>Simulating…</div>;
+  const b = s.b;
+  const fmtLine = (sp) => sp == null ? "—" : `${sp >= 0 ? g.home.abbr : g.away.abbr} -${Math.abs(sp).toFixed(1)}`;
+  const winRow = s.rows.find(r => r.kind === "win" && r.side === "home");
+  const rows = s.rows.slice().sort((a, c) => (a.kind > c.kind ? 1 : a.kind < c.kind ? -1 : a.side > c.side ? 1 : a.side < c.side ? -1 : a.line - c.line));
+  return (
+    <div>
+      <div style={{ ...card, marginBottom: 12 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>{g.away.name} <span style={{ color: T.muted, fontSize: 11 }}>{g.away.record}</span> <span style={{ color: T.muted }}>@</span> {g.home.name} <span style={{ color: T.muted, fontSize: 11 }}>{g.home.record}</span></div>
+        <div style={{ fontSize: 9, color: T.muted, marginBottom: 10 }}>{new Date(g.date).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {g.venue}{g.neutral ? " (neutral)" : ""} · {g.broadcast}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 10, fontSize: 10 }}>
+          <Cell label="Model spread" value={fmtLine(b.spreadHome)} color={T.purple} />
+          <Cell label="Market (DK)" value={b.market ? fmtLine(b.market.spreadHome) : "—"} />
+          <Cell label="Results rating" value={b.results ? fmtLine(b.results.spreadHome) : "n/a"} />
+          <Cell label="ESPN FPI" value={b.fpiSpread != null ? fmtLine(b.fpiSpread) : "n/a"} />
+          <Cell label="Model total" value={b.total.toFixed(1)} color={T.purple} sub={`market ${b.market && b.market.total || "—"} · results ${b.results ? b.results.total.toFixed(1) : "n/a"}`} />
+          <Cell label={g.home.abbr + " win"} value={(s.pHome * 100).toFixed(1) + "%"} color={T.purple} sub={(winRow ? `Kalshi ${CFB.mid(winRow)?.toFixed(0) ?? "—"}% · ` : "") + `tie ${(s.pTie * 100).toFixed(1)}%`} />
+          <Cell label="Spread of outcomes" value={`±${s.sdMargin.toFixed(1)}`} sub={`margin SD · total SD ${s.sdTotal.toFixed(1)}`} />
+        </div>
+      </div>
+      <KeyNumbers g={g} s={s} />
+      {!x || !x.markets ? <div style={{ ...card, fontSize: 10, color: T.muted }}>No Kalshi markets found for this game.</div> : (
+        <div style={{ ...card, padding: 0, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+            <thead><tr>{["Market", "Kalshi bid/ask", "Model fair", "Best side", "Edge", ""].map(h => <th key={h} style={{ textAlign: "left", color: T.muted, fontSize: 8, letterSpacing: 1, padding: "8px 10px", borderBottom: "1px solid " + T.border, textTransform: "uppercase" }}>{h}</th>)}</tr></thead>
+            <tbody>{rows.map(r => (
+              <tr key={r.ticker} style={{ opacity: r.yesAsk - r.yesBid > 6 ? 0.5 : 1 }}>
+                <td style={td}>{marketLabel(r, g)}</td>
+                <td style={td}>{r.yesBid}/{r.yesAsk}¢</td>
+                <td style={{ ...td, color: T.purple }}>{r.fair.toFixed(1)}¢</td>
+                <td style={td}>{r.side.toUpperCase()} @ {r.ask}¢</td>
+                <td style={{ ...td, color: r.tier ? TIER_C[r.tier] : (r.edge || 0) > 0 ? T.text : T.muted, fontWeight: r.tier ? 700 : 400 }}>{r.edge != null ? (r.edge >= 0 ? "+" : "") + r.edge.toFixed(1) + "¢" : "—"} {r.tier || ""}</td>
+                <td style={td}>{r.tier && <BuyButton r={r} kx={kx} label={(r.side === "yes" ? "" : "NOT ") + marketLabel(r, g)} />}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// How often each final margin happens in the sim (home team's view). NFL results pile up on 3, 7, 10 and 14.
+function KeyNumbers({ g, s }) {
+  if (!s.keys) return null;
+  const max = Math.max(...s.keys.map(k => k[1]));
+  return (
+    <div style={{ ...card, marginBottom: 12 }}>
+      <div style={{ fontSize: 8, color: T.muted, letterSpacing: 2, marginBottom: 8 }}>FINAL MARGIN · {g.away.abbr} WINS BY ← → {g.home.abbr} WINS BY</div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 90 }}>
+        {s.keys.map(([m, p]) => {
+          const key = [3, 7, 10, 14, 6, 4].includes(Math.abs(m));
+          return (
+            <div key={m} title={`${m > 0 ? g.home.abbr : g.away.abbr} by ${Math.abs(m)}: ${(p * 100).toFixed(1)}%`} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
+              <div style={{ width: "100%", height: Math.max(2, p / max * 72), background: (m > 0 ? T.blue : T.orange) + (key ? "" : "77"), borderRadius: 1 }} />
+              <div style={{ fontSize: 7, color: key ? T.text : T.dim, marginTop: 2 }}>{Math.abs(m)}</div>
+            </div>);
+        })}
+      </div>
+      <div style={{ fontSize: 8, color: T.dim, marginTop: 6 }}>Brighter bars are the key numbers. A spread that crosses one (say 2.5 to 3.5) moves the price far more than one that doesn't.</div>
+    </div>
+  );
+}
+const td = { padding: "6px 10px", borderBottom: "1px solid " + T.border + "66" };
+function Cell({ label, value, sub, color }) {
+  return <div><div style={{ fontSize: 8, color: T.muted, letterSpacing: 1, textTransform: "uppercase", marginBottom: 3 }}>{label}</div><div style={{ fontSize: 14, fontWeight: 700, color: color || T.text }}>{value}</div>{sub && <div style={{ fontSize: 8, color: T.muted }}>{sub}</div>}</div>;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

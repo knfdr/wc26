@@ -1,4 +1,5 @@
-// Sharp Sim — College football model + live auto-trader decision engine.
+// Sharp Sim — Football model (college + NFL) + live auto-trader decision engine.
+// Games carry g.sport ("cfb" default, or "nfl"); the drive sim, overtime rules and defaults follow the sport.
 // Pure functions only (no fetch, no DOM) so the same file runs in the browser
 // (window.CFB) and in node tests (require("./js/cfb-engine.js")).
 (function (root) {
@@ -68,7 +69,7 @@ function clockToSeconds(clock) {
 }
 
 // Parse one ESPN scoreboard event into a compact game object.
-function parseEspnEvent(e) {
+function parseEspnEvent(e, sport) {
   const c = e.competitions && e.competitions[0]; if (!c) return null;
   const home = c.competitors.find(x => x.homeAway === "home");
   const away = c.competitors.find(x => x.homeAway === "away");
@@ -106,6 +107,7 @@ function parseEspnEvent(e) {
     record: (t.records && t.records[0] && t.records[0].summary) || "",
   });
   return {
+    sport: sport || "cfb",
     id: e.id, date: e.date, name: e.name, shortName: e.shortName,
     neutral: !!c.neutralSite, venue: c.venue && c.venue.fullName,
     state: type.state, statusName: type.name, detail: type.shortDetail || type.detail,
@@ -260,6 +262,29 @@ function mulberry32(seed) {
 const DRIVES_PER_TEAM = 12;    // CFB FBS average possessions per team per game
 const DRIVE_SECS = 150;        // average possession length (3600 / 24)
 const LEAGUE_DRIVE_PTS = 2.25; // league average points per possession
+// Per-sport drive-sim settings. NFL: the clock runs after first downs (~10.8 drives a team), kickoffs come out to the
+// 35 (drives start ~own 30), kickers make ~57-yarders, and OT is a 10-minute period where both teams get the ball.
+const SPORTS = {
+  cfb: { drivesPerTeam: DRIVES_PER_TEAM, driveSecs: DRIVE_SECS, leagueDrivePts: LEAGUE_DRIVE_PTS, freshYtg: 72, defaultTotal: 55, sigmaMargin: 15.0, ot: "cfb" },
+  nfl: { drivesPerTeam: 10.8, driveSecs: 167, leagueDrivePts: 2.06, freshYtg: 70, defaultTotal: 44, sigmaMargin: 13.2, ot: "nfl" },
+};
+const sportOf = (g) => SPORTS[(g && g.sport) || "cfb"] || SPORTS.cfb;
+// NFL drive outcomes (2023-25): ~22.5% TD and ~16.5% FG from the own 30; FG range to about the 40 (57 yards).
+function driveProbsNfl(ytg, down, dist, strength) {
+  const y = ytg == null ? 70 : clamp(ytg, 1, 99);
+  let pTD = 0.225 + (70 - y) * 0.0058;
+  let pFG = y <= 25 ? 0.38 : y <= 40 ? 0.29 : y <= 55 ? 0.21 : 0.165;
+  if (down === 3) { const d = dist || 7; pTD *= d <= 2 ? 0.95 : d <= 6 ? 0.8 : d <= 10 ? 0.65 : 0.5; }
+  if (down === 4) {
+    if (y > 40 && (dist || 10) > 2) { pTD *= 0.12; pFG = y <= 42 ? 0.45 : 0; }                         // punt / very long FG
+    else if (y <= 40 && (dist || 10) > 3) { pTD *= 0.3; pFG = y <= 25 ? 0.9 : y <= 33 ? 0.82 : 0.68; }  // FG attempt
+    else pTD *= 0.75;                                                                                  // go for it
+  }
+  const k = Math.pow(clamp(strength, 0.3, 2.5), 0.85);
+  pTD = clamp(pTD * k, 0.01, 0.85); pFG = clamp(pFG * Math.pow(k, 0.4), 0, 0.92 - pTD);
+  return { pTD, pFG };
+}
+const driveProbsFor = (S) => S.ot === "nfl" ? driveProbsNfl : driveProbs;
 
 // Probabilities of TD / FG for a possession, given field position and the offense's strength.
 function driveProbs(ytg, down, dist, strength) {
@@ -286,11 +311,13 @@ function simRemaining(g, homePts, awayPts, n, opts) {
   const delta = opts.delta || 0, kappa = opts.kappa || 1;
   const rnd = mulberry32(opts.seed || 12345);
   const margins = new Int16Array(n), totals = new Int16Array(n);
-  const sH = Math.max(0.2, homePts / DRIVES_PER_TEAM / LEAGUE_DRIVE_PTS * Math.exp(delta) * kappa);
-  const sA = Math.max(0.2, awayPts / DRIVES_PER_TEAM / LEAGUE_DRIVE_PTS * Math.exp(-delta) * kappa);
-  const fresh = { H: driveProbs(72, 1, 10, sH), A: driveProbs(72, 1, 10, sA) };
+  const S = sportOf(g), DP = driveProbsFor(S), nfl = S.ot === "nfl";
+  const sH = Math.max(0.2, homePts / S.drivesPerTeam / S.leagueDrivePts * Math.exp(delta) * kappa);
+  const sA = Math.max(0.2, awayPts / S.drivesPerTeam / S.leagueDrivePts * Math.exp(-delta) * kappa);
+  const fresh = { H: DP(S.freshYtg, 1, 10, sH), A: DP(S.freshYtg, 1, 10, sA) };
   const ot = g.period > 4 || (g.period === 4 && g.secondsLeft === 0 && g.home.score === g.away.score);
-  const otProbs = { H: driveProbs(25, 1, 10, sH), A: driveProbs(25, 1, 10, sA) };
+  const otProbs = nfl ? fresh : { H: driveProbs(25, 1, 10, sH), A: driveProbs(25, 1, 10, sA) };
+  const playoff = !!opts.playoff;
   const halftime = g.statusName === "STATUS_HALFTIME";
   for (let i = 0; i < n; i++) {
     let h = g.home.score, a = g.away.score;
@@ -302,19 +329,47 @@ function simRemaining(g, homePts, awayPts, n, opts) {
       const lead = poss === "H" ? h - a : a - h;
       // leading team with the ball late just runs the clock out
       if (lead > 0 && t <= 110 && rnd() < 0.85) break;
-      const pr = first ? driveProbs(g.yardsToGoal, g.down, g.distance, poss === "H" ? sH : sA) : fresh[poss];
+      const pr = first ? DP(g.yardsToGoal, g.down, g.distance, poss === "H" ? sH : sA) : fresh[poss];
       // clock management: trailing team hurries late; leading team grinds in the 4th quarter
       const hurry = lead < 0 && t < 480;
       const grind = lead > 0 && t < 900 ? 1.4 : 1;
-      const dt = first ? DRIVE_SECS * 0.45 * (0.3 + rnd()) * grind : (hurry ? 95 : DRIVE_SECS * grind) * (0.4 + 1.2 * rnd());
+      const dt = first ? S.driveSecs * 0.45 * (0.3 + rnd()) * grind : (hurry ? 95 : S.driveSecs * grind) * (0.4 + 1.2 * rnd());
       const u = rnd();
       let pts = 0, def = 0;
-      if (u < pr.pTD) { const x = rnd(); pts = x < 0.93 ? 7 : x < 0.97 ? 6 : 8; }
-      else if (u < pr.pTD + pr.pFG) pts = 3;
+      // NFL end-game play-calling: inside 5 minutes a team down 1-3 (or tied) plays for the field goal, a team down 4-8
+      // needs the touchdown, and two-point tries follow the chart. This is what piles final margins onto 3 and 7.
+      let pTD = pr.pTD, pFG = pr.pFG;
+      if (nfl && t < 300) {
+        if (lead < 0 && lead >= -3) { pFG = Math.min(0.62, pFG * 2.4); pTD *= 0.8; }
+        else if (lead === 0 && t < 200) { pFG = Math.min(0.55, pFG * 2.0); pTD *= 0.85; }
+        else if (lead <= -4 && lead >= -8) { pTD = Math.min(0.62, pTD * 1.45); pFG = 0.02; }
+        else if (lead > 0) { pTD *= 0.85; pFG *= 1.2; }   // leading: run the ball, take the points
+      }
+      if (u < pTD) {
+        const x = rnd();
+        if (nfl) { const after = lead + 6; const goFor2 = after === -2 || (t < 600 && (after === -5 || after === 1 || after === -10));
+                   pts = goFor2 ? (x < 0.48 ? 8 : 6) : x < 0.95 ? 7 : 6; }
+        else pts = x < 0.93 ? 7 : x < 0.97 ? 6 : 8;
+      }
+      else if (u < pTD + pFG) pts = 3;
       else { const x = rnd(); if (x < 0.018) def = 7; else if (x < 0.023) def = 2; }
       // a drive can't take longer than the time left; a score on the final drive still counts
       if (poss === "H") { h += pts; a += def; } else { a += pts; h += def; }
       t -= dt; first = false; poss = poss === "H" ? "A" : "H";
+    }
+    if (h === a && nfl) {
+      // NFL OT (2025 rules): both teams get a possession, then sudden death in a 10-minute period; ties stand in the regular season
+      const drive = (side, mode) => {   // mode: "any" | "need-td" (down 6-8: four-down territory, TD or bust)
+        const pr = otProbs[side], u = rnd();
+        if (mode === "need-td") return u < Math.min(0.85, pr.pTD * 1.35) ? (rnd() < 0.6 ? 7 : 8) : 0;
+        return u < pr.pTD ? 7 : u < pr.pTD + pr.pFG ? 3 : 0;
+      };
+      const f = rnd() < 0.5 ? "H" : "A", sec = f === "H" ? "A" : "H";
+      const p1 = drive(f, "any"); if (f === "H") h += p1; else a += p1;
+      const p2 = drive(sec, p1 >= 6 ? "need-td" : "any"); if (sec === "H") h += p2; else a += p2;
+      let side = f, left = playoff ? 99 : (() => { const r = rnd(); return r < 0.2 ? 1 : r < 0.65 ? 2 : 3; })();   // possessions left in the period after the first two
+      while (h === a && left-- > 0) { const pts = drive(side, "any"); if (side === "H") h += pts; else a += pts; side = side === "H" ? "A" : "H"; }
+      margins[i] = h - a; totals[i] = h + a; continue;
     }
     if (h === a) { // overtime: alternate possessions from the 25 until someone leads after a round
       let round = 0;
@@ -350,9 +405,9 @@ function makeDist(margins, totals) {
 }
 
 // Points per team implied by a spread (expected home margin) and total.
-function teamPoints(pre) {
+function teamPoints(pre, sport) {
   const s = pre && isFinite(pre.spreadHome) ? pre.spreadHome : 0;
-  const t = pre && isFinite(pre.total) ? pre.total : 55;
+  const t = pre && isFinite(pre.total) ? pre.total : (SPORTS[sport] || SPORTS.cfb).defaultTotal;
   return { home: Math.max(3, (t + s) / 2), away: Math.max(3, (t - s) / 2) };
 }
 
@@ -363,7 +418,7 @@ const _calCache = new Map(), _lastCal = new Map();
 function liveDistribution(g, pre, markets, cfg) {
   cfg = cfg || {};
   const alpha = cfg.alpha != null ? cfg.alpha : 0.35;
-  const tp = teamPoints(pre);
+  const tp = teamPoints(pre, g.sport);
   const N_CAL = 1500, N = cfg.sims || 8000;
   const seed = 987654;
   const ot = g.period > 4 || (g.period === 4 && g.secondsLeft === 0 && g.home.score === g.away.score);
@@ -508,6 +563,61 @@ function pregameSim(spreadHome, total, n) {
   };
 }
 
+// Pregame drive-level Monte Carlo: tilt (delta) and scoring rate (kappa) are fitted so the median margin sits on the
+// spread and the median total on the total (half a push counted on each side), then n full games are simulated.
+// Margins land on 3, 7, 10, 14... the way real football scores do, which a normal curve can't reproduce.
+function pregameDriveSim(spreadHome, total, n, sport, opts) {
+  opts = opts || {};
+  n = n || 100000;
+  const g0 = { id: "pre", sport: sport || "nfl", state: "pre", statusName: "STATUS_SCHEDULED", period: 0, secondsLeft: 3600, clockSec: 900,
+    home: { score: 0 }, away: { score: 0 }, possession: null };
+  const tp = teamPoints({ spreadHome, total }, g0.sport);
+  const N = opts.calSims || 6000, seed = opts.seed || 4242;
+  const medGap = (d, L, kind) => kind === "m" ? d.pCover("home", L) + 0.5 * (d.pCover("home", L - 1) - d.pCover("home", L)) * (L % 1 === 0 ? 1 : 0)
+                                            : d.pOver(L) + 0.5 * (d.pOver(L - 1) - d.pOver(L)) * (L % 1 === 0 ? 1 : 0);
+  const bisect = (lo, hi, iters, f) => { for (let it = 0; it < iters; it++) { const m = (lo + hi) / 2; if (f(m)) lo = m; else hi = m; } return (lo + hi) / 2; };
+  let delta = 0, kappa = 1;
+  for (let round = 0; round < 2; round++) {
+    delta = bisect(-2, 2, 13, m => medGap(simRemaining(g0, tp.home, tp.away, N, { delta: m, kappa, seed }), spreadHome, "m") < 0.5);
+    kappa = bisect(0.4, 2.5, 12, m => medGap(simRemaining(g0, tp.home, tp.away, N, { delta, kappa: m, seed }), total, "t") < 0.5);
+  }
+  const dist = simRemaining(g0, tp.home, tp.away, n, { delta, kappa, seed: seed + 7, playoff: opts.playoff });
+  let sm = 0, sm2 = 0, st = 0, st2 = 0, ties = 0;
+  for (let i = 0; i < dist.n; i++) { const m = dist.margins[i], t = dist.totals[i]; sm += m; sm2 += m * m; st += t; st2 += t * t; if (m === 0) ties++; }
+  dist.sdMargin = Math.sqrt(sm2 / dist.n - (sm / dist.n) ** 2); dist.sdTotal = Math.sqrt(st2 / dist.n - (st / dist.n) ** 2);
+  dist.pTie = ties / dist.n; dist.pAway = 1 - dist.pHome - dist.pTie; dist.cal = { delta, kappa };
+  // how often each final margin happens (home perspective), for the key-number view
+  dist.marginFreq = (x) => { let k = 0; for (let i = 0; i < dist.n; i++) if (dist.margins[i] === x) k++; return k / dist.n; };
+  // NFL shape correction: independent drives let underdogs come back too often (a 7.5-point favourite wins ~76%
+  // historically; the raw sim says ~70%). Shift the margin curve in probit space between a 0 margin and the spread so
+  // P(win) matches the long-run spread-to-moneyline table while the median stays on the line.
+  if (g0.sport === "nfl" && Math.abs(spreadHome) >= 1.5 && opts.shape !== false) {
+    const fav = Math.abs(spreadHome), pT = nflFavWinPct(fav);
+    const pSim = spreadHome > 0 ? dist.pCover("home", 0) : dist.pCover("away", 0);
+    const zc = (p) => PhiInv(clamp(p, 0.005, 0.995));
+    // shift (in probit space, home view) is full on the underdog side of 0, fades to nothing at the spread, and is zero
+    // beyond it, so blowout and key-number tails are left as the sim drew them
+    const D = (zc(pT) - zc(pSim)) * (spreadHome > 0 ? 1 : -1);
+    const w = (T) => spreadHome > 0 ? (T <= 0 ? 1 : T >= spreadHome ? 0 : 1 - T / spreadHome) : (T >= 0 ? 1 : T <= spreadHome ? 0 : 1 - T / spreadHome);
+    const hm = (T) => { const p = dist.pCover("home", T), k = w(T); return k ? Phi(PhiInv(clamp(p, 0.0005, 0.9995)) + D * k) : p; };
+    const corr = { margin: { kind: "nfl-shape", D, spread: spreadHome }, total: null };
+    const out = { ...dist, corrected: corr, pHome: hm(0), pCover: (side, line) => side === "home" ? hm(line) : 1 - hm(-line), pOver: dist.pOver };
+    Object.assign(out, { sdMargin: dist.sdMargin, sdTotal: dist.sdTotal, pTie: dist.pTie, cal: dist.cal, marginFreq: dist.marginFreq, raw: dist, shape: corr });
+    out.pAway = out.pCover("away", 0);
+    return out;
+  }
+  return dist;
+}
+// Long-run NFL favourite win rate by closing spread (points -> probability), interpolated.
+const NFL_FAV = [[0, .50], [1, .515], [1.5, .525], [2, .535], [2.5, .55], [3, .59], [3.5, .615], [4, .63], [4.5, .645], [5, .66], [5.5, .67], [6, .69], [6.5, .705],
+  [7, .74], [7.5, .76], [8, .77], [8.5, .78], [9, .795], [9.5, .805], [10, .82], [10.5, .83], [11, .84], [11.5, .85], [12, .855], [12.5, .865], [13, .875], [13.5, .885],
+  [14, .895], [15, .91], [16, .92], [17, .93], [18, .94], [20, .955], [24, .975], [30, .99]];
+function nflFavWinPct(s) {
+  s = Math.abs(s); if (s >= 30) return 0.99;
+  for (let i = 1; i < NFL_FAV.length; i++) if (s <= NFL_FAV[i][0]) { const [x0, y0] = NFL_FAV[i - 1], [x1, y1] = NFL_FAV[i]; return y0 + (y1 - y0) * (s - x0) / (x1 - x0); }
+  return 0.99;
+}
+
 // ── Kalshi market parsing ────────────────────────────────────────────────────
 function normName(s) {
   return String(s || "").toLowerCase()
@@ -516,6 +626,8 @@ function normName(s) {
 }
 function nameScore(kName, team) {
   const k = normName(kName);
+  const two = /^(los angeles|new york) ([a-z])$/.exec(k);
+  if (two && normName(team.location) === two[1]) return String(team.abbr || "").toLowerCase().endsWith(two[2]) ? 1 : 0.05;
   const cands = [team.location, team.short, team.name, team.abbr].map(normName).filter(Boolean);
   let best = 0;
   for (const c of cands) {
@@ -944,7 +1056,7 @@ function decide(input) {
 const API = { P, Phi, PhiInv, erf, clamp, median, expectedPoints, clockToSeconds, parseEspnEvent,
   liveProjection, pHomeWin, pCover, pOver, pregameSim, normName, nameScore, sideForName, matchEventScore,
   parseKalshiMarket, modelYesProb, mid, marketImplied, blendedProjection, feeCents, DEFAULT_CONFIG,
-  sideQuotes, decide, applyKalshiLive, applyEspnCore, feedProgress, fitLadder, driveProbs, simRemaining, liveDistribution, teamPoints, mulberry32 };
+  SPORTS, pregameDriveSim, driveProbsNfl, nflFavWinPct, sideQuotes, decide, applyKalshiLive, applyEspnCore, feedProgress, fitLadder, driveProbs, simRemaining, liveDistribution, teamPoints, mulberry32 };
 if (typeof module !== "undefined" && module.exports) module.exports = API;
 else root.CFB = API;
 })(typeof window !== "undefined" ? window : globalThis);
