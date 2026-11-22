@@ -1,7 +1,8 @@
 // Sharp Sim shared betting helpers, used by every sport page and the settings page.
 //   Grades: how good a bet is, from the model's chance to cash and the price you pay for it.
 //   Sizing: a suggested dollar amount from the sport's base bet (settings) and the grade.
-//   Settings + record: stored in the site's GitHub gist (synced across devices), cached in localStorage.
+//   Settings: each signed-in person's own, saved on the server (/api/account/settings), cached in localStorage.
+//   Record: the model's shared pick record in the site's GitHub gist.
 //   BetButton: tap -> confirm sheet -> order on Kalshi through /api/kx (the server enforces its own dollar cap).
 // Plain JS (no JSX) so it loads with a normal <script src="js/bets.js"> after React.
 (function (root) {
@@ -41,7 +42,7 @@
   const merge = (a, b) => { const o = { ...a }; for (const k in b || {}) o[k] = b[k] && typeof b[k] === "object" && !Array.isArray(b[k]) && a[k] && typeof a[k] === "object" ? merge(a[k], b[k]) : b[k]; return o; };
 
   // ── Settings ────────────────────────────────────────────────────────────────
-  const LS_SETTINGS = "sharp_settings_v1";
+  const LS_SETTINGS = "sharp_settings_v1" + (root.SS_USER && root.SS_USER.email ? ":" + root.SS_USER.email : "");
   const GIST_SETTINGS = "sharpsim_settings.json", GIST_BETS = "sharpsim_bets.json";
   let settings = (() => { try { return merge(DEFAULTS, JSON.parse(localStorage.getItem(LS_SETTINGS) || "null")); } catch (e) { return merge(DEFAULTS, null); } })();
   const listeners = new Set();
@@ -64,10 +65,15 @@
   let settingsLoad = null;   // once per page load
   function loadSettings() { return settingsLoad || (settingsLoad = loadSettingsNow()); }
   async function loadSettingsNow() {
-    try { const d = await gistRead(); const f = d.files && d.files[GIST_SETTINGS]; if (f && f.content) applySettings(JSON.parse(f.content)); } catch (e) {}
+    try { const r = await fetch("/api/account/settings"); const d = r.ok ? await r.json() : null; if (d && d.settings) applySettings(d.settings); } catch (e) {}
     return settings;
   }
-  async function saveSettings(s) { applySettings(s); await gistWriteFile(GIST_SETTINGS, settings); return settings; }
+  async function saveSettings(s) {
+    applySettings(s);
+    const r = await fetch("/api/account/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) });
+    if (!r.ok) throw new Error("settings save " + r.status);
+    return settings;
+  }
 
   // ── Grades and sizing ───────────────────────────────────────────────────────
   // p: model chance to cash (0-1). price: what one $1 contract of this side costs, in cents.
@@ -243,7 +249,7 @@
     const [open, setOpen] = useState(false);
     const [done, setDone] = useState(null);
     if (!pick || !pick.ticker || !(pick.price > 0 && pick.price < 100)) return null;
-    if (kx && kx.canTrade === false) return null; // signed in as a friend: picks are view-only
+    if (kx && kx.canTrade === false) return null; // no Kalshi key on this person's account: picks only, no one-tap bet
     if (done) return h("span", { className: "bet-done" }, "✓ " + done);
     const g = pick.grade || grade(pick.chance / 100, pick.price, s);
     const hot = g && (g.key === "STRONG" || g.key === "GOOD");

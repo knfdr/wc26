@@ -1,7 +1,9 @@
 // Signed Kalshi proxy: /api/kx/<kalshi path>  ->  https://.../trade-api/v2/<kalshi path>
-// Behind the site's sign-in middleware, which also keeps orders and /portfolio reads owner-only (lib/auth.js).
-// Only allow-listed paths; order writes pass a server-side guard.
-import { kalshiFetch, checkOrder, hasCredentials } from "../../../lib/kalshi.js";
+// Behind the site's sign-in middleware. Every request is signed with the signed-in person's OWN Kalshi key
+// (lib/accounts.js); people without one get public market data only. Only allow-listed paths; order writes pass a
+// server-side guard (site kill switch + the person's own per-bet cap).
+import { kalshiFetch, checkOrder } from "../../../lib/kalshi.js";
+import { kalshiEnvFor, publicKalshiEnv } from "../../../lib/accounts.js";
 
 const PUBLIC_GET = [/^\/markets(\/[A-Z0-9.-]+(\/orderbook|\/trades)?)?$/, /^\/markets\/trades$/, /^\/events(\/[A-Z0-9.-]+)?$/,
   /^\/series(\/[A-Z0-9.-]+)?$/, /^\/exchange\/status$/, /^\/milestones(\/[\w-]+)?$/, /^\/live_data\/milestone\/[\w-]+(\/game_stats)?$/, /^\/live_data\/batch$/];
@@ -12,28 +14,36 @@ const ORDER_CANCEL = /^\/portfolio\/events\/orders\/[\w-]+$/;
 const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
 const pass = (r) => new Response(r.text, { status: r.status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
 
-export async function onRequest({ request, env, params, data }) {
+export async function onRequest({ request, env: siteEnv, params, data }) {
   const url = new URL(request.url);
   const segs = Array.isArray(params.path) ? params.path : (params.path ? [params.path] : []);
   const path = "/" + segs.join("/");
   const qs = url.search || "";
   const method = request.method.toUpperCase();
-  const creds = hasCredentials(env);
+  const own = await kalshiEnvFor(siteEnv, data && data.user);
+  const creds = !!own;
+  const env = own || publicKalshiEnv(siteEnv);
 
   try {
     if (path === "/_status" && method === "GET") {
-      return json({ credentials: creds, env: (env.KALSHI_ENV || "prod").toLowerCase(),
-        tradingEnabled: env.KALSHI_TRADING_ENABLED === "1", canTrade: !!(data && data.user && data.user.role === "owner"), maxOrderDollars: parseFloat(env.KALSHI_MAX_ORDER_DOLLARS || "25") });
+      const tradingEnabled = siteEnv.KALSHI_TRADING_ENABLED === "1";
+      return json({ credentials: creds, source: own ? own.source : null, env: (env.KALSHI_ENV || "prod").toLowerCase(),
+        tradingEnabled, canTrade: creds, maxOrderDollars: parseFloat(env.KALSHI_MAX_ORDER_DOLLARS || "25") });
     }
     if (method === "GET") {
-      if (PUBLIC_GET.some(r => r.test(path))) return pass(await kalshiFetch(env, "GET", path + qs, null, { sign: creds }));
+      // Market data always comes from prod (the site's picks are prod markets): signed with the person's own prod key
+      // if they have one, otherwise unsigned (Kalshi's market endpoints are public).
+      if (PUBLIC_GET.some(r => r.test(path))) {
+        const prodKey = creds && (env.KALSHI_ENV || "prod").toLowerCase() === "prod";
+        return pass(await kalshiFetch(prodKey ? env : publicKalshiEnv(siteEnv), "GET", path + qs, null, { sign: prodKey }));
+      }
       if (PRIVATE_GET.some(r => r.test(path))) {
-        if (!creds) return json({ error: "Kalshi credentials not configured" }, 503);
+        if (!creds) return json({ error: "No Kalshi API key on your account. Add one on the Account page." }, 403);
         return pass(await kalshiFetch(env, "GET", path + qs, null));
       }
       return json({ error: "Path not allowed" }, 403);
     }
-    if (!creds) return json({ error: "Kalshi credentials not configured" }, 503);
+    if (!creds) return json({ error: "No Kalshi API key on your account. Add one on the Account page." }, 403);
 
     if (method === "POST" && ORDER_CREATE.test(path)) {
       const order = await request.json();

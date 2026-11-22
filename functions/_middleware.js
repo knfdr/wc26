@@ -1,5 +1,6 @@
 // Every request: work out who is signed in (Cloudflare Access, see lib/auth.js), refuse anyone not invited, keep the
-// owner's Kalshi account owner-only, and add a small "signed in as · sign out" badge to HTML pages.
+// owner's auto trader owner-only, block cross-site writes, and add a small "signed in as · account · sign out" badge to
+// HTML pages. Kalshi routes sign with each person's own key (lib/accounts.js), never the owner's for anyone else.
 import { currentUser, ownerOnly, devMode, accessConfigured } from "../lib/auth.js";
 
 const json = (obj, status) => new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
@@ -16,7 +17,8 @@ function badge(user, signOut) {
   const owner = user.role === "owner";
   return `<div id="ss-auth" style="position:fixed;right:10px;bottom:10px;z-index:2147483000;display:flex;gap:8px;align-items:center;max-width:calc(100vw - 20px);box-sizing:border-box;background:#0b1424ee;border:1px solid #1a2a3e;border-radius:6px;padding:5px 9px;font:10px/1.3 'IBM Plex Mono','Courier New',monospace;color:#9fb0c6">`
     + `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(user.email)}</span>`
-    + `<span style="color:${owner ? "#e8c547" : "#38bdf8"};letter-spacing:1px">${owner ? "OWNER" : "VIEW ONLY"}</span>`
+    + (owner ? `<span style="color:#e8c547;letter-spacing:1px">OWNER</span>` : "")
+    + `<a href="/account" style="color:#38bdf8;text-decoration:underline;white-space:nowrap">Account</a>`
     + `<a href="${signOut}" style="color:#dde5f0;text-decoration:underline;white-space:nowrap">Sign out</a></div>`;
 }
 
@@ -41,6 +43,11 @@ export async function onRequest(context) {
       : page(403, "Not invited", `<p>${esc(user.email)} isn't on this site's guest list. Ask the owner to add you.</p><p><a href="${signOut}">Sign out</a></p>`);
   }
   if (user.role !== "owner" && ownerOnly(request.method, url.pathname)) return json({ error: "Owner only" }, 403);
+  // Writes (orders, key and settings changes) must come from this site's own pages.
+  if (!["GET", "HEAD", "OPTIONS"].includes(request.method.toUpperCase())) {
+    const origin = request.headers.get("Origin");
+    if (origin && origin !== url.origin) return json({ error: "Cross-site request refused" }, 403);
+  }
 
   if (url.pathname === "/api/me") return json({ email: user.email, role: user.role, signOut }, 200);
   if (url.pathname === "/logout") return Response.redirect(new URL(signOut, url).toString(), 302);

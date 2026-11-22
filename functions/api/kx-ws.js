@@ -2,10 +2,12 @@
 // Browsers can't set Kalshi's signed handshake headers, so the function signs and pipes.
 // Only subscription commands are forwarded upstream (the socket is read-only market/fill data).
 import { openKalshiSocket, hasCredentials } from "../../lib/kalshi.js";
+import { kalshiEnvFor } from "../../lib/accounts.js"; // signs with the signed-in person's own key only
 
 const ALLOWED_CMDS = new Set(["subscribe", "unsubscribe", "update_subscription", "list_subscriptions"]);
 
-export async function onRequest({ request, env }) {
+export async function onRequest({ request, env: siteEnv, data }) {
+  const env = (await kalshiEnvFor(siteEnv, data && data.user)) || { KALSHI_ENV: "prod" };
   if (request.headers.get("Upgrade") !== "websocket") {
     return new Response(JSON.stringify({ ok: true, credentials: hasCredentials(env), hint: "connect with a WebSocket" }),
       { status: hasCredentials(env) ? 426 : 503, headers: { "Content-Type": "application/json" } });

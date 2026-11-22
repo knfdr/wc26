@@ -3,10 +3,12 @@
 // POST /api/kalshi {ticker, side:"yes"|"no", count, price (cents)} -> buy limit order
 // Uses the v2 signed API; the old /portfolio/orders endpoint returns 410 since June 2026.
 import { kalshiFetch, checkOrder, hasCredentials } from "../../lib/kalshi.js";
+import { kalshiEnvFor } from "../../lib/accounts.js"; // signs with the signed-in person's own key only
 
 const H = { "Content-Type": "application/json", "Cache-Control": "no-store" };
 
-export async function onRequest({ request, env }) {
+export async function onRequest({ request, env: siteEnv, data }) {
+  const env = (await kalshiEnvFor(siteEnv, data && data.user)) || { KALSHI_ENV: "prod" };
   const url = new URL(request.url);
   try {
     if (request.method === "GET") {

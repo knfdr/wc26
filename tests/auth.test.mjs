@@ -43,10 +43,10 @@ test("roles: owner, friend, everyone else refused", () => {
 });
 
 test("owner-only routes", () => {
-  for (const [m, p] of [["POST", "/api/kx/portfolio/events/orders"], ["DELETE", "/api/kx/portfolio/events/orders/x"], ["GET", "/api/kx/portfolio/balance"],
-    ["GET", "/api/runner/status"], ["POST", "/api/runner/kill"], ["GET", "/api/runner"], ["GET", "/api/kx-ws"], ["POST", "/api/kalshi"], ["PATCH", "/api/gist"]])
+  for (const [m, p] of [["GET", "/api/runner/status"], ["POST", "/api/runner/kill"], ["GET", "/api/runner"], ["PATCH", "/api/gist"]])
     assert.equal(ownerOnly(m, p), true, m + " " + p);
-  for (const [m, p] of [["GET", "/api/kx/markets/KXABC"], ["GET", "/api/kx/_status"], ["GET", "/api/gist"], ["GET", "/api/kalshi"], ["GET", "/api/resolve"], ["GET", "/index.html"], ["GET", "/live.html"]])
+  // Kalshi routes are open to everyone but sign with each person's own key (see accounts tests)
+  for (const [m, p] of [["POST", "/api/kx/portfolio/events/orders"], ["GET", "/api/kx/portfolio/balance"], ["GET", "/api/kx-ws"], ["POST", "/api/kalshi"], ["GET", "/api/kx/markets/KXABC"], ["GET", "/api/kx/_status"], ["GET", "/api/gist"], ["GET", "/api/kalshi"], ["GET", "/api/resolve"], ["GET", "/index.html"], ["GET", "/live.html"]])
     assert.equal(ownerOnly(m, p), false, m + " " + p);
 });
 
