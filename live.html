@@ -3,22 +3,150 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Sharp Sim — Live Auto</title>
+<title>Sharp Sim — Live trader</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/sharp.css">
+<meta name="theme-color" content="#0b0d10">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <script src="js/cfb-engine.js"></script>
+<script src="js/bets.js"></script>
+<script src="js/ui.js"></script>
 <style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html,body{min-height:100vh;background:#070b14;font-family:'IBM Plex Mono','Courier New',monospace;color:#dde5f0}
-::-webkit-scrollbar{width:6px;height:6px}
-::-webkit-scrollbar-track{background:#0c1526}
-::-webkit-scrollbar-thumb{background:#1a2a3e;border-radius:3px}
-a{color:inherit;text-decoration:none}
-input,select{font-family:inherit}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+/* status card: paper / live and running / stopped, impossible to miss */
+.lv-status { margin-bottom: var(--gap); }
+.lv-status.is-live { border-color: color-mix(in srgb, var(--neg) 60%, var(--line)); background: linear-gradient(180deg, color-mix(in srgb, var(--neg) 12%, var(--surface)) 0%, var(--surface) 85%); }
+.lv-status.is-paper { border-color: color-mix(in srgb, var(--pos) 50%, var(--line)); background: linear-gradient(180deg, color-mix(in srgb, var(--pos) 9%, var(--surface)) 0%, var(--surface) 85%); }
+.lv-state { display: flex; align-items: flex-start; gap: 12px; }
+.lv-dot { --c: var(--faint); width: 14px; height: 14px; border-radius: 50%; flex: none; margin-top: 6px; background: var(--c); box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 22%, transparent); }
+.lv-dot.pulse { animation: lv-pulse 1.6s ease-in-out infinite; }
+@keyframes lv-pulse { 50% { box-shadow: 0 0 0 9px color-mix(in srgb, var(--c) 4%, transparent); } }
+.lv-state-title { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; line-height: 1.2; }
+.lv-state-sub { font-size: 14px; color: var(--text-2); margin-top: 3px; }
+.lv-pill { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 999px; font-size: 13px; font-weight: 700; white-space: nowrap; flex: none; margin-left: auto; }
+.lv-pill.paper { background: var(--surface-3); color: var(--text); }
+.lv-pill.live { background: var(--neg); color: var(--bg); }
+.lv-running { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--text-2); margin-top: 10px; }
+.lv-running b { color: var(--text); font-variant-numeric: tabular-nums; }
+.lv-sep { border-top: 1px solid var(--line); margin: 14px 0 12px; }
+.lv-k { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.lv-help { font-size: 13px; color: var(--text-2); margin-top: 6px; line-height: 1.45; }
+.lv-seg { display: grid; grid-template-columns: 1fr 1fr; background: var(--surface-2); border-radius: 12px; padding: 3px; gap: 3px; }
+.lv-seg button { min-height: 44px; border: 0; background: none; border-radius: 9px; font-size: 14px; font-weight: 600; color: var(--text-2); line-height: 1.2; padding: 4px 8px; }
+.lv-seg button small { display: block; font-size: 12px; font-weight: 500; opacity: .8; }
+.lv-seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.lv-seg button.live[aria-pressed="true"] { background: var(--neg); color: var(--bg); }
+.lv-seg button[disabled] { cursor: default; }
+.lv-seg.locked button:not([aria-pressed="true"]) { opacity: .5; }
+.lv-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.lv-actions .btn { flex: 1 1 150px; min-height: 44px; }
+.btn.lv-tall { min-height: 44px; }
+.btn.lv-go-live { background: var(--neg); border-color: var(--neg); color: var(--bg); }
+.btn.lv-danger { color: var(--neg); border-color: color-mix(in srgb, var(--neg) 45%, var(--line)); }
+.lv-checks { display: grid; gap: 8px; margin-top: 12px; }
+.lv-check { display: flex; gap: 10px; font-size: 14px; align-items: flex-start; line-height: 1.4; }
+.lv-check .ic { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; flex: none; margin-top: 1px; }
+.lv-check .ic.ok { color: var(--pos); background: color-mix(in srgb, var(--pos) 16%, transparent); }
+.lv-check .ic.no { color: var(--small); background: color-mix(in srgb, var(--small) 16%, transparent); }
+.lv-check .fix { font-size: 13px; color: var(--text-2); }
+.lv-check code { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+.lv-conn { margin-top: 14px; }
+.lv-conn .chip { height: auto; min-height: 26px; padding: 3px 10px; white-space: normal; }
+.lv-conn .chip b { color: var(--text); }
+.chip .d { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.count { font-size: 14px; font-weight: 500; color: var(--muted); }
+.lv-intro { font-size: 13px; color: var(--text-2); margin: -4px 0 10px; }
+
+/* on/off switch with a 44px tap area */
+.lv-toggle { width: 52px; height: 44px; display: grid; place-items: center; background: none; border: 0; flex: none; padding: 0; }
+.lv-toggle .tr { width: 44px; height: 26px; border-radius: 13px; background: var(--surface-3); position: relative; border: 1px solid var(--line-strong); transition: background .15s; }
+.lv-toggle .kn { position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: left .15s; }
+.lv-toggle[aria-checked="true"] .tr { background: var(--text); border-color: var(--text); }
+.lv-toggle[aria-checked="true"] .kn { left: 20px; background: var(--bg); }
+
+/* game cards */
+.lv-games { display: grid; gap: var(--gap); }
+@media (min-width: 760px) { .lv-games { grid-template-columns: 1fr 1fr; } }
+.lv-game.on { border-color: var(--line-strong); box-shadow: inset 3px 0 0 var(--text); }
+.lv-game + .lv-game { margin-top: 0; }
+.lv-game-top { display: flex; align-items: center; gap: 6px; margin: -8px 0 4px -8px; }
+.lv-game-clock { flex: 1; min-width: 0; font-size: 13px; color: var(--text-2); }
+.lv-game-clock b { color: var(--text); }
+.lv-team { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; padding: 2px 0; }
+.lv-team .nm { font-size: 16px; font-weight: 650; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lv-team .sh { font-size: 13px; color: var(--muted); font-weight: 400; margin-left: 6px; }
+.lv-team .sc { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.lv-poss { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--text-2); margin-left: 7px; vertical-align: 2px; }
+.lv-play { font-size: 13px; color: var(--muted); margin: 6px 0 10px; min-height: 18px; }
+.lv-wp { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; background: var(--surface-2); border-radius: var(--r); padding: 10px 12px; }
+.lv-wp .l { font-size: 12px; color: var(--muted); }
+.lv-wp .v { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.lv-wp .s { font-size: 12px; color: var(--muted); }
+.lv-mkts { margin-top: 10px; }
+.lv-mkts .lh { font-size: 12px; color: var(--muted); display: grid; grid-template-columns: 1fr auto auto; gap: 10px; padding-bottom: 4px; }
+.lv-mkt { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.lv-mkt .q { color: var(--text-2); font-variant-numeric: tabular-nums; text-align: right; }
+.lv-mkt .e { text-align: right; font-weight: 600; min-width: 70px; font-variant-numeric: tabular-nums; }
+.lv-up { display: flex; align-items: center; gap: 6px; padding: 6px var(--pad) 6px 8px; border-top: 1px solid var(--line); }
+.lv-up:first-child { border-top: 0; }
+
+/* positions */
+.lv-plist { display: grid; gap: var(--gap); }
+@media (min-width: 760px) { .lv-plist { grid-template-columns: 1fr 1fr; } }
+.lv-plist > .card + .card { margin-top: 0; }
+.lv-pos { display: grid; gap: 10px; }
+.lv-pos-head { display: flex; gap: 10px; align-items: flex-start; }
+.lv-pos-title { font-size: 16px; font-weight: 650; line-height: 1.3; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.lv-pos-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.lv-pos-pnl { margin-left: auto; text-align: right; font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lv-pos-pnl small { display: block; font-size: 12px; font-weight: 500; color: var(--muted); }
+.lv-nums { display: grid; grid-template-columns: repeat(auto-fit, minmax(68px, 1fr)); gap: 8px; }
+.lv-nums .l { font-size: 12px; color: var(--muted); }
+.lv-nums .v { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.lv-nums .s { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.lv-rail { position: relative; height: 8px; border-radius: 999px; background: var(--track); margin: 8px 0 5px; }
+.lv-rail .zone { position: absolute; top: 0; bottom: 0; }
+.lv-rail .seg { position: absolute; top: 0; bottom: 0; border-radius: 999px; }
+.lv-rail .mk { position: absolute; top: -5px; bottom: -5px; width: 3px; margin-left: -1.5px; border-radius: 2px; background: var(--text); box-shadow: 0 0 0 2px var(--surface); }
+.lv-rail .now { position: absolute; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; border: 2px solid var(--surface); }
+.lv-rail-scale { display: flex; justify-content: space-between; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.lv-rules { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.lv-mini { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.lv-unit { position: relative; }
+.lv-unit input.field { width: 100%; height: 44px; padding-right: 26px; font-variant-numeric: tabular-nums; }
+.lv-unit i { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-style: normal; color: var(--muted); font-size: 14px; pointer-events: none; }
+
+/* P&L */
+.lv-trades { margin-top: 12px; }
+.lv-trade { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.lv-trade .t { font-weight: 600; min-width: 0; }
+.lv-trade .p { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.lv-trade .m { font-size: 12px; color: var(--muted); grid-column: 1 / -1; }
+
+/* rules form */
+.lv-form h3 { font-size: 15px; font-weight: 650; margin: 4px 0 2px; }
+.lv-form h3 ~ h3 { margin-top: 18px; }
+.lv-form .gsub { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.lv-field { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+.lv-field .fl { font-size: 14px; font-weight: 600; }
+.lv-field .fh { font-size: 13px; color: var(--text-2); line-height: 1.4; grid-column: 1; }
+.lv-field .fc { grid-row: 1 / span 2; grid-column: 2; }
+.lv-field input.field { width: 96px; height: 44px; text-align: right; font-variant-numeric: tabular-nums; }
+.lv-field select.field { height: 44px; max-width: 170px; }
+
+/* collapsible block, activity */
+.lv-fold { width: 100%; display: flex; align-items: center; gap: 10px; text-align: left; min-height: 52px; padding: 10px var(--pad); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); font-size: 14px; font-weight: 600; }
+.lv-fold .sub { display: block; font-size: 12px; font-weight: 400; color: var(--muted); margin-top: 2px; }
+.lv-fold::after { content: ""; margin-left: auto; flex: none; width: 8px; height: 8px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); transition: transform .15s; }
+.lv-fold[aria-expanded="true"]::after { transform: rotate(-135deg); }
+.lv-log { max-height: 300px; overflow-y: auto; font-size: 13px; line-height: 1.5; }
+.lv-log > div { padding: 6px 0; border-top: 1px solid var(--line); }
+.lv-log > div:first-child { border-top: 0; }
+.lv-log .ts { color: var(--faint); font-variant-numeric: tabular-nums; margin-right: 8px; font-size: 12px; }
+.lv-tbl { max-height: 320px; overflow: auto; }
 </style>
 </head>
 <body>
@@ -40,8 +168,9 @@ const LS = { cfg: "sharp_live_cfg_v1", paper: "sharp_live_paper_v1", meta: "shar
              enabled: "sharp_live_enabled_v1", pre: "sharp_live_pre_v1", mode: "sharp_live_mode_v1" };
 const TICK_MS = 3000, ESPN_MS = 5000, EVENTS_MS = 5 * 60000, IDLE_MARKET_MS = 20000;
 
-const T = { bg:"#070b14", navy:"#101d30", navy2:"#0c1526", border:"#1a2a3e", text:"#dde5f0", muted:"#4b6280", dim:"#2a3a52",
-  green:"#22c55e", red:"#ef4444", gold:"#e8c547", purple:"#a78bfa", blue:"#3b82f6", orange:"#f97316", accent:"#f97316" };
+// palette through the design tokens (css/sharp.css), so dark and light both follow
+const T = { bg:"var(--bg)", navy:"var(--surface)", navy2:"var(--surface-2)", border:"var(--line)", text:"var(--text)", muted:"var(--muted)", dim:"var(--faint)",
+  green:"var(--pos)", red:"var(--neg)", gold:"var(--small)", purple:"var(--text)", blue:"var(--series-a)", orange:"var(--series-b)", accent:"var(--text)" };
 
 function load(key, dflt) { try { const v = JSON.parse(localStorage.getItem(key) || "null"); return v == null ? dflt : v; } catch (e) { return dflt; } }
 function save(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) {} }
@@ -759,174 +888,160 @@ function App() {
   const finals = games.filter(g => g.state === "post");
   const nEnabled = Object.entries(enabled).filter(([id, v]) => v && games.some(g => g.id === id && g.state !== "post")).length;
 
+  const leagueName = SPORT === "nfl" ? "NFL" : "College football";
+  const tabBotPos = posList;
+  const toggleGame = (id) => setEnabled(e => ({ ...e, [id]: !e[id] }));
+  const openRules = () => { setShowCfg(true); setTimeout(() => { const el = document.getElementById("rules"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 60); };
+
   return (
-    <div style={{ minHeight: "100vh", background: T.bg }}>
-      {/* Nav */}
-      <div style={{ background: T.navy, borderBottom: "1px solid " + T.border, padding: "10px 16px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <a href="index.html" style={{ fontSize: 9, color: T.muted, letterSpacing: 1 }}>← SHARP SIM</a>
-        <a href={LEAGUE.sim} style={{ fontSize: 9, color: T.muted, letterSpacing: 1 }}>{SPORT === "nfl" ? "NFL SIM" : "CFB SIM"}</a>
-        <div style={{ display: "flex", border: "1px solid " + T.border, borderRadius: 4, overflow: "hidden" }}>
-          {[["cfb", "COLLEGE"], ["nfl", "NFL"]].map(([k, l]) => (
-            <a key={k} href={k === "nfl" ? "live.html?sport=nfl" : "live.html"} style={{ fontSize: 9, letterSpacing: 1, padding: "4px 10px", fontWeight: 700, background: SPORT === k ? T.accent + "33" : "transparent", color: SPORT === k ? T.accent : T.muted }}>{l}</a>))}
-        </div>
-        <div style={{ flex: 1 }} />
-        <ServerBadge server={server} />
-        <StreamBadge info={streamInfo} s={stream.current} />
-        {mode === "live" && balance != null && <span style={{ fontSize: 10, color: T.muted }}>Kalshi balance <b style={{ color: T.text }}>{fmt$(balance)}</b></span>}
-        <span style={{ fontSize: 9, color: T.muted }}>{lastTick ? `tick ${tickMs}ms · ${Math.round((Date.now() - lastTick) / 1000)}s ago` : "starting…"}</span>
+    <UI.Shell active="live">
+      <UI.PageHead eyebrow={`${leagueName} · Kalshi`} title="Live trader"
+        sub="Watches your Kalshi positions during the game and cashes out at the price, stop or trailing stop you set." />
+      <div className="row" style={{ marginTop: -6, marginBottom: 16, flexWrap: "wrap" }}>
+        <LeagueSwitch />
+        <a className="link small" href={LEAGUE.sim}>{SPORT === "nfl" ? "NFL" : "College football"} picks →</a>
       </div>
 
-      {/* Header */}
-      <div style={{ background: "linear-gradient(160deg,#0c1526 0%,#070b14 100%)", borderBottom: "1px solid " + T.border, padding: "22px 16px 18px", textAlign: "center", position: "relative" }}>
-        <div style={{ display: "inline-block", background: T.accent + "1a", border: "1px solid " + T.accent + "44", color: T.accent, fontSize: 9, letterSpacing: 2, padding: "2px 10px", borderRadius: 2, marginBottom: 10 }}>⚡ LIVE AUTO · {LEAGUE.label} · KALSHI</div>
-        <div style={{ fontSize: "clamp(20px,4vw,30px)", fontWeight: 700, letterSpacing: -0.5 }}>Auto Cash-Out Trader</div>
-        <div style={{ fontSize: 10, color: T.muted, marginTop: 6 }}>Drive-by-drive live sim calibrated to Kalshi's own ladder · take-profit / stop-loss / trailing exits · re-entry for the rest of the game</div>
+      {err && <div className="note bad" style={{ marginBottom: 12 }}>{err}</div>}
+
+      <ServerRunner cfg={cfg} enabled={enabled} liveGames={liveGames} nEnabled={nEnabled} browserRunning={running} browserMode={mode} onStatus={setRunnerSt} onRules={openRules}
+        onAllOn={() => setEnabled(e => { const n = { ...e }; liveGames.forEach(g => n[g.id] = true); return n; })}
+        foot={<div className="wrap-row lv-conn">
+          <ServerBadge server={server} />
+          <StreamBadge info={streamInfo} s={stream.current} />
+          {mode === "live" && balance != null && <span className="chip">Kalshi balance <b>{fmt$(balance)}</b></span>}
+          <span className="chip">{lastTick ? `Prices updated ${Math.round((Date.now() - lastTick) / 1000)}s ago · ${tickMs}ms` : "Starting…"}</span>
+        </div>}
+        pnl={<PnlSection runnerSt={runnerSt} paper={paper} tabOpen={mode === "paper" ? unreal : null} />} />
+
+      {/* Games */}
+      <UI.H2 aside={liveGames.length > 0 && <button className="btn btn-sm lv-tall" onClick={() => setEnabled(e => { const n = { ...e }; const all = liveGames.every(g => n[g.id]); liveGames.forEach(g => n[g.id] = !all); return n; })}>{liveGames.every(g => enabled[g.id]) ? "All off" : "All on"}</button>}>
+        Live games <span className="count">{liveGames.length}</span></UI.H2>
+      <div className="lv-intro">Switch a game on to let the trader look for new trades in it.</div>
+      {liveGames.length === 0 && <div className="note">No {SPORT === "nfl" ? "NFL" : "college football"} games in progress right now.</div>}
+      <div className="lv-games">
+        {liveGames.map(g => <GameCard key={g.id} g={g} v={view[g.id]} pre={S.current.pre[g.id]} gs={S.current.gameState[g.id]} on={!!enabled[g.id]} toggle={() => toggleGame(g.id)} />)}
       </div>
 
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "16px 16px 60px" }}>
-        {err && <div style={{ background: T.red + "22", border: "1px solid " + T.red + "44", color: T.red, padding: "8px 12px", fontSize: 10, borderRadius: 4, marginBottom: 12 }}>{err}</div>}
-
-        <ServerRunner cfg={cfg} enabled={enabled} liveGames={liveGames} nEnabled={nEnabled} browserRunning={running} onStatus={setRunnerSt} onRules={() => setShowCfg(true)} onAllOn={() => setEnabled(e => { const n = { ...e }; liveGames.forEach(g => n[g.id] = true); return n; })} />
-
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: -8, marginBottom: 12 }}>
-          <button onClick={() => setShowCfg(s => !s)} style={{ ...btnBase, padding: "4px 10px", fontSize: 8, color: showCfg ? T.text : T.muted }}>⚙ {showCfg ? "HIDE RULES" : "RULES"}</button>
-        </div>
-        {showCfg && <ConfigPanel cfg={cfg} setCfg={setCfg} mode={mode} onResetPaper={resetPaper} server={server} />}
-
-
-        {/* In-tab bot: the older way to run, kept for testing */}
-        <div style={{ marginBottom: 16 }}>
-          <div onClick={() => setShowTab(s => !s)} style={{ fontSize: 9, color: T.muted, cursor: "pointer", letterSpacing: 1, padding: "6px 0", borderBottom: "1px solid " + T.border }}>
-            {showTab || running ? "▾" : "▸"} RUN IN THIS BROWSER TAB INSTEAD <span style={{ color: T.dim }}>(advanced · only trades while this tab stays open and awake)</span>
-            {running && <span style={{ color: mode === "live" ? T.red : T.green, marginLeft: 8, fontWeight: 700 }}>● running ({mode})</span>}
-          </div>
-          {(showTab || running) && <div style={{ marginTop: 10 }}>
-        {/* Controls */}
-        <div style={{ ...card, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12, borderColor: running ? (mode === "live" ? T.red : T.green) : T.border }}>
-          <div style={{ display: "flex", border: "1px solid " + T.border, borderRadius: 4, overflow: "hidden" }}>
-            {["paper", "live"].map(m => (
-              <button key={m} onClick={() => switchMode(m)} style={{ ...btnBase, border: "none", borderRadius: 0, background: mode === m ? (m === "live" ? T.red : T.blue) + "33" : "transparent", color: mode === m ? (m === "live" ? T.red : T.blue) : T.muted }}>
-                {m === "paper" ? "PAPER" : "LIVE $"}
-              </button>
-            ))}
-          </div>
-          {!running
-            ? <button onClick={start} disabled={nEnabled === 0 && !Object.keys(mode === "paper" ? paper.positions : positions).length} style={{ ...btnBase, background: T.green + "22", borderColor: T.green, color: T.green }}>▶ START AUTO</button>
-            : <button onClick={stop} style={{ ...btnBase, background: T.gold + "22", borderColor: T.gold, color: T.gold }}>■ STOP</button>}
-          <button onClick={() => { setPaused(p => !p); addLog("info", paused ? "Entries resumed." : "Entries paused (exits still managed)."); }} style={{ ...btnBase, color: paused ? T.gold : T.muted, borderColor: paused ? T.gold : T.border }}>{paused ? "▶ RESUME ENTRIES" : "❚❚ PAUSE ENTRIES"}</button>
-          <button onClick={kill} style={{ ...btnBase, background: T.red + "22", borderColor: T.red, color: T.red }}>✕ KILL &amp; CASH OUT ALL</button>
-          <div style={{ flex: 1 }} />
-          {running && <span style={{ fontSize: 10, color: mode === "live" ? T.red : T.green, animation: "pulse 1.5s infinite", fontWeight: 700 }}>● {mode === "live" ? "LIVE — REAL MONEY" : "PAPER TRADING"}</span>}
-          <span style={{ fontSize: 9, color: T.muted }}>{nEnabled} game{nEnabled === 1 ? "" : "s"} on auto</span>
-          
-        </div>
-
-        {/* Stats */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 10, marginBottom: 14 }}>
-          <Stat label="Session P&L" value={fmtSigned$(realized + unreal)} color={realized + unreal >= 0 ? T.green : T.red} sub={`realized ${fmtSigned$(realized)} · open ${fmtSigned$(unreal)}`} />
-          <Stat label="Open exposure" value={fmt$(exposure)} sub={`cap ${fmt$(cfg.maxTotalExposure)}`} />
-          <Stat label="Open positions" value={posList.filter(p => !p.unmanaged).length} sub={posList.some(p => p.unmanaged) ? `${posList.filter(p => p.unmanaged).length} manual (not managed)` : "bot-managed"} />
-          <Stat label="Closed trades" value={trades.length || "—"} sub={trades.length ? `${wins}W-${trades.length - wins}L` : mode === "live" ? "see Kalshi history" : ""} />
-          <Stat label="Loss limit" value={fmt$(cfg.maxDailyLoss)} color={realized + unreal <= -cfg.maxDailyLoss ? T.red : T.text} sub={realized + unreal <= -cfg.maxDailyLoss ? "HIT — entries halted" : "entries halt at this loss"} />
-        </div>
-
-        {/* Positions */}
-        <Section label={`Positions · cash-out value updates every ${TICK_MS / 1000}s`}>
-          {posList.length === 0
-            ? <div style={{ ...card, fontSize: 10, color: T.muted }}>No open positions.</div>
-            : <div style={{ ...card, padding: 0, overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
-                  <thead><tr>{["Market", "Side", "Qty", "Cost", "Cash-out (bid)", "P&L", "Fair", "Exit lines", "Status", ""].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
-                  <tbody>
-                    {posList.map(p => {
-                      const tp = Math.min(99, p.avgCost + cfg.takeProfit), sl = p.avgCost - cfg.stopLoss;
-                      return (
-                        <tr key={p.ticker} style={{ opacity: p.unmanaged ? 0.55 : 1 }}>
-                          <td style={td}><div style={{ fontWeight: 700 }}>{p.label}</div><div style={{ color: T.muted, fontSize: 8 }}>{p.game ? `${p.game.shortName} · ${p.game.detail}` : p.ticker}</div></td>
-                          <td style={td}>{p.side.toUpperCase()}</td>
-                          <td style={td}>{p.count}</td>
-                          <td style={td}>{p.avgCost}¢</td>
-                          <td style={{ ...td, fontWeight: 700 }}>{p.bid != null ? p.bid + "¢" : "—"}</td>
-                          <td style={{ ...td, color: (p.pnl || 0) >= 0 ? T.green : T.red, fontWeight: 700 }}>{p.pnl != null ? fmtSigned$(p.pnl) : "—"}</td>
-                          <td style={td}>{p.fair != null ? p.fair.toFixed(0) + "¢" : "—"}</td>
-                          <td style={{ ...td, fontSize: 8, color: T.muted }}>TP {tp}¢ · SL {sl}¢{p.peakBid ? ` · peak ${p.peakBid}¢` : ""}</td>
-                          <td style={{ ...td, fontSize: 8, color: T.muted }}>{p.unmanaged ? "manual — not managed" : (p.note || "")}</td>
-                          <td style={td}>{!p.unmanaged && <button onClick={() => manualCashOut(p.ticker)} style={{ ...btnBase, padding: "4px 8px", fontSize: 8, color: T.gold, borderColor: T.gold + "66" }}>CASH OUT</button>}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>}
-        </Section>
-
-          </div>}
-        </div>
-
-        {/* Games */}
-        <Section label={`Live games (${liveGames.length})`} right={liveGames.length > 0 && <button style={{ ...btnBase, padding: "3px 8px", fontSize: 8 }} onClick={() => setEnabled(e => { const n = { ...e }; const all = liveGames.every(g => n[g.id]); liveGames.forEach(g => n[g.id] = !all); return n; })}>{liveGames.every(g => enabled[g.id]) ? "ALL OFF" : "ALL ON"}</button>}>
-          {liveGames.length === 0 && <div style={{ ...card, fontSize: 10, color: T.muted }}>No games in progress right now.</div>}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(330px,1fr))", gap: 10 }}>
-            {liveGames.map(g => <GameCard key={g.id} g={g} v={view[g.id]} pre={S.current.pre[g.id]} gs={S.current.gameState[g.id]} on={!!enabled[g.id]} toggle={() => setEnabled(e => ({ ...e, [g.id]: !e[g.id] }))} />)}
-          </div>
-        </Section>
-
-        {upcoming.length > 0 && (
-          <Section label={`Upcoming (${upcoming.length}) — switch on now and auto starts at kickoff`}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(250px,1fr))", gap: 8 }}>
-              {upcoming.map(g => (
-                <div key={g.id} style={{ ...card, display: "flex", alignItems: "center", gap: 8, padding: "8px 10px" }}>
-                  <Toggle on={!!enabled[g.id]} onClick={() => setEnabled(e => ({ ...e, [g.id]: !e[g.id] }))} />
-                  <div style={{ flex: 1, fontSize: 10 }}>
-                    <div style={{ fontWeight: 700 }}>{teamTag(g.away)} @ {teamTag(g.home)}</div>
-                    <div style={{ fontSize: 8, color: T.muted }}>{new Date(g.date).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · {g.spreadHome != null ? `${g.spreadHome > 0 ? g.home.abbr : g.away.abbr} -${Math.abs(g.spreadHome)}` : "no line"}{g.total ? ` · O/U ${g.total}` : ""}{S.current.gameState[g.id] && S.current.gameState[g.id].suffix ? " · Kalshi ✓" : " · Kalshi ?"}</div>
-                  </div>
+      {upcoming.length > 0 && <>
+        <UI.H2 aside={`${upcoming.length}`}>Upcoming</UI.H2>
+        <div className="lv-intro">Switch one on now and the trader starts on it at kickoff.</div>
+        <div className="pick-list">
+          {upcoming.map(g => {
+            const matched = S.current.gameState[g.id] && S.current.gameState[g.id].suffix;
+            return (
+              <div key={g.id} className="lv-up">
+                <Toggle on={!!enabled[g.id]} onClick={() => toggleGame(g.id)} label={`${g.away.abbr} at ${g.home.abbr}`} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600 }}>{teamTag(g.away)} @ {teamTag(g.home)}</div>
+                  <div className="tiny muted">{new Date(g.date).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · {g.spreadHome != null ? `${g.spreadHome > 0 ? g.home.abbr : g.away.abbr} −${Math.abs(g.spreadHome)}` : "no line"}{g.total ? ` · O/U ${g.total}` : ""}</div>
                 </div>
-              ))}
-            </div>
-          </Section>
-        )}
-
-        {mode === "paper" && trades.length > 0 && (
-          <Section label="Closed paper trades">
-            <div style={{ ...card, padding: 0, overflowX: "auto", maxHeight: 260, overflowY: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
-                <thead><tr>{["Time", "Market", "Qty", "Entry", "Exit", "P&L", "Why"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
-                <tbody>{trades.map((t, i) => (
-                  <tr key={i}><td style={td}>{new Date(t.ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</td><td style={td}>{t.label} {t.side.toUpperCase()}</td><td style={td}>{t.count}</td><td style={td}>{t.entry}¢</td><td style={td}>{t.exit}¢</td>
-                    <td style={{ ...td, color: t.pnl >= 0 ? T.green : T.red, fontWeight: 700 }}>{fmtSigned$(t.pnl)}</td><td style={{ ...td, color: T.muted, fontSize: 8 }}>{t.reason}</td></tr>
-                ))}</tbody>
-              </table>
-            </div>
-          </Section>
-        )}
-
-        <Section label="Activity" right={<button style={{ ...btnBase, padding: "3px 8px", fontSize: 8 }} onClick={() => { setLog([]); save(LS.log, []); }}>CLEAR</button>}>
-          <div style={{ ...card, maxHeight: 280, overflowY: "auto", fontSize: 9, lineHeight: 1.7 }}>
-            {log.length === 0 && <div style={{ color: T.muted }}>Nothing yet.</div>}
-            {log.map((l, i) => (
-              <div key={i} style={{ color: l.kind === "error" ? T.red : l.kind === "win" ? T.green : l.kind === "loss" ? T.orange : l.kind === "buy" ? T.blue : T.muted }}>
-                <span style={{ color: T.dim }}>{l.t}</span> {l.msg}
-              </div>
-            ))}
-          </div>
-        </Section>
-
-        <div style={{ fontSize: 9, color: T.muted, marginTop: 16, padding: 10, borderTop: "1px solid " + T.border, lineHeight: 1.7 }}>
-          Runs in this browser tab: keep it open (the screen stays awake while auto is on). Resting take-profit orders live on Kalshi and still fire if the tab closes; stop-losses and trailing stops need the tab.
-          Live state comes from ESPN, which trails the TV broadcast and Kalshi's market makers by 10–30s; entries pause after scores and sudden market moves for that reason.
-          Model output is probabilistic, not a guarantee. Not betting advice. Never risk money you can't afford to lose.
+                <span className="chip" title={matched ? "Matched to a Kalshi market" : "No Kalshi market found yet"}><span className="d" style={{ background: matched ? "var(--pos)" : "var(--faint)" }} />{matched ? "On Kalshi" : "Kalshi ?"}</span>
+              </div>);
+          })}
         </div>
+      </>}
+
+      {/* Rules */}
+      <div id="rules" style={{ scrollMarginTop: 120 }} />
+      <UI.H2 aside={<button className="btn btn-sm lv-tall" onClick={() => setShowCfg(s => !s)}>{showCfg ? "Hide" : "Edit"}</button>}>Trading rules</UI.H2>
+      {showCfg
+        ? <ConfigPanel cfg={cfg} setCfg={setCfg} mode={mode} onResetPaper={resetPaper} server={server} />
+        : <div className="note">Cash out at <b>+{cfg.takeProfit}¢</b> profit or a <b>−{cfg.stopLoss}¢</b> loss per contract, trailing stop after +{cfg.trailArm}¢. New trades need a <b>{cfg.entryEdge}¢</b> edge, up to {fmt$(+cfg.maxStake || 0)} each and {fmt$(+cfg.maxTotalExposure || 0)} open in total; entries stop for the night after a {fmt$(+cfg.maxDailyLoss || 0)} loss.</div>}
+
+      {/* In-tab bot: the older way to run, kept for testing */}
+      <UI.H2>Advanced</UI.H2>
+      <button className="lv-fold" aria-expanded={!!(showTab || running)} onClick={() => setShowTab(s => !s)}>
+        <span style={{ minWidth: 0 }}>Run in this browser tab instead
+          <span className="sub">Only trades while this tab stays open and awake.{running ? "" : " For testing."}</span></span>
+        {running && <span className="chip" style={{ marginLeft: 8 }}><span className="d" style={{ background: mode === "live" ? "var(--neg)" : "var(--pos)" }} />Running · {mode === "live" ? "real money" : "paper"}</span>}
+      </button>
+      {(showTab || running) && <div style={{ marginTop: 12 }}>
+        <div className={"card lv-status" + (running ? (mode === "live" ? " is-live" : " is-paper") : "")}>
+          <div className="row" style={{ marginBottom: 8 }}>
+            <span className="small muted" style={{ fontWeight: 500 }}>In-tab bot</span>
+            <span className={"lv-pill " + (mode === "live" ? "live" : "paper")}>{mode === "live" ? "LIVE · real money" : "PAPER · practice"}</span>
+          </div>
+          <div className="lv-state">
+            <span className={"lv-dot" + (running ? " pulse" : "")} style={{ "--c": running ? (mode === "live" ? "var(--neg)" : "var(--pos)") : "var(--faint)" }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="lv-state-title" style={{ fontSize: 19 }}>{running ? (mode === "live" ? "Running with real money" : "Running in paper mode") : "Stopped"}</div>
+              <div className="lv-state-sub">{nEnabled} game{nEnabled === 1 ? "" : "s"} switched on{paused ? " · new entries paused" : ""}</div>
+            </div>
+          </div>
+          <div className="lv-sep" />
+          <ModeSeg value={mode} onPick={switchMode} locked={running} />
+          <div className="lv-actions">
+            {!running
+              ? <button className={"btn " + (mode === "live" ? "lv-go-live" : "btn-primary")} onClick={start} disabled={nEnabled === 0 && !Object.keys(mode === "paper" ? paper.positions : positions).length}>Start auto ({mode === "live" ? "real money" : "paper"})</button>
+              : <button className="btn" onClick={stop}>Stop</button>}
+            <button className="btn" onClick={() => { setPaused(p => !p); addLog("info", paused ? "Entries resumed." : "Entries paused (exits still managed)."); }}>{paused ? "Resume new entries" : "Pause new entries"}</button>
+            <button className="btn lv-danger" onClick={kill}>Kill and cash out all</button>
+          </div>
+        </div>
+
+        <div className="tiles" style={{ marginBottom: 12 }}>
+          <UI.Tile label="Session P&L" value={fmtSigned$(realized + unreal)} color={realized + unreal >= 0 ? "var(--pos)" : "var(--neg)"} sub={`realized ${fmtSigned$(realized)} · open ${fmtSigned$(unreal)}`} />
+          <UI.Tile label="Open exposure" value={fmt$(exposure)} sub={`cap ${fmt$(cfg.maxTotalExposure)}`} />
+          <UI.Tile label="Open positions" value={posList.filter(p => !p.unmanaged).length} sub={posList.some(p => p.unmanaged) ? `${posList.filter(p => p.unmanaged).length} manual (not managed)` : "bot-managed"} />
+          <UI.Tile label="Closed trades" value={trades.length || "—"} sub={trades.length ? `${wins}W–${trades.length - wins}L` : mode === "live" ? "see Kalshi history" : ""} />
+          <UI.Tile label="Loss limit" value={fmt$(cfg.maxDailyLoss)} color={realized + unreal <= -cfg.maxDailyLoss ? "var(--neg)" : undefined} sub={realized + unreal <= -cfg.maxDailyLoss ? "Hit: entries halted" : "entries halt at this loss"} />
+        </div>
+
+        <UI.H2 aside={`cash-out value updates every ${TICK_MS / 1000}s`}>In-tab positions</UI.H2>
+        {tabBotPos.length === 0
+          ? <div className="note">No open positions.</div>
+          : <div className="lv-plist">
+              {tabBotPos.map(p => (
+                <PositionCard key={p.ticker} title={p.label} side={p.side} count={p.count} entry={p.avgCost} bid={p.bid} dim={p.unmanaged}
+                  meta={p.game ? `${p.game.shortName} · ${p.game.detail}` : p.ticker}
+                  tp={p.tpPrice || Math.min(99, p.avgCost + cfg.takeProfit)} sl={p.avgCost - cfg.stopLoss} peak={p.peakBid} fair={p.fair}
+                  note={p.unmanaged ? "Opened by you: not managed" : p.note}>
+                  {!p.unmanaged && <button className="btn lv-tall lv-danger" onClick={() => manualCashOut(p.ticker)}>Cash out now</button>}
+                </PositionCard>))}
+            </div>}
+      </div>}
+
+      {mode === "paper" && trades.length > 0 && <>
+        <UI.H2 aside={`${trades.length}`}>Closed paper trades (this tab)</UI.H2>
+        <div className="tbl-wrap lv-tbl">
+          <table className="tbl">
+            <thead><tr><th>Market</th><th className="r">P&amp;L</th><th className="r">Paid → sold</th><th className="r">Qty</th><th>Time</th><th>Why</th></tr></thead>
+            <tbody>{trades.map((t, i) => (
+              <tr key={i}>
+                <td><b style={{ fontWeight: 600 }}>{t.label}</b> <span className="sub">{t.side.toUpperCase()}</span></td>
+                <td className="r" style={{ color: t.pnl >= 0 ? "var(--pos)" : "var(--neg)", fontWeight: 700 }}>{fmtSigned$(t.pnl)}</td>
+                <td className="r">{t.entry}¢ → {t.exit}¢</td>
+                <td className="r">{t.count}</td>
+                <td className="sub">{new Date(t.ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</td>
+                <td className="sub">{t.reason}</td>
+              </tr>))}</tbody>
+          </table>
+        </div>
+      </>}
+
+      <UI.H2 aside={<button className="btn btn-sm lv-tall" onClick={() => { setLog([]); save(LS.log, []); }}>Clear</button>}>Activity</UI.H2>
+      <div className="card lv-log">
+        {log.length === 0 && <div className="muted">Nothing yet.</div>}
+        {log.map((l, i) => (
+          <div key={i} style={{ color: l.kind === "error" || l.kind === "loss" ? "var(--neg)" : l.kind === "win" ? "var(--pos)" : l.kind === "buy" ? "var(--text)" : "var(--text-2)" }}>
+            <span className="ts">{l.t}</span>{l.msg}
+          </div>
+        ))}
       </div>
-    </div>
+
+      <div className="ss-foot">
+        <div>The server trader keeps running with this page closed. The in-tab bot only runs while this tab is open (the screen stays awake while it's on); resting take-profit orders live on Kalshi and still fire if the tab closes, but stop-losses and trailing stops need the tab.</div>
+        <div style={{ marginTop: 6 }}>Live game state comes from ESPN, which trails the TV broadcast and Kalshi's market makers by 10–30s; entries pause after scores and sudden market moves for that reason. Model output is probabilistic, not a guarantee. Not betting advice. Never risk money you can't afford to lose.</div>
+      </div>
+    </UI.Shell>
   );
 }
 
 // ── Components ───────────────────────────────────────────────────────────────
-const card = { background: T.navy, border: "1px solid " + T.border, borderRadius: 6, padding: "12px 14px" };
-const btnBase = { background: T.navy, border: "1px solid " + T.border, color: T.text, padding: "8px 12px", borderRadius: 4, cursor: "pointer", fontSize: 9, fontWeight: 700, letterSpacing: 1, fontFamily: "inherit" };
-const th = { textAlign: "left", color: T.muted, fontSize: 8, letterSpacing: 1, padding: "8px 10px", borderBottom: "1px solid " + T.border, textTransform: "uppercase", whiteSpace: "nowrap" };
-const td = { padding: "7px 10px", borderBottom: "1px solid " + T.border + "66", verticalAlign: "top" };
+const UI = window.SharpUI;
+const agoS = (ts) => ts ? Math.max(0, Math.round((Date.now() - ts) / 1000)) + "s ago" : "never";
+const signedC = (x) => (x >= 0 ? "+" : "−") + Math.abs(x) + "¢";
 
 function teamTag(t) { return (t.rank ? "#" + t.rank + " " : "") + t.abbr; }
 
@@ -938,43 +1053,97 @@ function marketLabel(m, g) {
   return m.ticker;
 }
 
-function Section({ label, right, children }) {
+function LeagueSwitch() {
   return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", fontSize: 8, letterSpacing: 2.5, color: T.muted, textTransform: "uppercase", marginBottom: 8, paddingBottom: 6, borderBottom: "1px solid " + T.border }}>
-        <span style={{ flex: 1 }}>{label}</span>{right}
+    <div className="seg" role="group" aria-label="League">
+      {[["cfb", "College"], ["nfl", "NFL"]].map(([k, l]) => (
+        <button key={k} aria-pressed={SPORT === k} onClick={() => { if (SPORT !== k) location.href = k === "nfl" ? "live.html?sport=nfl" : "live.html"; }} style={{ height: 38 }}>{l}</button>))}
+    </div>
+  );
+}
+
+// Paper / live picker. locked while running (switch only when stopped).
+function ModeSeg({ value, onPick, locked }) {
+  return (
+    <div>
+      <div className="lv-k">Mode</div>
+      <div className={"lv-seg" + (locked ? " locked" : "")} role="group" aria-label="Paper or live mode" title={locked ? "Stop before switching" : ""}>
+        <button aria-pressed={value === "paper"} disabled={locked} onClick={() => onPick("paper")}>Paper<small>practice, no money</small></button>
+        <button className="live" aria-pressed={value === "live"} disabled={locked} onClick={() => onPick("live")}>Live<small>real money</small></button>
       </div>
-      {children}
+      {locked && <div className="lv-help">Stop it before switching between paper and live.</div>}
     </div>
   );
 }
-function Stat({ label, value, sub, color }) {
+
+function Toggle({ on, onClick, label }) {
   return (
-    <div style={card}>
-      <div style={{ fontSize: 8, color: T.muted, letterSpacing: 1, textTransform: "uppercase", marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 20, fontWeight: 700, color: color || T.text }}>{value}</div>
-      {sub && <div style={{ fontSize: 8, color: T.muted, marginTop: 2 }}>{sub}</div>}
-    </div>
-  );
-}
-function Toggle({ on, onClick }) {
-  return (
-    <button onClick={onClick} title={on ? "Auto on" : "Auto off"} style={{ width: 34, height: 18, borderRadius: 9, border: "1px solid " + (on ? T.green : T.border), background: on ? T.green + "44" : T.navy2, position: "relative", cursor: "pointer", flexShrink: 0 }}>
-      <span style={{ position: "absolute", top: 2, left: on ? 17 : 2, width: 12, height: 12, borderRadius: 6, background: on ? T.green : T.muted, transition: "left .15s" }} />
+    <button className="lv-toggle" role="switch" aria-checked={!!on} aria-label={(label ? label + ": " : "") + (on ? "auto on" : "auto off")} title={on ? "Auto on" : "Auto off"} onClick={onClick}>
+      <span className="tr"><span className="kn" /></span>
     </button>
   );
 }
 function StreamBadge({ info, s }) {
-  const c = info.status === "live" ? T.green : info.status === "error" ? T.red : T.muted;
-  const label = info.status === "live" ? `stream live${s.lastMsg ? " · " + Math.max(0, Math.round((Date.now() - s.lastMsg) / 1000)) + "s" : ""}`
-    : info.status === "error" ? "stream error" : info.status === "off" ? "stream off (polling)" : "stream " + info.status;
-  return <span title={info.msg || ""} style={{ fontSize: 9, color: c }}>● {label}</span>;
+  const c = info.status === "live" ? "var(--pos)" : info.status === "error" ? "var(--neg)" : "var(--faint)";
+  const label = info.status === "live" ? `Price stream live${s.lastMsg ? " · " + Math.max(0, Math.round((Date.now() - s.lastMsg) / 1000)) + "s" : ""}`
+    : info.status === "error" ? "Price stream error" : info.status === "off" ? "Price stream off (polling)" : "Price stream " + info.status;
+  return <span className="chip" title={info.msg || ""}><span className="d" style={{ background: c }} />{label}</span>;
 }
 function ServerBadge({ server }) {
-  if (!server) return <span style={{ fontSize: 9, color: T.muted }}>checking server…</span>;
-  if (server.error) return <span style={{ fontSize: 9, color: T.red }}>server: {server.error}</span>;
-  const c = server.credentials && server.tradingEnabled ? T.green : server.credentials ? T.gold : T.muted;
-  return <span style={{ fontSize: 9, color: c }}>Kalshi {server.env}: {server.credentials ? "keys ✓" : "no keys"} · trading {server.tradingEnabled ? "enabled" : "off"} · cap ${server.maxOrderDollars}/order</span>;
+  if (!server) return <span className="chip"><span className="d" style={{ background: "var(--faint)" }} />Checking server…</span>;
+  if (server.error) return <span className="chip"><span className="d" style={{ background: "var(--neg)" }} />Server: {server.error}</span>;
+  const c = server.credentials && server.tradingEnabled ? "var(--pos)" : server.credentials ? "var(--small)" : "var(--faint)";
+  return <span className="chip"><span className="d" style={{ background: c }} />Kalshi {server.env}: {server.credentials ? "keys ✓" : "no keys"} · trading {server.tradingEnabled ? "on" : "off"} · cap ${server.maxOrderDollars}/order</span>;
+}
+
+// Entry vs cash-out on one rail: stop zone (left), target zone (right), what you paid (tick), what it sells for now (dot)
+function PriceRail({ entry, bid, tp, sl }) {
+  const vals = [entry, bid, tp, sl].filter(v => v != null && isFinite(v));
+  if (entry == null || !vals.length) return null;
+  const lo = Math.max(0, Math.min(...vals) - 4), hi = Math.min(100, Math.max(...vals) + 4), span = Math.max(1, hi - lo);
+  const P = (v) => (Math.max(lo, Math.min(hi, v)) - lo) / span * 100;
+  const up = bid != null && bid >= entry, col = up ? "var(--pos)" : "var(--neg)";
+  const label = `Paid ${entry}¢${bid != null ? `, cash-out now ${bid}¢` : ""}${tp != null ? `, take profit ${tp}¢` : ""}${sl != null ? `, stop ${sl}¢` : ""}`;
+  return (
+    <div>
+      <div className="lv-rail" role="img" aria-label={label} title={label}>
+        {sl != null && <div className="zone" style={{ left: 0, width: P(sl) + "%", background: UI.alpha("var(--neg)", 22), borderRadius: "999px 0 0 999px" }} />}
+        {tp != null && <div className="zone" style={{ left: P(tp) + "%", right: 0, background: UI.alpha("var(--pos)", 22), borderRadius: "0 999px 999px 0" }} />}
+        {bid != null && <div className="seg" style={{ left: P(Math.min(entry, bid)) + "%", width: Math.abs(P(bid) - P(entry)) + "%", background: col }} />}
+        <div className="mk" style={{ left: P(entry) + "%" }} />
+        {bid != null && <div className="now" style={{ left: P(bid) + "%", background: col }} />}
+      </div>
+      <div className="lv-rail-scale"><span>{lo}¢</span><span>{hi}¢</span></div>
+    </div>
+  );
+}
+function Num({ l, v, c, s }) {
+  return <div><div className="l">{l}</div><div className="v" style={c ? { color: c } : null}>{v}</div>{s && <div className="s" style={c ? { color: c } : null}>{s}</div>}</div>;
+}
+function PositionCard({ title, side, meta, count, entry, bid, tp, sl, peak, fair, tag, dim, note, children }) {
+  const pnl = bid != null ? (bid - entry) * count / 100 : null;
+  const col = pnl == null ? "var(--muted)" : pnl >= 0 ? "var(--pos)" : "var(--neg)";
+  return (
+    <div className="card lv-pos" style={{ opacity: dim ? 0.6 : 1 }}>
+      <div className="lv-pos-head">
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div className="lv-pos-title"><span>{title}</span><span className="chip">{String(side).toUpperCase()}</span>{tag}</div>
+          {meta && <div className="lv-pos-meta">{meta}</div>}
+        </div>
+        <div className="lv-pos-pnl" style={{ color: col }}>{pnl != null ? fmtSigned$(pnl) : "—"}<small>{count} contract{count == 1 ? "" : "s"}</small></div>
+      </div>
+      <PriceRail entry={entry} bid={bid} tp={tp} sl={sl} />
+      <div className="lv-nums">
+        <Num l="Paid" v={entry + "¢"} />
+        <Num l="Now" v={bid != null ? bid + "¢" : "—"} c={bid != null ? col : null} s={bid != null ? signedC(bid - entry) : null} />
+        {tp != null && <Num l="Target" v={tp + "¢"} />}
+        {sl != null && <Num l="Stop" v={sl + "¢"} />}
+      </div>
+      {(fair != null || peak) ? <div className="tiny muted">{fair != null ? `Model's fair value ${fair.toFixed(0)}¢` : ""}{fair != null && peak ? " · " : ""}{peak ? `highest bid so far ${peak}¢` : ""}</div> : null}
+      {note && <div className="tiny muted">{note}</div>}
+      {children}
+    </div>
+  );
 }
 
 function GameCard({ g, v, pre, gs, on, toggle }) {
@@ -984,46 +1153,102 @@ function GameCard({ g, v, pre, gs, on, toggle }) {
   const mktHome = win ? CFB.mid(win) : null;
   const top = evals.filter(e => e.edge != null || e.held).sort((a, b) => (b.held - a.held) || ((b.edge || -99) - (a.edge || -99))).slice(0, 5);
   const freeze = gs && gs.freezeUntil && gs.freezeUntil > Date.now();
-  const possArrow = (side) => g.possession === side ? <span style={{ color: T.gold }}> ◂</span> : null;
+  const poss = (side) => g.possession === side ? <span className="lv-poss" title="Has the ball" /> : null;
+  const clock = g.feed !== "espn" && g.state === "in" && g.statusName !== "STATUS_HALFTIME" ? `Q${g.period} ${g.clock}` : g.detail;
   return (
-    <div style={{ ...card, borderColor: on ? T.green + "88" : T.border }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-        <Toggle on={on} onClick={toggle} />
-        <div style={{ flex: 1, fontSize: 9, color: T.muted }}>{g.feed !== "espn" && g.state === "in" && g.statusName !== "STATUS_HALFTIME" ? `Q${g.period} ${g.clock}` : g.detail}{g.broadcast ? " · " + g.broadcast : ""}
-          <span style={{ marginLeft: 6, color: g.feed === "espn" ? T.dim : T.green }}>{g.feed === "core" ? "● espn core" : g.feed === "kalshi" ? "● kalshi feed" : "espn scoreboard"}</span>
-          {g.reviewPending && <span style={{ marginLeft: 6, color: T.gold }}>review/PAT</span>}</div>
-        {!gs || !gs.suffix ? <span style={{ fontSize: 8, color: T.red }}>no Kalshi match</span> : freeze ? <span style={{ fontSize: 8, color: T.gold }}>catching up…</span> : null}
+    <div className={"card lv-game" + (on ? " on" : "")}>
+      <div className="lv-game-top">
+        <Toggle on={on} onClick={toggle} label={`${g.away.abbr} at ${g.home.abbr}`} />
+        <div className="lv-game-clock"><b>{clock}</b>{g.broadcast ? " · " + g.broadcast : ""}{g.reviewPending && <span style={{ color: "var(--small)" }}> · review/PAT</span>}</div>
+        {!gs || !gs.suffix ? <span className="chip">No Kalshi match</span> : freeze ? <span className="chip">Catching up…</span>
+          : <span className="chip" title="Where the score comes from"><span className="d" style={{ background: g.feed === "espn" ? "var(--faint)" : "var(--pos)" }} />{g.feed === "core" ? "ESPN core" : g.feed === "kalshi" ? "Kalshi feed" : "ESPN"}</span>}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", rowGap: 2, fontSize: 13, fontWeight: 700 }}>
-        <div>{teamTag(g.away)} <span style={{ fontSize: 9, color: T.muted, fontWeight: 400 }}>{g.away.short}</span>{possArrow("away")}</div><div>{g.away.score}</div>
-        <div>{teamTag(g.home)} <span style={{ fontSize: 9, color: T.muted, fontWeight: 400 }}>{g.home.short}</span>{possArrow("home")}</div><div>{g.home.score}</div>
+      <div className="lv-team"><div className="nm">{teamTag(g.away)}<span className="sh">{g.away.short}</span>{poss("away")}</div><div className="sc">{g.away.score}</div></div>
+      <div className="lv-team"><div className="nm">{teamTag(g.home)}<span className="sh">{g.home.short}</span>{poss("home")}</div><div className="sc">{g.home.score}</div></div>
+      <div className="lv-play">{g.downDistanceText || g.lastPlay || ""}</div>
+      <div className="lv-wp">
+        <div className="l" style={{ gridColumn: "1 / -1", marginBottom: -4 }}>Chance {g.home.abbr} wins</div>
+        <div><div className="l">Kalshi</div><div className="v">{mktHome != null ? mktHome.toFixed(0) + "%" : "—"}</div></div>
+        <div><div className="l">Model</div><div className="v">{proj && !proj.unreliable ? (proj.pHome * 100).toFixed(0) + "%" : "—"}</div></div>
+        <div><div className="l">ESPN</div><div className="v">{g.espnHomeWP != null ? (g.espnHomeWP * 100).toFixed(0) + "%" : "—"}</div></div>
       </div>
-      <div style={{ fontSize: 9, color: T.muted, margin: "6px 0 8px", minHeight: 12 }}>{g.downDistanceText || g.lastPlay || ""}</div>
-      <div style={{ display: "flex", gap: 12, fontSize: 9, marginBottom: 8, flexWrap: "wrap" }}>
-        <span>Kalshi {g.home.abbr} <b>{mktHome != null ? mktHome.toFixed(0) + "%" : "—"}</b></span>
-        <span>Model <b style={{ color: T.purple }}>{proj && !proj.unreliable ? (proj.pHome * 100).toFixed(0) + "%" : "—"}</b></span>
-        {g.espnHomeWP != null && <span style={{ color: T.muted }}>ESPN {(g.espnHomeWP * 100).toFixed(0)}%</span>}
-        <span style={{ color: T.muted }}>pre {pre && pre.spreadHome != null ? `${pre.spreadHome > 0 ? g.home.abbr : g.away.abbr} -${Math.abs(pre.spreadHome)} / ${pre.total}` : "n/a"}</span>
-      </div>
+      <div className="tiny muted" style={{ marginTop: 6 }}>Pregame line {pre && pre.spreadHome != null ? `${pre.spreadHome > 0 ? g.home.abbr : g.away.abbr} −${Math.abs(pre.spreadHome)}, total ${pre.total}` : "n/a"}</div>
       {top.length > 0 && (
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 9 }}>
-          <tbody>
-            {top.map(e => {
-              const m = (v.markets || []).find(x => x.ticker === e.ticker);
-              const c = e.held ? T.gold : e.edge >= 0 ? T.green : T.muted;
-              return (
-                <tr key={e.ticker}>
-                  <td style={{ padding: "2px 0", color: e.held ? T.gold : T.text }}>{m ? marketLabel(m, g) : e.ticker}</td>
-                  <td style={{ padding: "2px 4px", color: T.muted }}>{e.yesBid}/{e.yesAsk}</td>
-                  <td style={{ padding: "2px 4px", color: T.purple }}>{e.fairYes.toFixed(0)}</td>
-                  <td style={{ padding: "2px 0", color: c, textAlign: "right", fontSize: 8 }}>{e.held ? e.note : e.edge != null ? `${e.bestSide.toUpperCase()} ${e.edge >= 0 ? "+" : ""}${e.edge.toFixed(1)}¢` : ""}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <div className="lv-mkts">
+          <div className="lh"><span>Market</span><span>Bid/ask · fair</span><span style={{ minWidth: 70, textAlign: "right" }}>Edge</span></div>
+          {top.map(e => {
+            const m = (v.markets || []).find(x => x.ticker === e.ticker);
+            return (
+              <div key={e.ticker} className="lv-mkt">
+                <div style={{ minWidth: 0, fontWeight: e.held ? 650 : 500 }}>{m ? marketLabel(m, g) : e.ticker}{e.held && <span className="chip" style={{ marginLeft: 6, height: 22 }}>Holding</span>}</div>
+                <div className="q">{e.yesBid}/{e.yesAsk}¢ · {e.fairYes.toFixed(0)}</div>
+                <div className="e" style={{ color: e.held ? "var(--text-2)" : e.edge >= 0 ? "var(--text)" : "var(--muted)", fontWeight: e.held ? 500 : 600, fontSize: e.held ? 12 : 13 }}>
+                  {e.held ? e.note : e.edge != null ? `${e.bestSide.toUpperCase()} ${e.edge >= 0 ? "+" : "−"}${Math.abs(e.edge).toFixed(1)}¢` : ""}</div>
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
+  );
+}
+
+// Cumulative profit and loss, trade by trade. trades: [{ ts, pnl, label }]
+function PnlChart({ trades }) {
+  const pts = useMemo(() => {
+    const s = (trades || []).filter(t => t && t.ts != null && isFinite(t.pnl)).slice().sort((a, b) => a.ts - b.ts);
+    let acc = 0;
+    const out = [{ y: 0, ts: null, tip: "Start" }];
+    for (const t of s) { acc += t.pnl; out.push({ y: Math.round(acc * 100) / 100, ts: t.ts, tip: <><b>{fmtSigned$(acc)}</b> after {t.label || "trade"} ({fmtSigned$(t.pnl)})</> }); }
+    return out;
+  }, [trades]);
+  if (pts.length < 2) return <div className="note">The chart starts after the first closed trade.</div>;
+  const end = pts[pts.length - 1].y, col = end >= 0 ? "var(--pos)" : "var(--neg)";
+  const multiDay = new Date(pts[1].ts).toDateString() !== new Date(pts[pts.length - 1].ts).toDateString();
+  const fmtT = (ts) => new Date(ts).toLocaleString([], multiDay ? { month: "short", day: "numeric" } : { hour: "numeric", minute: "2-digit" });
+  const yFmt = (v) => { const a = Math.abs(v); return (v < 0 ? "−$" : "$") + (a < 10 && a % 1 ? a.toFixed(2) : Math.round(a)); };
+  return <UI.LineChart data={pts} color={col} zero height={180} yFmt={yFmt} ariaLabel="Cumulative profit and loss"
+    xLabels={[[0, multiDay ? fmtT(pts[1].ts) : "Start"], [pts.length - 1, fmtT(pts[pts.length - 1].ts)]]} />;
+}
+
+// P&L tiles, chart and recent trades from what the page already holds: the server trader's status
+// (closed trades, paper would-sells) and this tab's paper ledger.
+function PnlSection({ runnerSt, paper, tabOpen }) {
+  const sources = [];
+  const st = runnerSt;
+  if (st) sources.push({ k: "server", label: "Server trader", trades: st.trades || [], realized: st.realized || 0, open: st.open || 0, n: st.record ? st.record.n : (st.trades || []).length, wins: st.record ? st.record.wins : (st.trades || []).filter(t => t.pnl > 0).length });
+  if (st && (st.shadowTrades || []).length) { const t = st.shadowTrades; sources.push({ k: "shadow", label: "Would have sold", trades: t, realized: t.reduce((a, x) => a + (x.pnl || 0), 0), open: null, n: t.length, wins: t.filter(x => x.pnl > 0).length, shadow: true }); }
+  if ((paper.trades || []).length || paper.realized) { const t = paper.trades || []; sources.push({ k: "tab", label: "In-tab paper", trades: t, realized: paper.realized || 0, open: tabOpen, n: t.length, wins: t.filter(x => x.pnl > 0).length }); }
+  const [pick, setPick] = useState(null);
+  const src = sources.find(s => s.k === pick) || sources[0];
+  if (!src) return <><UI.H2>Profit and loss</UI.H2><div className="note">No trades yet. Profit and loss show here once the trader has closed a trade.</div></>;
+  const color = (x) => x == null ? undefined : x >= 0 ? "var(--pos)" : "var(--neg)";
+  const recent = src.trades.slice().sort((a, b) => b.ts - a.ts).slice(0, 8);
+  return (
+    <>
+      <UI.H2 aside={sources.length === 1 ? src.label : null}>Profit and loss</UI.H2>
+      {sources.length > 1 && <div style={{ marginBottom: 10, overflowX: "auto" }}><UI.Seg options={sources.map(s => [s.k, s.label])} value={src.k} onChange={setPick} /></div>}
+      {src.shadow && <div className="note" style={{ marginBottom: 10 }}>Paper mode: what it would have made selling your positions when their rules hit. Nothing was sold.</div>}
+      <div className="tiles" style={{ marginBottom: 12 }}>
+        <UI.Tile label={src.shadow ? "Would have made" : "Realized"} value={fmtSigned$(src.realized)} color={color(src.realized)} sub="closed trades" />
+        {src.open != null && <UI.Tile label="Open" value={fmtSigned$(src.open)} color={color(src.open)} sub="if sold now" />}
+        <UI.Tile label="Trades" value={src.n || "—"} sub={src.n ? `${src.wins}W–${src.n - src.wins}L` : "none closed yet"} />
+        <UI.Tile label="Win rate" value={src.n ? Math.round(100 * src.wins / src.n) + "%" : "—"} sub={src.n ? `${src.wins} of ${src.n} made money` : ""} />
+      </div>
+      <div className="card">
+        <div style={{ fontWeight: 650, marginBottom: 2 }}>{src.shadow ? "Would-have-made over time" : "Profit and loss over time"}</div>
+        <div className="small text-2" style={{ marginBottom: 10 }}>Running total after each closed trade{src.trades.length >= 200 ? " (latest 200)" : ""}.</div>
+        <PnlChart trades={src.trades} />
+        {recent.length > 0 && <div className="lv-trades">
+          {recent.map((t, i) => (
+            <div key={i} className="lv-trade">
+              <div className="t">{t.label}{t.side ? " " + String(t.side).toUpperCase() : ""}{t.lead ? " · fast entry" : ""}</div>
+              <div className="p" style={{ color: color(t.pnl) }}>{fmtSigned$(t.pnl)}</div>
+              <div className="m">{new Date(t.ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · {t.count ? t.count + "× " : ""}paid {t.entry}¢ → sold {t.exit}¢{t.reason ? " · " + t.reason : ""}</div>
+            </div>))}
+        </div>}
+      </div>
+    </>
   );
 }
 
@@ -1044,11 +1269,45 @@ const CFG_FIELDS = [
     ["holdToSettleAt", "Hold to settlement above (¢)"], ["exitSlippage", "Cash-out limit below bid (¢)"],
   ]],
 ];
-
+// plain-English line under each rule (presentation only)
+const CFG_GROUP_HELP = { "Sizing": "How much money the trader may put in.", "Entries": "When it's allowed to open a new trade.", "Cash-out rules": "When it sells a position." };
+const CFG_HELP = {
+  bankroll: "Bet sizes are worked out from this amount.",
+  kellyFraction: "Share of the full Kelly bet size to use. Lower is safer: 0.15 bets about a seventh of Kelly.",
+  maxStake: "The most one new trade can cost.",
+  maxGameExposure: "The most it can have open in any one game.",
+  maxTotalExposure: "The most it can have open across all games.",
+  maxDailyLoss: "No new trades for the night once it's down this much, counting open positions.",
+  entryEdge: "How much cheaper than the model's fair price a contract must be, after Kalshi's fee.",
+  minPrice: "Skip contracts cheaper than this.",
+  maxPrice: "Skip contracts dearer than this.",
+  maxQuoteWidth: "Skip markets whose buy and sell prices are further apart than this.",
+  minVolume: "Skip markets that have traded fewer contracts than this.",
+  noEntryLastSecs: "No new trades this close to the end of the game.",
+  cooldownSecs: "Wait this long after selling before buying the same market again.",
+  gameTimeoutSecs: "After a stop-loss, no new trades in that game for this long.",
+  maxStopsPerGame: "After this many stop-losses in one game, leave it alone for the night.",
+  blowoutMargin: "No new trades in the second half once a team leads by this many points.",
+  reentryEdgeBonus: "Extra edge needed to buy back into a market it already traded.",
+  maxPositionsPerGame: "The most positions it can hold in one game at once.",
+  freezeAfterScoreSecs: "Pause new trades this long after any score: the score feed lags the market.",
+  confirmTicks: "The edge must show on this many price checks in a row, to skip one-off stale quotes.",
+  leadEntryEdge: "Edge needed for a fast entry right after a score, before the market has caught up.",
+  marketJumpCents: "If the moneyline moves this much with no change in the score feed, pause new trades.",
+  alpha: "How much to trust its own model over Kalshi's prices. 0 means follow the market only.",
+  takeProfit: "Sell once a contract is worth this many cents more than you paid.",
+  takeProfitPct: "…or once it's up this share of what you paid (0.35 = 35%).",
+  stopLoss: "Sell once a contract is worth this many cents less than you paid.",
+  trailArm: "Once up this much, a trailing stop starts following the price up.",
+  trailGive: "The trailing stop sells if the price drops this far from its high.",
+  edgeExit: "Sell early when buyers pay this much more than the model thinks it's worth.",
+  holdToSettleAt: "Above this price, don't sell: let it pay out at $1.",
+  exitSlippage: "Offer to sell this many cents under the current bid so the sale goes through.",
+};
 
 // ── Auto trader (runs on Cloudflare) ─────────────────────────────────────────
 // The main control: pick games, pick paper or live, press start. It runs on the server, so this tab can close.
-function ServerRunner({ cfg, enabled, liveGames, nEnabled, browserRunning, onStatus, onRules, onAllOn }) {
+function ServerRunner({ cfg, enabled, liveGames, nEnabled, browserRunning, browserMode, onStatus, onRules, onAllOn, foot, pnl }) {
   const [st, setSt] = useState(null), [err, setErr] = useState(""), [busy, setBusy] = useState(false);
   const [pick, setPick] = useState(() => load("sharp_runner_mode", "paper"));
   const [acct, setAcct] = useState(null), [synced, setSynced] = useState(null), [showLog, setShowLog] = useState(false);
@@ -1090,19 +1349,20 @@ function ServerRunner({ cfg, enabled, liveGames, nEnabled, browserRunning, onSta
     finally { setBusy(false); }
   }
   const entries = !!(st && st.entries), nManaged = st ? st.managedCount || 0 : 0;
+  const link = (onClick, text) => <button className="link" style={{ background: "none", border: 0, padding: 0, font: "inherit" }} onClick={onClick}>{text}</button>;
   const checks = [
     { ok: nManaged > 0 || entries, label: nManaged > 0 ? `Managing ${nManaged} of your position${nManaged === 1 ? "" : "s"}` : entries ? "Not managing any of your positions (fine: it will look for new trades)" : "Pick at least one of your positions below and set its sell rules" },
   ];
   if (entries) {
-    checks.push({ ok: nEnabled > 0, label: nEnabled > 0 ? `New trades in ${nEnabled} game${nEnabled === 1 ? "" : "s"}` : "Pick games for new trades with the toggles below",
-      fix: nEnabled === 0 && liveGames.length > 0 ? <a style={{ color: T.accent, cursor: "pointer" }} onClick={onAllOn}>turn on all live games</a> : null });
+    checks.push({ ok: nEnabled > 0, label: nEnabled > 0 ? `New trades in ${nEnabled} game${nEnabled === 1 ? "" : "s"}` : "Pick games for new trades with the switches below",
+      fix: nEnabled === 0 && liveGames.length > 0 ? link(onAllOn, "Turn on all live games") : null });
     checks.push({ ok: true, label: `New-trade limits: up to $${Math.min(cfg.maxStake, 25)} per entry · $${Math.min(cfg.maxTotalExposure, 150)} open · stops for the night at −$${cfg.maxDailyLoss}`,
-      fix: <a style={{ color: T.accent, cursor: "pointer" }} onClick={onRules}>change</a> });
+      fix: link(onRules, "Change") });
   }
   if (isLive) {
     checks.push({ ok: !!(acct && acct.connected), label: !acct ? "Checking the Kalshi connection…" : acct.connected ? `Kalshi connected · ${fmt$(acct.cash)} cash` : `Kalshi not connected (${acct.error})` });
     checks.push({ ok: !!(st && st.tradingEnabled), label: st && st.tradingEnabled ? "Live trading switch is on" : "Live trading switch is off on the server",
-      fix: st && !st.tradingEnabled ? <span style={{ color: T.muted }}>turn it on in a terminal: <code style={{ color: T.text }}>cd ~/Documents/Apps/wc26/runner && echo 1 | npx --yes wrangler@3 secret put KALSHI_TRADING_ENABLED</code></span> : null });
+      fix: st && !st.tradingEnabled ? <span>Turn it on in a terminal: <code>cd ~/Documents/Apps/wc26/runner && echo 1 | npx --yes wrangler@3 secret put KALSHI_TRADING_ENABLED</code></span> : null });
   }
   if (browserRunning) checks.push({ ok: false, label: "The in-tab bot below is running. Stop it first so the two don't trade the same games." });
   const ready = st && checks.every(c => c.ok);
@@ -1120,104 +1380,94 @@ function ServerRunner({ cfg, enabled, liveGames, nEnabled, browserRunning, onSta
     if (on && !confirm("Also let it open its own trades?\n\nTesting so far shows no edge: the free score feeds are slower than Kalshi's prices. Leave this off unless you're testing.")) return;
     call("settings", { entries: on });
   }
-  const ago = (ts) => ts ? Math.max(0, Math.round((Date.now() - ts) / 1000)) + "s ago" : "never";
   const stale = running && st.lastTick && Date.now() - st.lastTick > 90000;
-  const pnl = st ? (st.realized || 0) + (st.open || 0) : 0;
-  const accent = running ? (isLive ? T.red : T.green) : T.border;
-  const big = { ...btnBase, padding: "10px 18px", fontSize: 11 };
+  const pnlNow = st ? (st.realized || 0) + (st.open || 0) : 0;
+  const tone = running ? (isLive ? "live" : "paper") : "off";
+  const dot = running ? (isLive ? "var(--neg)" : "var(--pos)") : st ? "var(--faint)" : err ? "var(--small)" : "var(--faint)";
+  const title = running ? (isLive ? "Running with real money" : "Running in paper mode") + (st.killed ? ": cashing out" : "")
+    : st ? "Stopped" : err ? "Can't reach the server trader" : "Connecting to the server…";
+  const sub = running ? (isLive ? "Live mode: it places real orders on Kalshi, even with this page closed." : "Paper mode: practice only. Nothing is really bought or sold.")
+    : st ? (isLive ? "Live mode (real money) is picked. Nothing happens until you press Start." : "Paper mode (practice) is picked. Nothing happens until you press Start.")
+    : err ? err : "Checking whether the server trader is running.";
+  const botPos = st ? st.positions.filter(p => !p.unmanaged) : [];
   return (
-    <div style={{ ...card, borderColor: accent, borderWidth: running ? 2 : 1, marginBottom: 14 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <div>
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: T.text }}>AUTO TRADER</div>
-          <div style={{ fontSize: 9, color: T.muted, marginTop: 2 }}>Runs on the server. You can close this page once it's started.</div>
+    <>
+      <div className={"card lv-status" + (tone === "live" ? " is-live" : tone === "paper" ? " is-paper" : "")} role="status" aria-live="polite">
+        <div className="row" style={{ marginBottom: 8 }}>
+          <span className="small muted" style={{ fontWeight: 500 }}>Server auto trader</span>
+          <span className={"lv-pill " + (isLive ? "live" : "paper")}>{isLive ? "LIVE · real money" : "PAPER · practice"}</span>
         </div>
-        <div style={{ flex: 1 }} />
-        <div style={{ display: "flex", border: "1px solid " + T.border, borderRadius: 4, overflow: "hidden", opacity: running ? 0.5 : 1 }} title={running ? "Stop before switching" : ""}>
-          {["paper", "live"].map(m => (
-            <button key={m} disabled={running} onClick={() => setPick(m)} style={{ ...btnBase, border: "none", borderRadius: 0, background: mode === m ? (m === "live" ? T.red : T.blue) + "33" : "transparent", color: mode === m ? (m === "live" ? T.red : T.blue) : T.muted }}>
-              {m === "paper" ? "PAPER (practice)" : "LIVE $"}
-            </button>))}
+        <div className="lv-state">
+          <span className={"lv-dot" + (running ? " pulse" : "")} style={{ "--c": dot }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="lv-state-title">{title}</div>
+            <div className="lv-state-sub">{sub}</div>
+          </div>
         </div>
-        {!running && <button disabled={busy || !ready} onClick={start} style={{ ...big, background: (isLive ? T.red : T.green) + (ready ? "33" : "11"), borderColor: isLive ? T.red : T.green, color: isLive ? T.red : T.green, opacity: ready ? 1 : 0.5, cursor: ready ? "pointer" : "not-allowed" }}>
-          ▶ START {isLive ? "LIVE" : "PAPER"}</button>}
-        {running && <button disabled={busy} onClick={() => call("stop")} style={{ ...big, color: T.gold, borderColor: T.gold }}>■ STOP</button>}
-        {(running || (st && st.positions.length > 0)) && <button disabled={busy} onClick={() => { if (confirm(isLive ? "Sell every position the auto trader manages (including the ones you handed over) at the current bid, and stop?" : "Paper: close the bot's paper positions and record would-sells for your managed positions, then stop?")) call("kill"); }} style={{ ...big, color: T.red, borderColor: T.red }}>✕ CASH OUT ALL</button>}
+
+        {st && running && (
+          <div className="lv-running">
+            <span>P&amp;L <b style={{ color: pnlNow >= 0 ? "var(--pos)" : "var(--neg)" }}>{fmtSigned$(pnlNow)}</b></span>
+            <span><b>{st.record.n}</b> trades · {st.record.wins}W–{st.record.n - st.record.wins}L</span>
+            <span style={stale ? { color: "var(--neg)", fontWeight: 600 } : null}>{stale ? "The server hasn't checked in for 90s" : `Checking ${st.games} live games · last check ${agoS(st.lastTick)}`}</span>
+            <span>{nEnabled} game{nEnabled === 1 ? "" : "s"} picked{synced ? " · rule changes sent " + new Date(synced).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : " · rule and game changes here are sent automatically"}</span>
+          </div>)}
+        {browserRunning && <div className="note warn" style={{ marginTop: 10 }}>The in-tab bot is also running ({browserMode === "live" ? "real money" : "paper"}). See Advanced below.</div>}
+
+        <div className="lv-sep" />
+        <ModeSeg value={mode} onPick={setPick} locked={running} />
+
+        {st && (
+          <div style={{ marginTop: 14 }}>
+            <div className="lv-k">What it does</div>
+            <div className="lv-seg" role="group" aria-label="What the trader does">
+              <button disabled={busy} aria-pressed={!entries} onClick={() => entries && setEntries(false)}>Manage my positions<small>sells only, never buys</small></button>
+              <button disabled={busy} aria-pressed={entries} onClick={() => !entries && setEntries(true)}>Also find new trades<small>experimental</small></button>
+            </div>
+            <div className="lv-help">{entries ? "Manages the positions you pick and also opens its own trades." : "Sells the positions you pick at your target, stop or trailing stop. It never buys."}</div>
+          </div>)}
+
+        {st && !running && (
+          <div className="lv-checks">
+            {checks.map((c, i) => (
+              <div key={i} className="lv-check">
+                <span className={"ic " + (c.ok ? "ok" : "no")} aria-hidden="true">{c.ok ? "✓" : "!"}</span>
+                <div style={{ minWidth: 0 }}><div>{c.label}</div>{c.fix && <div className="fix">{c.fix}</div>}</div>
+              </div>))}
+          </div>)}
+
+        <div className="lv-actions">
+          {!running && <button className={"btn " + (isLive ? "lv-go-live" : "btn-primary")} disabled={busy || !ready} onClick={start}>
+            Start {isLive ? "with real money" : "paper trading"}</button>}
+          {running && <button className="btn" disabled={busy} onClick={() => call("stop")}>Stop</button>}
+          {(running || (st && st.positions.length > 0)) && <button className="btn lv-danger" disabled={busy} onClick={() => { if (confirm(isLive ? "Sell every position the auto trader manages (including the ones you handed over) at the current bid, and stop?" : "Paper: close the bot's paper positions and record would-sells for your managed positions, then stop?")) call("kill"); }}>Cash out all</button>}
+        </div>
+        {foot}
       </div>
 
-      {st && (
-        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 9, color: T.muted }}>
-          <span>What it does:</span>
-          <div style={{ display: "flex", border: "1px solid " + T.border, borderRadius: 4, overflow: "hidden" }}>
-            <button disabled={busy} onClick={() => entries && setEntries(false)} style={{ ...btnBase, padding: "5px 10px", border: "none", borderRadius: 0, background: !entries ? T.accent + "22" : "transparent", color: !entries ? T.accent : T.muted }}>MANAGE MY POSITIONS</button>
-            <button disabled={busy} onClick={() => !entries && setEntries(true)} style={{ ...btnBase, padding: "5px 10px", border: "none", borderRadius: 0, background: entries ? T.gold + "22" : "transparent", color: entries ? T.gold : T.muted }}>+ FIND NEW TRADES (experimental)</button>
-          </div>
-          <span>{entries ? "Manages the positions you pick and also opens its own trades." : "Sells the positions you pick at your target, stop or trailing stop. It never buys."}</span>
-        </div>)}
-      {err && <div style={{ fontSize: 9, color: T.red, marginTop: 8 }}>{err}</div>}
-      {!st && !err && <div style={{ fontSize: 9, color: T.muted, marginTop: 8 }}>Connecting to the server…</div>}
-
-      {st && !running && (
-        <div style={{ marginTop: 10, display: "grid", gap: 4 }}>
-          {checks.map((c, i) => (
-            <div key={i} style={{ fontSize: 10, color: c.ok ? T.text : T.gold, display: "flex", gap: 6, flexWrap: "wrap" }}>
-              <span style={{ color: c.ok ? T.green : T.gold, width: 12 }}>{c.ok ? "✓" : "○"}</span><span>{c.label}</span>{c.fix && <span style={{ fontSize: 9 }}>· {c.fix}</span>}
-            </div>))}
-        </div>)}
-
-      {st && running && (
-        <div style={{ marginTop: 10, fontSize: 10, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
-          <span style={{ color: accent, fontWeight: 700, animation: "pulse 1.5s infinite" }}>● {isLive ? "LIVE · REAL MONEY" : "PAPER TRADING"}{st.killed ? " · CASHING OUT" : ""}</span>
-          <span style={{ color: stale ? T.red : T.muted }}>{stale ? "⚠ server hasn't checked in for 90s" : `checking ${st.games} live games · last ${ago(st.lastTick)}`}</span>
-          <span style={{ color: pnl >= 0 ? T.green : T.red, fontWeight: 700 }}>P&L {fmtSigned$(pnl)}</span>
-          <span style={{ color: T.muted }}>{st.record.n} trades · {st.record.wins}W-{st.record.n - st.record.wins}L</span>
-          <span style={{ color: T.muted }}>{nEnabled} games picked{synced ? " · rule changes sent " + new Date(synced).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : " · rule and game changes here are sent automatically"}</span>
-        </div>)}
+      {pnl}
 
       {st && <MyPositions st={st} busy={busy} call={call} isLive={isLive} running={running} />}
 
-      {st && (st.shadowTrades || []).length > 0 && (
-        <div style={{ marginTop: 10, borderTop: "1px solid " + T.border, paddingTop: 10 }}>
-          <div style={{ fontSize: 8, letterSpacing: 2, color: T.muted, marginBottom: 4 }}>PAPER: WHAT IT WOULD HAVE SOLD (nothing was sold)</div>
-          {st.shadowTrades.slice(0, 8).map((t, i) => (
-            <div key={i} style={{ fontSize: 10, color: T.text, display: "flex", gap: 6 }}>
-              <span style={{ flex: 1 }}>{new Date(t.ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} {t.label} {t.side.toUpperCase()} · {t.reason}</span>
-              <span>{t.count}× {t.entry}→{t.exit}¢</span><span style={{ color: t.pnl >= 0 ? T.green : T.red }}>{fmtSigned$(t.pnl)}</span>
-            </div>))}
-        </div>)}
-
-      {st && (st.positions.filter(p => !p.unmanaged && !st.myPositions.some(m => m.ticker === p.ticker && m.rules)).length > 0 || st.trades.length > 0 || (running && entries)) && (
-        <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 12, borderTop: "1px solid " + T.border, paddingTop: 10 }}>
-          <div>
-            <div style={{ fontSize: 8, letterSpacing: 2, color: T.muted, marginBottom: 4 }}>BOT'S OWN POSITIONS ({st.positions.filter(p => !p.unmanaged).length})</div>
-            {st.positions.filter(p => !p.unmanaged).length === 0 && <div style={{ fontSize: 9, color: T.dim }}>none</div>}
-            {st.positions.filter(p => !p.unmanaged).map(p => (
-              <div key={p.ticker} style={{ fontSize: 10, color: T.text, display: "flex", gap: 6 }}>
-                <span style={{ flex: 1 }}>{p.label} {p.side.toUpperCase()}{p.lead ? " ⚡" : ""}{p.unmanaged ? " (yours, not managed)" : ""}</span>
-                <span>{p.count}× {p.avgCost}¢ → {p.bid == null ? "—" : p.bid + "¢"}</span>
-                <span style={{ color: p.bid != null && p.bid >= p.avgCost ? T.green : T.red }}>{p.bid != null ? fmtSigned$((p.bid - p.avgCost) * p.count / 100) : ""}</span>
-              </div>))}
-          </div>
-          <div>
-            <div style={{ fontSize: 8, letterSpacing: 2, color: T.muted, marginBottom: 4 }}>BOT'S CLOSED TRADES</div>
-            {st.trades.length === 0 && <div style={{ fontSize: 9, color: T.dim }}>none yet</div>}
-            {st.trades.slice(0, 8).map((t, i) => (
-              <div key={i} style={{ fontSize: 10, color: T.text, display: "flex", gap: 6 }}>
-                <span style={{ flex: 1 }}>{new Date(t.ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} {t.label}{t.lead ? " ⚡" : ""}</span>
-                <span>{t.entry}→{t.exit}¢</span><span style={{ color: t.pnl >= 0 ? T.green : T.red }}>{fmtSigned$(t.pnl)}</span>
-              </div>))}
-          </div>
-        </div>)}
+      {st && (botPos.length > 0 || (running && entries)) && <>
+        <UI.H2 aside={`${botPos.length}`}>Trader's own positions</UI.H2>
+        {botPos.length === 0 ? <div className="note">None open.</div> : <div className="lv-plist">
+          {botPos.map(p => (
+            <PositionCard key={p.ticker} title={p.label} side={p.side} count={p.count} entry={p.avgCost} bid={p.bid}
+              tp={p.tpPrice || Math.min(99, p.avgCost + cfg.takeProfit)} sl={p.avgCost - cfg.stopLoss} peak={p.peakBid}
+              tag={p.lead ? <span className="chip">Fast entry</span> : null} />))}
+        </div>}
+      </>}
 
       {st && (st.log || []).length > 0 && (
-        <div style={{ marginTop: 8 }}>
-          <a style={{ fontSize: 9, color: T.muted, cursor: "pointer" }} onClick={() => setShowLog(s => !s)}>{showLog ? "▾ hide server log" : "▸ server log"}</a>
-          {showLog && <div style={{ maxHeight: 180, overflowY: "auto", marginTop: 4 }}>
+        <div style={{ marginTop: 16 }}>
+          <button className="lv-fold" aria-expanded={showLog} onClick={() => setShowLog(s => !s)}>Server log</button>
+          {showLog && <div className="card lv-log" style={{ marginTop: 8 }}>
             {st.log.slice(0, 60).map((l, i) => (
-              <div key={i} style={{ fontSize: 9, color: l.kind === "error" || l.kind === "loss" ? T.red : l.kind === "win" ? T.green : T.muted }}>{new Date(l.ts).toLocaleTimeString()} {l.msg}</div>))}
+              <div key={i} style={{ color: l.kind === "error" || l.kind === "loss" ? "var(--neg)" : l.kind === "win" ? "var(--pos)" : "var(--text-2)" }}><span className="ts">{new Date(l.ts).toLocaleTimeString()}</span>{l.msg}</div>))}
           </div>}
         </div>)}
-    </div>
+    </>
   );
 }
 
@@ -1226,78 +1476,82 @@ function ServerRunner({ cfg, enabled, liveGames, nEnabled, browserRunning, onSta
 function MyPositions({ st, busy, call, isLive, running }) {
   const list = (st.myPositions || []).filter(p => !p.botOwned);
   const [edit, setEdit] = useState({});
-  if (!st.credentials) return <div style={{ marginTop: 10, fontSize: 9, color: T.muted }}>Your Kalshi positions show here once the server has your Kalshi key.</div>;
+  if (!st.credentials) return <><UI.H2>Your Kalshi positions</UI.H2><div className="note">Your Kalshi positions show here once the server has your Kalshi key.</div></>;
   const age = st.myPositionsTs ? Math.round((Date.now() - st.myPositionsTs) / 1000) : null;
-  const inp = { width: 38, background: T.bg, border: "1px solid " + T.border, color: T.text, fontFamily: "inherit", fontSize: 10, padding: "3px 4px", borderRadius: 3 };
   const draft = (p) => edit[p.ticker] || (p.rules ? { tp: p.rules.tpPrice || "", sl: p.rules.slPrice || "", arm: p.rules.trailArm || "", give: p.rules.trailGive || "" }
     : { tp: Math.min(95, p.avgCost + 15), sl: Math.max(1, p.avgCost - 15), arm: "", give: "" });
   const set = (p, k, v) => setEdit(e => ({ ...e, [p.ticker]: { ...draft(p), [k]: v } }));
   const save = (p) => { const d = draft(p); call("manage", { ticker: p.ticker, rules: { tpPrice: d.tp, slPrice: d.sl, trailArm: d.arm, trailGive: d.give } }); setEdit(e => { const n = { ...e }; Reflect.deleteProperty(n, p.ticker); return n; }); };
+  const num = (v) => v === "" || v == null || !isFinite(+v) ? null : +v;
+  const field = (p, k, label, unit, ph) => (
+    <label className="lv-mini"><span>{label}</span>
+      <span className="lv-unit"><input className="field" inputMode="decimal" placeholder={ph} value={draft(p)[k]} onChange={e => set(p, k, e.target.value)} /><i>{unit}</i></span></label>);
   return (
-    <div style={{ marginTop: 10, borderTop: "1px solid " + T.border, paddingTop: 10 }}>
-      <div style={{ fontSize: 8, letterSpacing: 2, color: T.muted, marginBottom: 6 }}>
-        YOUR KALSHI POSITIONS ({list.length}){age != null ? ` · read ${age}s ago` : ""}
-        <span style={{ letterSpacing: 0, marginLeft: 8, color: T.dim }}>{isLive ? "live: rules sell for real" : "paper: rules only record what would have sold"}</span>
+    <>
+      <UI.H2 aside={age != null ? `read ${age}s ago` : null}>Your Kalshi positions <span className="count">{list.length}</span></UI.H2>
+      <div className="lv-intro">{isLive ? "Live: when a rule hits, the trader really sells." : "Paper: rules only record what would have sold. Nothing is sold."} Set a sell price and a stop, then tap Manage to hand a position over.</div>
+      {list.length === 0 && <div className="note">No positions in your account right now.</div>}
+      <div className="lv-plist">
+        {list.map(p => {
+          const d = draft(p), dirty = !!edit[p.ticker];
+          return (
+            <PositionCard key={p.ticker} title={p.label} side={p.side} meta={p.game} count={p.count} entry={p.avgCost} bid={p.bid} tp={num(d.tp)} sl={num(d.sl)}
+              tag={p.rules ? <span className="chip"><span className="d" style={{ background: "var(--pos)" }} />Managed</span> : null}>
+              <div className="lv-rules">
+                {field(p, "tp", "Sell at", "¢")}
+                {field(p, "sl", "Stop at", "¢")}
+                {field(p, "give", "Trailing stop gives back", "¢", "off")}
+                {field(p, "arm", "…once it's up", "+¢", "0")}
+              </div>
+              <div className="lv-actions" style={{ marginTop: 0 }}>
+                {(!p.rules || dirty) && <button className="btn btn-primary" disabled={busy} onClick={() => save(p)}>{p.rules ? "Save rules" : "Manage"}</button>}
+                {p.rules && <button className="btn" disabled={busy} onClick={() => call("manage", { ticker: p.ticker, rules: null })}>Stop managing</button>}
+              </div>
+              {p.rules && !isLive && p.shadowDone && <div className="note warn">Paper: its rule hit; see "Would have sold" under Profit and loss. Save the rules again to keep watching.</div>}
+              {p.rules && !p.live && <div className="tiny muted">Acts once the game is live{running ? "" : " and the auto trader is started"}.</div>}
+            </PositionCard>);
+        })}
       </div>
-      {list.length === 0 && <div style={{ fontSize: 9, color: T.dim }}>No college football positions in your account right now.</div>}
-      {list.map(p => {
-        const d = draft(p), dirty = !!edit[p.ticker], pnl = p.bid != null ? (p.bid - p.avgCost) * p.count / 100 : null;
-        return (
-          <div key={p.ticker} style={{ padding: "6px 0", borderBottom: "1px solid " + T.border + "88", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", fontSize: 10 }}>
-            <div style={{ minWidth: 200, flex: 1 }}>
-              <div style={{ color: T.text, fontWeight: 700 }}>{p.label} {p.side.toUpperCase()} {p.rules && <span style={{ color: T.green, fontWeight: 400 }}>✓ managed</span>}</div>
-              <div style={{ fontSize: 8, color: T.muted }}>{p.game}</div>
-            </div>
-            <div style={{ color: T.text }}>{p.count}× {p.avgCost}¢ → {p.bid == null ? "—" : p.bid + "¢"} <span style={{ color: (pnl || 0) >= 0 ? T.green : T.red }}>{pnl != null ? fmtSigned$(pnl) : ""}</span></div>
-            <div style={{ display: "flex", gap: 6, alignItems: "center", color: T.muted, fontSize: 9, flexWrap: "wrap" }}>
-              sell at <input style={inp} value={d.tp} onChange={e => set(p, "tp", e.target.value)} />¢
-              stop at <input style={inp} value={d.sl} onChange={e => set(p, "sl", e.target.value)} />¢
-              trail <input style={inp} placeholder="off" value={d.give} onChange={e => set(p, "give", e.target.value)} />¢ after +<input style={inp} placeholder="0" value={d.arm} onChange={e => set(p, "arm", e.target.value)} />¢
-            </div>
-            <div style={{ display: "flex", gap: 6 }}>
-              {(!p.rules || dirty) && <button disabled={busy} onClick={() => save(p)} style={{ ...btnBase, padding: "4px 10px", fontSize: 8, color: T.accent, borderColor: T.accent }}>{p.rules ? "SAVE" : "MANAGE"}</button>}
-              {p.rules && <button disabled={busy} onClick={() => call("manage", { ticker: p.ticker, rules: null })} style={{ ...btnBase, padding: "4px 10px", fontSize: 8, color: T.muted }}>STOP MANAGING</button>}
-            </div>
-            {p.rules && !isLive && p.shadowDone && <div style={{ width: "100%", fontSize: 8, color: T.gold }}>paper: its rule hit, see "would have sold" below. Save the rules again to keep watching.</div>}
-            {p.rules && !p.live && <div style={{ width: "100%", fontSize: 8, color: T.dim }}>acts once the game is live{running ? "" : " and the auto trader is started"}</div>}
-          </div>);
-      })}
-    </div>
+    </>
   );
 }
 
 function ConfigPanel({ cfg, setCfg, mode, onResetPaper, server }) {
   const set = (k, v) => setCfg(c => ({ ...c, [k]: v }));
+  const sw = (label, help, on, onClick) => (
+    <div className="lv-field"><div className="fl">{label}</div>{help && <div className="fh">{help}</div>}<div className="fc"><Toggle on={on} onClick={onClick} label={label} /></div></div>);
   return (
-    <div style={{ ...card, marginBottom: 14 }}>
+    <div className="card lv-form">
       {CFG_FIELDS.map(([title, fields]) => (
-        <div key={title} style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 8, color: T.gold, letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 }}>{title}</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 8 }}>
-            {fields.map(([k, label, step]) => (
-              <label key={k} style={{ fontSize: 9, color: T.muted }}>
-                {label}
-                <input type="number" step={step || 1} value={cfg[k] ?? ""} onChange={e => set(k, e.target.value === "" ? "" : Number(e.target.value))}
-                  style={{ display: "block", width: "100%", marginTop: 3, background: T.bg, border: "1px solid " + T.border, color: T.text, padding: "6px 8px", borderRadius: 4, fontSize: 10 }} />
-              </label>
-            ))}
-          </div>
+        <div key={title}>
+          <h3>{title}</h3>
+          <div className="gsub">{CFG_GROUP_HELP[title]}</div>
+          {fields.map(([k, label, step]) => (
+            <label key={k} className="lv-field">
+              <span className="fl">{label}</span>
+              {CFG_HELP[k] && <span className="fh">{CFG_HELP[k]}</span>}
+              <span className="fc"><input className="field" type="number" inputMode="decimal" step={step || 1} value={cfg[k] ?? ""} onChange={e => set(k, e.target.value === "" ? "" : Number(e.target.value))} /></span>
+            </label>
+          ))}
         </div>
       ))}
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 9, color: T.muted, alignItems: "center" }}>
-        {["win", "spread", "total"].map(k => (
-          <label key={k}><input type="checkbox" checked={!!cfg.kinds[k]} onChange={e => set("kinds", { ...cfg.kinds, [k]: e.target.checked })} /> trade {k === "win" ? "moneyline" : k === "spread" ? "spreads" : "totals"}</label>
-        ))}
-        <label><input type="checkbox" checked={!!cfg.restingTakeProfit} onChange={e => set("restingTakeProfit", e.target.checked)} /> rest a take-profit sell on Kalshi after each buy</label>
-        <label>game feed <select value={cfg.liveFeed || "auto"} onChange={e => set("liveFeed", e.target.value)} style={{ background: T.bg, color: T.text, border: "1px solid " + T.border, fontSize: 9 }}><option value="auto">Auto (fastest)</option><option value="core">ESPN core</option><option value="kalshi">Kalshi (Stats Perform)</option><option value="espn">ESPN scoreboard</option></select></label>
-        <label><input type="checkbox" checked={!!cfg.manageManual} onChange={e => set("manageManual", e.target.checked)} /> also manage CFB positions I opened myself (live)</label>
-        <div style={{ flex: 1 }} />
-        <button style={{ ...btnBase, padding: "4px 8px", fontSize: 8 }} onClick={() => setCfg({ ...CFB.DEFAULT_CONFIG })}>RESET RULES</button>
-        {mode === "paper" && <button style={{ ...btnBase, padding: "4px 8px", fontSize: 8 }} onClick={onResetPaper}>RESET PAPER ACCOUNT</button>}
+      <h3>Markets and feed</h3>
+      <div className="gsub">Which Kalshi markets it trades and where the score comes from.</div>
+      {["win", "spread", "total"].map(k => sw(`Trade ${k === "win" ? "moneylines" : k === "spread" ? "spreads" : "totals"}`, k === "win" ? "Who wins the game." : k === "spread" ? "Win by more than a number of points." : "Total points over a number.", !!cfg.kinds[k], () => set("kinds", { ...cfg.kinds, [k]: !cfg.kinds[k] })))}
+      {sw("Rest a take-profit sell on Kalshi", "After each buy, leave a sell order at the take-profit price. It still fires if this tab closes.", !!cfg.restingTakeProfit, () => set("restingTakeProfit", !cfg.restingTakeProfit))}
+      {sw("Also manage positions I opened myself", `Live mode only: apply these cash-out rules to ${SPORT === "nfl" ? "NFL" : "college football"} positions you bought yourself.`, !!cfg.manageManual, () => set("manageManual", !cfg.manageManual))}
+      <label className="lv-field">
+        <span className="fl">Game feed</span>
+        <span className="fh">Where the live score comes from. Auto picks whichever is furthest along.</span>
+        <span className="fc"><select className="field" value={cfg.liveFeed || "auto"} onChange={e => set("liveFeed", e.target.value)}><option value="auto">Auto (fastest)</option><option value="core">ESPN core</option><option value="kalshi">Kalshi (Stats Perform)</option><option value="espn">ESPN scoreboard</option></select></span>
+      </label>
+      <div className="lv-actions" style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }}>
+        <button className="btn" onClick={() => setCfg({ ...CFB.DEFAULT_CONFIG })}>Reset rules to defaults</button>
+        {mode === "paper" && <button className="btn lv-danger" onClick={onResetPaper}>Reset paper account</button>}
       </div>
       {server && !server.credentials && (
-        <div style={{ marginTop: 12, fontSize: 9, color: T.muted, lineHeight: 1.7, borderTop: "1px solid " + T.border, paddingTop: 10 }}>
-          <b style={{ color: T.gold }}>Live setup:</b> create an API key at kalshi.com → Account → API Keys, then in Cloudflare Pages → Settings → Environment variables add secrets
+        <div className="note" style={{ marginTop: 12 }}>
+          <b>Live setup:</b> create an API key at kalshi.com → Account → API Keys, then in Cloudflare Pages → Settings → Environment variables add secrets
           <code> KALSHI_API_KEY_ID</code>, <code>KALSHI_PRIVATE_KEY</code> (paste the whole PEM), <code>KALSHI_TRADING_ENABLED=1</code> and <code>KALSHI_MAX_ORDER_DOLLARS</code> (server-side cap per order), then redeploy.
         </div>
       )}
