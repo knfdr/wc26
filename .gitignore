@@ -5,3 +5,4 @@ tools/paper-run.log
 tools/paper-run-*.log
 tools/feedrace.jsonl
 tools/feedrace.log
+tools/live-check-*.log

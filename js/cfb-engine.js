@@ -594,13 +594,18 @@ function pregameDriveSim(spreadHome, total, n, sport, opts) {
   // P(win) matches the long-run spread-to-moneyline table while the median stays on the line.
   if (g0.sport === "nfl" && Math.abs(spreadHome) >= 1.5 && opts.shape !== false) {
     const fav = Math.abs(spreadHome), pT = nflFavWinPct(fav);
-    const pSim = spreadHome > 0 ? dist.pCover("home", 0) : dist.pCover("away", 0);
+    // the sim's margins spread a little wider than real NFL games (SD ~13.6-14 vs ~13.2), which overprices underdog
+    // covers: scale the probit distance from the spread by sd/13.2 first (median and key-number spikes stay put)
+    const kS = clamp(dist.sdMargin / SPORTS.nfl.sigmaMargin, 0.9, 1.15);
     const zc = (p) => PhiInv(clamp(p, 0.005, 0.995));
+    const z0 = PhiInv(clamp(dist.pCover("home", spreadHome), 0.0005, 0.9995));
+    const tight = (T) => Phi(z0 + (PhiInv(clamp(dist.pCover("home", T), 0.0005, 0.9995)) - z0) * kS);
+    const pSim = spreadHome > 0 ? tight(0) : 1 - tight(-0.5);
     // shift (in probit space, home view) is full on the underdog side of 0, fades to nothing at the spread, and is zero
     // beyond it, so blowout and key-number tails are left as the sim drew them
     const D = (zc(pT) - zc(pSim)) * (spreadHome > 0 ? 1 : -1);
     const w = (T) => spreadHome > 0 ? (T <= 0 ? 1 : T >= spreadHome ? 0 : 1 - T / spreadHome) : (T >= 0 ? 1 : T <= spreadHome ? 0 : 1 - T / spreadHome);
-    const hm = (T) => { const p = dist.pCover("home", T), k = w(T); return k ? Phi(PhiInv(clamp(p, 0.0005, 0.9995)) + D * k) : p; };
+    const hm = (T) => { const p = tight(T), k = w(T); return k ? Phi(PhiInv(clamp(p, 0.0005, 0.9995)) + D * k) : p; };
     const corr = { margin: { kind: "nfl-shape", D, spread: spreadHome }, total: null };
     const out = { ...dist, corrected: corr, pHome: hm(0), pCover: (side, line) => side === "home" ? hm(line) : 1 - hm(-line), pOver: dist.pOver };
     Object.assign(out, { sdMargin: dist.sdMargin, sdTotal: dist.sdTotal, pTie: dist.pTie, cal: dist.cal, marginFreq: dist.marginFreq, raw: dist, shape: corr });
