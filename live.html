@@ -241,6 +241,15 @@ function App() {
 
   // ESPN core API: /status + /situation every pass for games we care about, the play only when lastPlay changes.
   const CORE = "https://sports.core.api.espn.com/v2/sports/football/leagues/" + LEAGUE.espn + "/events/";
+  // ESPN core sometimes answers without CORS headers; after a failed direct fetch, go through our proxy for a minute.
+  let coreProxyUntil = 0;
+  async function coreJSON(url) {
+    const rel = url.replace(/^https?:\/\/sports\.core\.api\.espn\.com\/v2\/sports\/football\/leagues\//, "").replace(/\?.*$/, "");
+    const viaProxy = () => getJSON("/api/espn-core/" + rel + "?_=" + Date.now());
+    if (Date.now() < coreProxyUntil) return viaProxy();
+    try { return await getJSON(url); }
+    catch (e) { coreProxyUntil = Date.now() + 60000; return viaProxy(); }
+  }
   async function refreshCore(pass) {
     const st = S.current, en = R.current.enabled || {};
     const live = (st.espnGames || []).filter(g => g.state === "in" || (g.state === "pre" && new Date(g.date) - Date.now() < 900e3));
@@ -249,11 +258,11 @@ function App() {
     await Promise.all(list.map(async g => {
       const base = CORE + g.id + "/competitions/" + g.id + "/";
       try {
-        const [status, situation] = await Promise.all([getJSON(base + "status?_=" + Date.now()), getJSON(base + "situation?_=" + Date.now())]);
+        const [status, situation] = await Promise.all([coreJSON(base + "status?_=" + Date.now()), coreJSON(base + "situation?_=" + Date.now())]);
         const prev = st.core[g.id] || {};
         let play = prev.play, playRef = prev.playRef;
         const ref = situation && situation.lastPlay && situation.lastPlay.$ref;
-        if (ref && ref !== playRef) { try { play = await getJSON(ref.replace(/^http:/, "https:")); playRef = ref; } catch (e) {} }
+        if (ref && ref !== playRef) { try { play = await coreJSON(ref.replace(/^http:/, "https:")); playRef = ref; } catch (e) {} }
         st.core[g.id] = { status, situation, play, playRef, fetchedTs: Date.now() };
       } catch (e) {}
     }));
@@ -657,12 +666,11 @@ function App() {
 
   useEffect(() => {
     let alive = true;
-    // Every /api call is a billed Cloudflare request (free plan: 100k/day). Poll fast only while this tab's own bot is working;
-    // as a viewer, refresh every 20s (2 min when the tab is hidden). The server auto trader doesn't need this tab at all.
+    // Paid Cloudflare plan: poll at full speed while the tab is visible; a hidden tab with no in-tab bot slows to every 2 min.
     const tabBusy = () => R.current.running || Object.keys(currentPositions()).some(t => !currentPositions()[t].unmanaged);
     (async () => { let nextAt = 0;
       while (alive) {
-        if (Date.now() >= nextAt) { await tick(); nextAt = Date.now() + (tabBusy() ? TICK_MS : document.hidden ? 120000 : 20000); }
+        if (Date.now() >= nextAt) { await tick(); nextAt = Date.now() + (tabBusy() || !document.hidden ? TICK_MS : 120000); }
         await sleep(500);
       } })();
     // fast lane: ESPN core every ~1.5s (Kalshi live_data every other pass); a score change in a game we hold triggers an exit check
@@ -675,8 +683,8 @@ function App() {
           const st = S.current, before = {};
           for (const g of st.games) before[g.id] = (st.gameState[g.id] || {}).scoreSig;
           pass++;
-          if (!tabBusy() && (document.hidden || pass % 10 !== 0)) { await sleep(1500); continue; }   // viewer: ~every 15s, nothing when hidden
-          await Promise.all([refreshCore(pass).catch(() => {}), pass % 2 === 0 && tabBusy() ? refreshKalshiLive().catch(() => {}) : null]);
+          if (!tabBusy() && document.hidden) { await sleep(1500); continue; }   // hidden viewer tab: nothing
+          await Promise.all([refreshCore(pass).catch(() => {}), pass % 2 === 0 ? refreshKalshiLive().catch(() => {}) : null]);
           mergeGames();
           // a fresh score in a game we hold or have on auto: decide right away (exits, and feed-lead entries) instead of waiting for the tick
           const changed = st.games.filter(g => before[g.id] && before[g.id] !== (st.gameState[g.id] || {}).scoreSig);
@@ -1050,7 +1058,7 @@ function ServerRunner({ cfg, enabled, liveGames, nEnabled, browserRunning, onSta
       d.trades = d.trades || []; d.myPositions = d.myPositions || []; d.shadowTrades = d.shadowTrades || []; d.record = d.record || { n: 0, wins: 0 };
       setSt(d); setErr(""); onStatus && onStatus(d); }).catch(e => { setErr(e.message); setSt(null); onStatus && onStatus(null); }), []);
   useEffect(() => { refresh(); let last = Date.now();
-    const id = setInterval(() => { if (!document.hidden || Date.now() - last > 60000) { last = Date.now(); refresh(); } }, 5000);
+    const id = setInterval(() => { if (!document.hidden || Date.now() - last > 60000) { last = Date.now(); refresh(); } }, 3000);
     return () => clearInterval(id); }, [refresh]);
   useEffect(() => save("sharp_runner_mode", pick), [pick]);
   const running = !!(st && st.running), mode = running ? st.mode : pick, isLive = mode === "live";

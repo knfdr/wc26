@@ -27,8 +27,8 @@ const LEAGUES = {
 };
 const TICKER_RE = /^KX(NCAAF|NFL)(GAME|SPREAD|TOTAL)-/;
 const sportOfTicker = (t) => /^KXNFL/.test(t) ? "nfl" : "cfb";
-const MAX_CORE_GAMES = 10;   // the free plan allows 50 outside fetches per tick
-const TICK_MS = 2000, IDLE_MS = 60000;
+const MAX_CORE_GAMES = 60;   // paid plan: 1,000+ outside fetches per tick, so this is just a sanity cap
+const TICK_MS = 1500, IDLE_MS = 30000;
 // Feed fetches time out after 6s so a hung request can't stall a tick.
 
 const J = async (u) => { const r = await fetch(u, { headers: { Accept: "application/json", "User-Agent": "sharp-sim-runner" }, signal: AbortSignal.timeout(6000) }); if (!r.ok) throw new Error(r.status + " " + u.split("?")[0]); return r.json(); };
@@ -167,7 +167,7 @@ export class Runner {
     this.s.lastTick = Date.now(); this.s.tickMs = Date.now() - t0;
     await this.save();
     if (this.s.running) {
-      // Tick fast only when there's work: each alarm is a billed request (free plan: 100k/day for the whole account).
+      // Tick fast only when there's work (each alarm is a billed request; the paid plan includes 10M a month).
       const soon = (g) => g.state === "in" || (g.state === "pre" && new Date(g.date) - Date.now() < 900e3);
       const en = this.s.enabled || {};
       const anyLive = this.s.entries && this.mem.sbGames.some(g => soon(g) && (en.all || en[g.id]));
