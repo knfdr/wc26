@@ -123,6 +123,93 @@ function parseEspnEvent(e) {
   };
 }
 
+// ── Kalshi live data (Stats Perform feed behind /live_data) ───────────────────
+// Overlay a Kalshi live_data.details object onto a parsed ESPN game. `flip` = Kalshi's home is ESPN's away.
+// situation.yardline is measured on side_team_id's half of the field.
+function applyKalshiLive(g, d, milestone, flip) {
+  if (!d || !g) return g;
+  const out = { ...g, home: { ...g.home }, away: { ...g.away }, feed: "kalshi" };
+  const hp = flip ? d.away_points : d.home_points, ap = flip ? d.home_points : d.away_points;
+  if (hp != null) out.home.score = Number(hp);
+  if (ap != null) out.away.score = Number(ap);
+  const st = String(d.status || "").toLowerCase();
+  if (d.quarter) out.period = Number(d.quarter);
+  if (d.clock) { out.clock = d.clock; out.clockSec = clockToSeconds(d.clock); }
+  if (/halftime/.test(st)) { out.statusName = "STATUS_HALFTIME"; out.secondsLeft = 1800; out.state = "in"; }
+  else if (/closed|complete|final/.test(st)) { out.state = "post"; out.secondsLeft = 0; }
+  else if (/inprogress|live|in_progress/.test(st)) {
+    out.state = "in";
+    if (out.statusName === "STATUS_HALFTIME" || out.statusName === "STATUS_SCHEDULED") out.statusName = "STATUS_IN_PROGRESS";
+    out.secondsLeft = out.period <= 4 ? (4 - out.period) * 900 + out.clockSec : 0;
+  } else if (/delay|suspend/.test(st)) out.statusName = "STATUS_DELAYED";
+  const sit = d.situation || {};
+  const homeId = milestone && milestone.details ? (flip ? milestone.details.away_team_id : milestone.details.home_team_id) : null;
+  const awayId = milestone && milestone.details ? (flip ? milestone.details.home_team_id : milestone.details.away_team_id) : null;
+  if (sit.possession_team_id) {
+    out.possession = sit.possession_team_id === homeId ? "home" : sit.possession_team_id === awayId ? "away" : out.possession;
+    out.down = sit.down || null; out.distance = sit.yfd || null;
+    out.yardsToGoal = sit.yardline != null && sit.side_team_id ? (sit.side_team_id === sit.possession_team_id ? 100 - sit.yardline : sit.yardline) : null;
+    if (sit.goal_to_go && out.yardsToGoal != null && !out.distance) out.distance = out.yardsToGoal;
+  } else if (out.state === "in") { out.possession = null; out.down = null; out.distance = null; out.yardsToGoal = null; }
+  out.reviewPending = !!(d.is_under_review || d.result_pending || d.pending_try);
+  if (d.last_play && d.last_play.description) out.lastPlay = d.last_play.description;
+  out.kalshiUpdatedTs = d.last_updated_ts ? d.last_updated_ts * 1000 : null;
+  if (out.down && out.yardsToGoal != null) {
+    const ord = ["", "1st", "2nd", "3rd", "4th"][out.down] || out.down + "th";
+    out.downDistanceText = `${ord} & ${sit.goal_to_go ? "Goal" : out.distance} · ${out.yardsToGoal} to go${out.possession ? " (" + (out.possession === "home" ? g.home.abbr : g.away.abbr) + ")" : ""}`;
+  }
+  return out;
+}
+
+// ── ESPN core API (sports.core.api.espn.com) — the fastest free feed we found ─────
+// c = { status, situation, play } from .../competitions/{id}/status, /situation and the lastPlay $ref.
+// situation.yardLine uses the scoreboard convention (measured from the home goal line).
+const refId = (r) => { const m = /\/teams\/(\d+)/.exec((r && r.$ref) || ""); return m ? m[1] : null; };
+function applyEspnCore(g, c) {
+  if (!g || !c) return g;
+  const out = { ...g, home: { ...g.home }, away: { ...g.away }, feed: "core" };
+  const pl = c.play;
+  // Plays can carry odd scores (an "Extra Point Good" play once read 7-1 while the game was 7-7), so core may raise a
+  // team's score but never drop it below the scoreboard's; a real reversal shows up when the scoreboard drops too.
+  if (pl && pl.homeScore != null && pl.awayScore != null) {
+    out.home.score = Math.max(Number(g.home.score) || 0, Number(pl.homeScore));
+    out.away.score = Math.max(Number(g.away.score) || 0, Number(pl.awayScore));
+  }
+  const s = c.status;
+  if (s) {
+    const tn = (s.type && s.type.name) || out.statusName, ts = (s.type && s.type.state) || out.state;
+    out.statusName = tn; out.state = ts;
+    if (s.period) out.period = Number(s.period);
+    if (s.displayClock) { out.clock = s.displayClock; out.clockSec = clockToSeconds(s.displayClock); }
+    if (tn === "STATUS_HALFTIME") out.secondsLeft = 1800;
+    else if (ts === "post") out.secondsLeft = 0;
+    else if (ts === "in") out.secondsLeft = out.period <= 4 ? (4 - out.period) * 900 + out.clockSec : 0;
+  }
+  const sit = c.situation;
+  if (sit && out.state === "in") {
+    const pid = refId(sit.team);
+    out.possession = pid && pid === String(g.home.id) ? "home" : pid && pid === String(g.away.id) ? "away" : null;
+    const live = out.possession && sit.down > 0;
+    out.down = live ? sit.down : null; out.distance = live ? sit.distance : null;
+    out.yardsToGoal = out.possession && sit.yardLine != null ? (out.possession === "home" ? 100 - sit.yardLine : sit.yardLine) : null;
+    out.redZone = !!sit.isRedZone;
+    if (live && out.yardsToGoal != null) {
+      const ord = ["", "1st", "2nd", "3rd", "4th"][out.down] || out.down + "th";
+      out.downDistanceText = `${ord} & ${out.distance >= out.yardsToGoal ? "Goal" : out.distance} · ${out.yardsToGoal} to go (${out.possession === "home" ? g.home.abbr : g.away.abbr})`;
+    } else out.downDistanceText = null;
+  }
+  if (pl && pl.text) out.lastPlay = pl.text;
+  return out;
+}
+
+// Game progress, for picking whichever feed is furthest along: score first, then elapsed time.
+function feedProgress(g) {
+  if (!g) return -1;
+  const sum = (g.home.score || 0) + (g.away.score || 0);
+  const elapsed = g.state === "post" ? 9999 : g.statusName === "STATUS_HALFTIME" ? 1800 : (g.period || 0) * 900 - (g.clockSec != null ? g.clockSec : 900);
+  return sum * 10000 + Math.max(0, elapsed);
+}
+
 // ── Live projection ──────────────────────────────────────────────────────────
 // pre = { spreadHome (expected home margin, full game), total }
 function liveProjection(g, pre) {
@@ -291,8 +378,26 @@ function liveDistribution(g, pre, markets, cfg) {
   }
   const sig = [g.id, g.home.score, g.away.score, g.period, Math.round(g.secondsLeft / 15), g.possession, g.yardsToGoal, g.down,
                target.pHome && target.pHome.toFixed(2), target.totalLine, target.pOver && target.pOver.toFixed(2), tp.home, tp.away, alpha].join("|");
+  const finish = (o) => {
+    const corr = o.heldCorr !== undefined ? o.heldCorr : cfg.ladderCorrection === false ? null : ladderCorrection(o.mixed, g, markets, cfg.maxQuoteWidth || 6);
+    const dist = applyCorrection(o.mixed, corr);
+    dist.unreliable = o.mixed.unreliable; dist.calibratedTo = o.target;
+    return { ...o, dist, corr };
+  };
+  if (cfg.hold && cfg.hold.cal) {
+    // feed-lead mode: keep the calibration fitted before the latest score/possession change, apply it to the new state
+    const ck = "hold|" + sig + "|" + cfg.hold.cal.delta.toFixed(3) + "|" + cfg.hold.cal.kappa.toFixed(3);
+    const h = _calCache.get(g.id + "#hold");
+    if (h && h.sig === ck) return finish(h.out);
+    const calibrated = simRemaining(g, tp.home, tp.away, N, { ...cfg.hold.cal, seed: seed + 1 });
+    const model = alpha > 0 ? simRemaining(g, tp.home, tp.away, N, { delta: 0, kappa: 1, seed: seed + 2 }) : calibrated;
+    const mixed = mixDist(model, calibrated, alpha); mixed.unreliable = ot;
+    const out = { mixed, cal: cfg.hold.cal, eff: cfg.hold.cal, target, tp, model, calibrated, held: true, heldCorr: cfg.hold.corr || null };
+    _calCache.set(g.id + "#hold", { sig: ck, out });
+    return finish(out);
+  }
   const hit = _calCache.get(g.id);
-  if (hit && hit.sig === sig) return hit.out;
+  if (hit && hit.sig === sig) return finish(hit.out);
 
   const cal = { delta: 0, kappa: 1 };
   if (!ot && g.state !== "post") {
@@ -319,14 +424,50 @@ function liveDistribution(g, pre, markets, cfg) {
   }
   const calibrated = simRemaining(g, tp.home, tp.away, N, { ...cal, seed: seed + 1 });
   const model = alpha > 0 ? simRemaining(g, tp.home, tp.away, N, { delta: 0, kappa: 1, seed: seed + 2 }) : calibrated;
-  const dist = mixDist(model, calibrated, alpha);
+  const mixed = mixDist(model, calibrated, alpha);
   // overtime state (which possession of the round) isn't modeled: don't trust fair values there
-  dist.unreliable = ot;
-  dist.calibratedTo = target;
-  const out = { dist, cal, eff: cal, target, tp, model, calibrated };
+  mixed.unreliable = ot;
+  const out = { mixed, cal, eff: cal, target, tp, model, calibrated };
   _calCache.set(g.id, { sig, out });
-  return out;
+  return finish(out);
 }
+// Ladder correction: the drive sim gets the moneyline and one total strike right, but its tails don't match the
+// market's spread/total ladders (it consistently under-priced big favourite covers). Fit a smooth probit-space
+// correction r(T) = a + b·(T − Tc) to each liquid ladder and apply it to every strike.
+function fitCorrection(points) {
+  const pts = points.filter(q => q.w > 0);
+  if (!pts.length) return null;
+  let W = 0, ST = 0, SR = 0; for (const q of pts) { W += q.w; ST += q.w * q.T; SR += q.w * q.r; }
+  const Tc = ST / W, a = SR / W;
+  let Stt = 0, Str = 0; for (const q of pts) { Stt += q.w * (q.T - Tc) ** 2; Str += q.w * (q.T - Tc) * (q.r - a); }
+  const b = Stt / W > 4 ? clamp(Str / Stt, -0.06, 0.06) : 0;
+  return { a: clamp(a, -0.6, 0.6), b, Tc, n: pts.length };
+}
+function ladderCorrection(dist, g, markets, maxW) {
+  const zc = (p) => PhiInv(clamp(p, 0.005, 0.995));
+  const M = [], Tt = [];
+  for (const mk of markets || []) {
+    if (mk.half || mk.status !== "active" || mk.yesBid == null || mk.yesAsk == null || mk.yesAsk - mk.yesBid > maxW) continue;
+    const md = (mk.yesBid + mk.yesAsk) / 200; if (md < 0.08 || md > 0.92) continue;
+    const w = 1 / (1 + mk.yesAsk - mk.yesBid);
+    if (mk.kind === "spread" || mk.kind === "win") {
+      const L = mk.kind === "win" ? 0 : mk.line;
+      const T = mk.side === "home" ? L : -L, pm = mk.side === "home" ? md : 1 - md;   // P(home margin > T)
+      M.push({ T, w, r: zc(pm) - zc(dist.pCover("home", T)) });
+    } else if (mk.kind === "total") Tt.push({ T: mk.line, w, r: zc(md) - zc(dist.pOver(mk.line)) });
+  }
+  return { margin: fitCorrection(M), total: fitCorrection(Tt) };
+}
+function applyCorrection(dist, corr) {
+  if (!corr || (!corr.margin && !corr.total)) return dist;
+  const adj = (c, p, T) => c ? Phi(PhiInv(clamp(p, 0.0005, 0.9995)) + c.a + c.b * (T - c.Tc)) : p;
+  const hm = (T) => adj(corr.margin, dist.pCover("home", T), T);
+  return { ...dist, corrected: corr,
+    pHome: hm(0),
+    pCover: (side, line) => side === "home" ? hm(line) : 1 - hm(-line),
+    pOver: (line) => adj(corr.total, dist.pOver(line), line) };
+}
+
 function mixDist(a, b, alpha) {
   if (a === b || alpha <= 0) return b;
   const w = alpha;
@@ -539,11 +680,16 @@ const DEFAULT_CONFIG = {
   stopLoss: 15,            // cents per contract below cost -> cash out
   trailArm: 10, trailGive: 6, // after +10c, give back at most 6c from the peak
   edgeExit: 3,             // sell when bid exceeds our fair value by this much
+  maxExitWidth: 10,        // stops wait out quotes wider than this when the model says the bid is far too low
   holdToSettleAt: 96,      // don't sell above this bid; just let it settle
   noEntryLastSecs: 240,    // no new entries in the last 4 minutes
   freezeAfterScoreSecs: 25,// pause entries after any score change (data lag protection)
   staleDataSecs: 20,       // ignore games whose live data is older than this
   cooldownSecs: 60,        // wait after exiting a market before re-entering it
+  anchorHoldSecs: 20,      // after a score/possession change, price the new state with the pre-change calibration this long
+  leadEntries: true,       // allow entries in that window when the market hasn't moved yet (paper-test first)
+  leadMaxPreMove: 2,       // ...and only if the moneyline hadn't already moved this many ¢ before our feed showed it
+  maxStopsPerGame: 2,      // after this many stop-losses in one game, stop entering it
   gameTimeoutSecs: 300,    // after a stop-loss, no new entries in that game for this long
   blowoutMargin: 21,       // no entries in the 2nd half when a team leads by this much
   reentryEdgeBonus: 2,     // extra edge required to re-enter the same market
@@ -557,7 +703,8 @@ const DEFAULT_CONFIG = {
   includeHalf: false,
   restingTakeProfit: true, // also rest a GTC sell at the take-profit price on Kalshi
   exitSlippage: 1,         // cash-out limit this many cents under the bid so the IOC fills
-  manageManual: false,     // live: also manage CFB positions opened outside the bot
+  manageManual: false,
+  liveFeed: "auto",         // game-state source: auto = furthest-along of ESPN core / Kalshi / ESPN scoreboard     // live: also manage CFB positions opened outside the bot
 };
 
 // sideBid/Ask: price to sell/buy the side we hold (yes/no) in cents
@@ -577,6 +724,8 @@ function sideQuotes(mk, side) {
   }
   action = { type:"buy"|"sell", ticker, side, count, limit (cents), reason, gameId, fair, edge }
 */
+const _keyState = new Map(), _anchors = new Map();
+const feedFast = (g) => g.feed === "core";
 function decide(input) {
   const cfg = { ...DEFAULT_CONFIG, ...(input.cfg || {}) };
   const now = input.now;
@@ -595,10 +744,30 @@ function decide(input) {
     const g = G.g; if (!g) continue;
     const stale = !G.dataTs || (now - G.dataTs) / 1000 > cfg.staleDataSecs;
     const markets = (G.markets || []).filter(mk => mk && !mk.half); // 1H markets need a half-time model; not traded yet
-    const live = liveDistribution(g, G.pre, markets, cfg);
-    const proj = live.dist; proj.cal = live.cal; proj.eff = live.eff; proj.target = live.target;
-    const frozen = (G.lastScoreChangeTs && (now - G.lastScoreChangeTs) / 1000 < cfg.freezeAfterScoreSecs)
-                || (G.freezeUntil && G.freezeUntil > now); // market jumped while our live data didn't change
+    // Feed lead: track score/possession changes and the moneyline mid at that moment.
+    const winH = markets.find(m => m.kind === "win" && m.side === "home");
+    const mlMid = winH ? mid(winH) : null;
+    const keySig = [g.home.score, g.away.score, g.possession, g.period > 4 ? "ot" : ""].join("|");
+    let ks = _keyState.get(g.id);
+    if (!ks || ks.sig !== keySig) { ks = { sig: keySig, ts: ks ? now : 0, midAtChange: mlMid }; _keyState.set(g.id, ks); }
+    const sinceKey = (now - ks.ts) / 1000;
+    const anchor = _anchors.get(g.id);
+    // Hold only if the market hadn't already moved before our feed showed the change (else the old calibration would
+    // count the score twice), and only until the market reacts.
+    const preMoveOk = anchor && anchor.mid != null && ks.midAtChange != null && Math.abs(ks.midAtChange - anchor.mid) < cfg.leadMaxPreMove;
+    const reacted = mlMid != null && ks.midAtChange != null && Math.abs(mlMid - ks.midAtChange) >= 2 * cfg.leadMaxPreMove;
+    const holding = cfg.anchorHoldSecs > 0 && g.state === "in" && anchor && anchor.keySig !== keySig && sinceKey < cfg.anchorHoldSecs && preMoveOk && !reacted;
+    const live = liveDistribution(g, G.pre, markets, holding ? { ...cfg, hold: anchor } : cfg);
+    if (!holding && sinceKey >= cfg.anchorHoldSecs && !stale && g.state === "in")
+      _anchors.set(g.id, { cal: live.cal, corr: live.corr, keySig, mid: mlMid, ts: now });
+    // the market hadn't already moved before our feed showed the change (otherwise it's the market leading, not us)
+    const scoreMoved = anchor && anchor.keySig.split("|").slice(0, 2).join("|") !== keySig.split("|").slice(0, 2).join("|");
+    const leadOk = holding && scoreMoved && cfg.leadEntries && feedFast(g) && !g.reviewPending;
+    // a key change we can't trade on: block entries until the hold window passes (data / market catching up)
+    const catchingUp = anchor && anchor.keySig !== keySig && sinceKey < cfg.anchorHoldSecs && !leadOk;
+    const proj = live.dist; proj.cal = live.cal; proj.eff = live.eff; proj.target = live.target; proj.held = holding;
+    const frozen = catchingUp || !leadOk && ((G.lastScoreChangeTs && (now - G.lastScoreChangeTs) / 1000 < cfg.freezeAfterScoreSecs)
+                || (G.freezeUntil && G.freezeUntil > now)); // market jumped while our live data didn't change
 
     const cands = [];
     // kinds we already hold in this game: one position per kind per game (no stacking the ladder)
@@ -624,8 +793,13 @@ function decide(input) {
         if (input.killed) reason = "kill switch";
         else if (q.bid >= cfg.holdToSettleAt) { ev.note = "holding to settle"; continue; }
         else if (gain >= cfg.takeProfit || (pos.avgCost > 0 && gain / pos.avgCost >= cfg.takeProfitPct)) reason = `take profit +${gain}¢`;
-        else if (-gain >= cfg.stopLoss) reason = `stop loss ${gain}¢`;
-        else if (peak - pos.avgCost >= cfg.trailArm && peak - q.bid >= cfg.trailGive) reason = `trailing stop (peak ${peak}¢)`;
+        else if (-gain >= cfg.stopLoss || (peak - pos.avgCost >= cfg.trailArm && peak - q.bid >= cfg.trailGive)) {
+          // Don't dump into a pulled book: during a weather delay, or when the quote is wide and the model says the bid is far too low.
+          const width = q.ask != null ? q.ask - q.bid : 99;
+          if (/DELAY|SUSPEND/.test(g.statusName || "")) { ev.note = `stop held: game delayed (bid ${q.bid}¢)`; continue; }
+          if (width > cfg.maxExitWidth && fairSide - q.bid >= cfg.stopLoss / 2 && !proj.unreliable) { ev.note = `stop held: quote ${q.bid}/${q.ask} too wide (fair ${fairSide.toFixed(0)}¢)`; continue; }
+          reason = -gain >= cfg.stopLoss ? `stop loss ${gain}¢` : `trailing stop (peak ${peak}¢)`;
+        }
         else if (!stale && !proj.unreliable && mk.status === "active" && q.bid - fairSide >= cfg.edgeExit) reason = `edge gone (fair ${fairSide.toFixed(0)}¢ < bid ${q.bid}¢)`;
         if (reason) {
           actions.push({ type: "sell", ticker: mk.ticker, side: pos.side, count: pos.count, limit: q.bid,
@@ -639,6 +813,7 @@ function decide(input) {
       if (!G.enabled) { ev.note = "game off"; continue; }
       if (g.state !== "in") { ev.note = g.state === "pre" ? "not started" : "final"; continue; }
       if (/DELAY|SUSPEND|POSTPONE|HALFTIME/.test(g.statusName || "")) { ev.note = "game paused"; continue; }
+      if (g.reviewPending) { ev.note = "review / PAT pending"; continue; }
       if (stale) { ev.note = "stale data"; continue; }
       if (frozen) { ev.note = "data catching up (score/market just moved)"; continue; }
       if (g.secondsLeft <= cfg.noEntryLastSecs || g.period > 4) { ev.note = "too late"; continue; }
@@ -679,7 +854,7 @@ function decide(input) {
       if (count < 1) { ev.note = "size < 1"; continue; }
       ev.note = `candidate ${best.edge.toFixed(1)}¢`;
       cands.push({ type: "buy", ticker: mk.ticker, side: best.side, count, limit: best.q.ask, kind: mk.kind,
-                   reason: `edge ${best.edge.toFixed(1)}¢ (fair ${best.fairSide.toFixed(0)}¢ vs ask ${best.q.ask}¢)`,
+                   reason: `${leadOk ? "FEED LEAD " : ""}edge ${best.edge.toFixed(1)}¢ (fair ${best.fairSide.toFixed(0)}¢ vs ask ${best.q.ask}¢)`, lead: leadOk,
                    gameId: g.id, fair: best.fairSide, edge: best.edge, cost: count * c,
                    takeProfitPrice: Math.min(99, best.q.ask + cfg.takeProfit) });
     }
@@ -700,7 +875,7 @@ function decide(input) {
 const API = { P, Phi, PhiInv, erf, clamp, median, expectedPoints, clockToSeconds, parseEspnEvent,
   liveProjection, pHomeWin, pCover, pOver, pregameSim, normName, nameScore, sideForName, matchEventScore,
   parseKalshiMarket, modelYesProb, mid, marketImplied, blendedProjection, feeCents, DEFAULT_CONFIG,
-  sideQuotes, decide, fitLadder, driveProbs, simRemaining, liveDistribution, teamPoints, mulberry32 };
+  sideQuotes, decide, applyKalshiLive, applyEspnCore, feedProgress, fitLadder, driveProbs, simRemaining, liveDistribution, teamPoints, mulberry32 };
 if (typeof module !== "undefined" && module.exports) module.exports = API;
 else root.CFB = API;
 })(typeof window !== "undefined" ? window : globalThis);

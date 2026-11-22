@@ -43,7 +43,15 @@ function save(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } ca
 const fmt$ = (x) => (x < 0 ? "-$" : "$") + Math.abs(x).toFixed(2);
 const fmtSigned$ = (x) => (x >= 0 ? "+" : "-") + "$" + Math.abs(x).toFixed(2);
 const nowStr = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+// Background tabs get their timers throttled (to once a minute after a few minutes hidden); worker timers don't.
+const sleep = (() => {
+  let w = null, n = 0; const waiting = {};
+  try {
+    w = new Worker(URL.createObjectURL(new Blob(["onmessage=e=>setTimeout(()=>postMessage(e.data.id),e.data.ms)"], { type: "text/javascript" })));
+    w.onmessage = (e) => { const r = waiting[e.data]; delete waiting[e.data]; if (r) r(); };
+  } catch (e) { w = null; }
+  return (ms) => new Promise(r => { if (!w) return setTimeout(r, ms); const id = ++n; waiting[id] = r; w.postMessage({ id, ms }); });
+})();
 
 // Kalshi allows ~20 reads/s per key (and an IP bucket for unsigned reads): pace our calls.
 const kxQueue = { next: 0, gap: 110, backoffUntil: 0 };
@@ -83,7 +91,7 @@ function toOrder(type, side, cents, count) {
 
 // ── Main app ─────────────────────────────────────────────────────────────────
 function App() {
-  const [cfg, setCfg] = useState(() => ({ ...CFB.DEFAULT_CONFIG, ...load(LS.cfg, {}) }));
+  const [cfg, setCfg] = useState(() => { const c = { ...CFB.DEFAULT_CONFIG, ...load(LS.cfg, {}) }; if (!c.feedV2) { c.liveFeed = "auto"; c.feedV2 = true; } return c; });
   const [mode, setMode] = useState(() => load(LS.mode, "paper") === "live" ? "paper" : "paper"); // always boot in paper
   const [running, setRunning] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -106,7 +114,7 @@ function App() {
   R.current.enabled = enabled; R.current.paper = paper;
   const S = useRef({ events: [], eventsTs: 0, espnTs: 0, games: [], pre: load(LS.pre, {}), meta: load(LS.meta, {}),
                      marketTs: {}, markets: {}, gameState: {}, cooldowns: {}, inflight: {}, killed: false, sessionStart: Date.now(),
-                     sessionRealized: 0, livePositions: {}, candSeen: {} });
+                     sessionRealized: 0, livePositions: {}, candSeen: {}, kLive: {}, core: {}, espnGames: [] });
 
   const addLog = useCallback((kind, msg, extra) => {
     setLog(prev => { const next = [{ t: nowStr(), ts: Date.now(), kind, msg, ...extra }, ...prev].slice(0, 300); save(LS.log, next); return next; });
@@ -126,6 +134,12 @@ function App() {
     if (running && navigator.wakeLock) navigator.wakeLock.request("screen").then(l => { lock = l; }).catch(() => {});
     return () => { if (lock) lock.release().catch(() => {}); };
   }, [running]);
+
+  // browsers throttle timers in hidden tabs (down to once a minute), so say so while running
+  useEffect(() => {
+    const h = () => { if (R.current.running && document.hidden) addLog("warn", "Tab hidden: the browser slows background tabs, so ticks and exits can lag. Keep this tab visible while auto is on."); };
+    document.addEventListener("visibilitychange", h); return () => document.removeEventListener("visibilitychange", h);
+  }, []);
 
   // warn before closing while live
   useEffect(() => {
@@ -150,29 +164,23 @@ function App() {
       .filter(g => g.state === "in" || (g.state === "pre" && new Date(g.date) - today < 14 * 3600e3) || (g.state === "post" && today - new Date(g.date) < 8 * 3600e3));
     const ts = Date.now();
     for (const g of parsed) {
-      const prev = st.gameState[g.id] || {};
-      const sig = [g.home.score, g.away.score, g.period, g.clock, g.possession, g.down, g.distance, g.yardsToGoal].join("|");
-      const scoreSig = g.home.score + "-" + g.away.score;
-      const next = { ...prev, dataTs: ts };
-      if (prev.sig !== sig) { next.sig = sig; next.stateChangeTs = ts; next.midAtChange = prev.lastMid; }
-      if (prev.scoreSig && prev.scoreSig !== scoreSig) next.lastScoreChangeTs = ts;
-      next.scoreSig = scoreSig;
-      st.gameState[g.id] = next;
+      const gs = st.gameState[g.id] = st.gameState[g.id] || {};
+      gs.espnTs = ts;
       // capture the pregame line while ESPN still shows it
       if (g.spreadHome != null && g.total != null && g.state === "pre") st.pre[g.id] = { spreadHome: g.spreadHome, total: g.total, src: "espn" };
       // match to a Kalshi event once
-      if (!st.gameState[g.id].suffix) {
+      if (!gs.suffix) {
         let best = null;
         for (const e of st.events) {
           const sc = CFB.matchEventScore(e.title, g);
           const dayOk = Math.abs(new Date(g.date) - kalshiDate(e.event_ticker)) < 36 * 3600e3;
           if (dayOk && (!best || sc > best.sc)) best = { sc, e };
         }
-        if (best && best.sc >= 0.6) st.gameState[g.id].suffix = best.e.event_ticker.split("-").slice(1).join("-");
+        if (best && best.sc >= 0.6) gs.suffix = best.e.event_ticker.split("-").slice(1).join("-");
       }
     }
-    st.games = parsed; st.espnTs = ts;
-    setGames(parsed);
+    st.espnGames = parsed; st.espnTs = ts;
+    mergeGames();
     // pregame lines for games already live (ESPN summary pickcenter), fetched once per game
     for (const g of parsed) {
       if (st.pre[g.id] || g.state === "post") continue;
@@ -184,6 +192,86 @@ function App() {
       } catch (e) {}
     }
     save(LS.pre, st.pre);
+  }
+
+  // Game state: pick whichever feed is furthest along (ESPN core ≈ 12s ahead of the scoreboard, ≈ 27s ahead of Kalshi).
+  // Kalshi's feed still contributes its review / PAT-pending flags when its score agrees.
+  function mergeGames() {
+    const st = S.current, now = Date.now();
+    const feed = R.current.cfg.liveFeed || "auto";
+    const merged = (st.espnGames || []).map(g => {
+      const gs = st.gameState[g.id] || {};
+      const cands = [{ g: { ...g, feed: "espn" }, ts: gs.espnTs || 0, rank: 0 }];
+      const kl = st.kLive[g.id], co = st.core[g.id];
+      if (feed !== "espn" && kl && now - kl.fetchedTs < 15000 && (g.state !== "pre" || /inprogress|halftime/.test(kl.d.status || "")))
+        cands.push({ g: CFB.applyKalshiLive(g, kl.d, gs.milestone, gs.flip), ts: kl.fetchedTs, rank: 1 });
+      if ((feed === "auto" || feed === "core") && co && now - co.fetchedTs < 15000 && co.status && co.status.type && co.status.type.state !== "pre")
+        cands.push({ g: CFB.applyEspnCore(g, co), ts: co.fetchedTs, rank: 2 });
+      let pick = cands[0];
+      if (feed === "kalshi") pick = cands.find(c => c.rank === 1) || pick;
+      else if (feed === "core") pick = cands.find(c => c.rank === 2) || pick;
+      else for (const c of cands) { const a = CFB.feedProgress(c.g), b = CFB.feedProgress(pick.g); if (a > b || (a === b && c.rank > pick.rank)) pick = c; }
+      const out = { ...pick.g, feedTs: pick.ts };
+      const kg = cands.find(c => c.rank === 1);
+      if (kg && kg.g.reviewPending && kg.g.home.score === out.home.score && kg.g.away.score === out.away.score) out.reviewPending = true;
+      return out;
+    });
+    for (const g of merged) {
+      const gs = st.gameState[g.id] = st.gameState[g.id] || {};
+      const sig = [g.home.score, g.away.score, g.period, g.clock, g.possession, g.down, g.distance, g.yardsToGoal].join("|");
+      const scoreSig = g.home.score + "-" + g.away.score;
+      gs.dataTs = g.feedTs || gs.espnTs;
+      if (gs.sig !== sig) { gs.sig = sig; gs.stateChangeTs = now; gs.midAtChange = gs.lastMid; }
+      if (gs.scoreSig && gs.scoreSig !== scoreSig) { gs.lastScoreChangeTs = now; gs.lastScoreFeed = g.feed; }
+      gs.scoreSig = scoreSig;
+    }
+    st.games = merged;
+    setGames(merged);
+  }
+
+  // ESPN core API: /status + /situation every pass for games we care about, the play only when lastPlay changes.
+  const CORE = "https://sports.core.api.espn.com/v2/sports/football/leagues/college-football/events/";
+  async function refreshCore(pass) {
+    const st = S.current, en = R.current.enabled || {};
+    const live = (st.espnGames || []).filter(g => g.state === "in" || (g.state === "pre" && new Date(g.date) - Date.now() < 900e3));
+    const hot = live.filter(g => en[g.id] || hasPositionInGame(g.id));
+    const list = pass % 3 === 0 ? live : hot;
+    await Promise.all(list.map(async g => {
+      const base = CORE + g.id + "/competitions/" + g.id + "/";
+      try {
+        const [status, situation] = await Promise.all([getJSON(base + "status?_=" + Date.now()), getJSON(base + "situation?_=" + Date.now())]);
+        const prev = st.core[g.id] || {};
+        let play = prev.play, playRef = prev.playRef;
+        const ref = situation && situation.lastPlay && situation.lastPlay.$ref;
+        if (ref && ref !== playRef) { try { play = await getJSON(ref.replace(/^http:/, "https:")); playRef = ref; } catch (e) {} }
+        st.core[g.id] = { status, situation, play, playRef, fetchedTs: Date.now() };
+      } catch (e) {}
+    }));
+  }
+
+  // Kalshi live data: one milestone lookup per game, then one batch call for every live game.
+  async function refreshKalshiLive() {
+    const st = S.current;
+    const want = (st.espnGames || []).filter(g => (g.state === "in" || (g.state === "pre" && new Date(g.date) - Date.now() < 3600e3)) && st.gameState[g.id] && st.gameState[g.id].suffix);
+    for (const g of want) {
+      const gs = st.gameState[g.id];
+      if (gs.milestone !== undefined && !(gs.milestone === null && Date.now() - (gs.milestoneTs || 0) > 120000)) continue;
+      gs.milestoneTs = Date.now();
+      try {
+        const r = await getJSON("/api/kx/milestones?limit=5&related_event_ticker=KXNCAAFGAME-" + gs.suffix);
+        const m = (r.milestones || []).find(x => x.type === "football_game") || null;
+        gs.milestone = m;
+        if (m) { const parts = String(m.title || "").split(/\s+at\s+/i); gs.flip = parts.length === 2 && CFB.nameScore(parts[1], g.away) > CFB.nameScore(parts[1], g.home); }
+      } catch (e) { gs.milestone = null; }
+    }
+    const ids = want.map(g => st.gameState[g.id].milestone).filter(Boolean).map(m => m.id);
+    if (!ids.length) return;
+    const r = await getJSON("/api/kx/live_data/batch?" + ids.map(i => "milestone_ids=" + i).join("&"));
+    const now = Date.now();
+    for (const ld of (r.live_datas || r.live_data || [])) {
+      const g = want.find(x => st.gameState[x.id].milestone && st.gameState[x.id].milestone.id === ld.milestone_id);
+      if (g && ld.details) st.kLive[g.id] = { d: ld.details, fetchedTs: now };
+    }
   }
 
   function kalshiDate(eventTicker) {
@@ -198,9 +286,33 @@ function App() {
     const hot = R.current.enabled[g.id] || hasPositionInGame(g.id);
     const age = Date.now() - (st.marketTs[g.id] || 0);
     if (!force && !hot && (g.state === "pre" || age < IDLE_MARKET_MS)) return;
+    // with the WebSocket streaming prices, REST only needs to refresh the ladder structure occasionally
+    if (!force && hot && stream.current.status === "live" && stream.current.tickerSid != null && age < 10000) return;
     if (!force && g.state === "post" && age < 60000) return;
     const lists = await Promise.all(SERIES.map(s => getJSON("/api/kx/markets?limit=200&event_ticker=" + s + "-" + gs.suffix).catch(() => ({ markets: [] }))));
-    const raw = lists.flatMap(l => l.markets || []);
+    applyMarkets(g, lists.flatMap(l => l.markets || []));
+  }
+
+  // One request per series covers every game (~170 / 870 / 580 markets, no paging), instead of 3 requests per game.
+  async function refreshAllMarkets() {
+    const st = S.current;
+    const lists = await Promise.all(SERIES.map(s => getJSON("/api/kx/markets?limit=1000&status=open&series_ticker=" + s).catch(() => null)));
+    if (lists.some(l => !l)) { await Promise.all(st.games.map(g => refreshMarkets(g).catch(() => {}))); return; }
+    const bySuffix = {};
+    for (const m of lists.flatMap(l => l.markets || [])) {
+      const suf = String(m.event_ticker || "").split("-").slice(1).join("-");
+      (bySuffix[suf] = bySuffix[suf] || []).push(m);
+    }
+    for (const g of st.games) {
+      const gs = st.gameState[g.id];
+      if (!gs || !gs.suffix) continue;
+      if (bySuffix[gs.suffix]) applyMarkets(g, bySuffix[gs.suffix]);
+      else if (g.state !== "pre") await refreshMarkets(g, true).catch(() => {});   // closed / settled: fetch that game directly
+    }
+  }
+
+  function applyMarkets(g, raw) {
+    const st = S.current, gs = st.gameState[g.id];
     st.markets[g.id] = raw.map(m => CFB.parseKalshiMarket(m, g)).filter(Boolean);
     st.marketTs[g.id] = Date.now();
     // market-jump detection on the moneyline
@@ -212,7 +324,7 @@ function App() {
         const moved = Math.round(Math.abs(md - gs.midAtChange));
         gs.freezeUntil = Date.now() + cfgNow.marketJumpFreezeSecs * 1000;
         gs.midAtChange = md;
-        if (R.current.enabled[g.id]) addLog("info", `${g.shortName}: moneyline moved ${moved}¢ with no change in ESPN's feed — freezing entries ${cfgNow.marketJumpFreezeSecs}s`);
+        if (R.current.enabled[g.id]) addLog("info", `${g.shortName}: moneyline moved ${moved}¢ with no change in the game feed — freezing entries ${cfgNow.marketJumpFreezeSecs}s`);
       }
       if (gs.midAtChange == null) gs.midAtChange = md;
       gs.lastMid = md;
@@ -248,7 +360,7 @@ function App() {
       out[t] = { ...meta, side: pos > 0 ? "yes" : "no", count, avgCost: meta.avgCost || Math.round(exposure / count * 100),
                  gameId: meta.gameId || gameIdForTicker(t), peakBid: meta.peakBid || 0, openedAt: meta.openedAt || Date.now() };
     }
-    st.livePositions = out;
+    st.livePositions = out; st.posTs = Date.now();
     setPositions(out);
     try { const b = await getJSON("/api/kx/portfolio/balance"); setBalance(b.balance_dollars != null ? parseFloat(b.balance_dollars) : b.balance / 100); } catch (e) {}
   }
@@ -291,7 +403,7 @@ function App() {
         delete next.positions[a.ticker];
         addLog(pnl >= 0 ? "win" : "loss", `PAPER CASH OUT ${p.count}× ${label} @ ${a.limit}¢ (cost ${p.avgCost}¢) ${fmtSigned$(pnl - (p.fees || 0))} — ${a.reason}`, { ticker: a.ticker });
         S.current.cooldowns[a.ticker] = { until: Date.now() + cfgNow.cooldownSecs * 1000, exits: ((S.current.cooldowns[a.ticker] || {}).exits || 0) + 1 };
-        if (/^stop loss/.test(a.reason)) S.current.cooldowns["game:" + a.gameId] = { until: Date.now() + cfgNow.gameTimeoutSecs * 1000 };
+        if (/^stop loss/.test(a.reason)) { const cd = S.current.cooldowns, n = (cd["stops:" + a.gameId] || 0) + 1; cd["stops:" + a.gameId] = n; cd["game:" + a.gameId] = { until: Date.now() + (n >= (cfgNow.maxStopsPerGame || 2) ? 12 * 3600e3 : cfgNow.gameTimeoutSecs * 1000) }; if (n >= (cfgNow.maxStopsPerGame || 2)) addLog("info", `${n} stop-losses in this game: no more entries in it tonight`); }
       }
       R.current.paper = next;
       return next;
@@ -340,7 +452,7 @@ function App() {
       addLog(pnl >= 0 ? "win" : "loss", `LIVE CASH OUT ${filled}× ${label} @ ${avgSide}¢ (cost ${meta.avgCost}¢) ${fmtSigned$(pnl)} — ${a.reason}`, { ticker: a.ticker });
       if (filled >= a.count - 1e-9) delete st.meta[a.ticker];
       st.cooldowns[a.ticker] = { until: Date.now() + cfgNow.cooldownSecs * 1000, exits: ((st.cooldowns[a.ticker] || {}).exits || 0) + 1 };
-      if (/^stop loss/.test(a.reason)) st.cooldowns["game:" + a.gameId] = { until: Date.now() + cfgNow.gameTimeoutSecs * 1000 };
+      if (/^stop loss/.test(a.reason)) { const cd = st.cooldowns, n = (cd["stops:" + a.gameId] || 0) + 1; cd["stops:" + a.gameId] = n; cd["game:" + a.gameId] = { until: Date.now() + (n >= (cfgNow.maxStopsPerGame || 2) ? 12 * 3600e3 : cfgNow.gameTimeoutSecs * 1000) }; if (n >= (cfgNow.maxStopsPerGame || 2)) addLog("info", `${n} stop-losses in this game: no more entries in it tonight`); }
       save(LS.meta, st.meta);
       await refreshLivePositions();
     }
@@ -354,26 +466,43 @@ function App() {
   function gamesById() { const o = {}; for (const g of S.current.games) o[g.id] = g; return o; }
 
   // ── The loop ───────────────────────────────────────────────────────────────
-  const tickingRef = useRef(false);
+  // tick(): refresh feeds (REST) then decide. decideAndAct(): decide from cached data — also
+  // called straight from the WebSocket when a held market's price moves (exits only).
+  const tickingRef = useRef(false), decidingRef = useRef(false);
   async function tick() {
     if (tickingRef.current) return;
     tickingRef.current = true;
     const t0 = performance.now();
-    const st = S.current, cfgNow = R.current.cfg;
+    const st = S.current;
     try {
       await refreshEvents();
       await refreshEspn();
       // hot games (auto on / holding a position) first, then the rest
-      const order = [...st.games].sort((a, b) => (hotScore(b) - hotScore(a)));
-      await Promise.all(order.map(g => refreshMarkets(g).catch(e => {})));
-      if (R.current.mode === "live") await refreshLivePositions();
-      // update peak bids
+            await refreshAllMarkets();
+      if (R.current.mode === "live" && (!stream.current.privateLive || Date.now() - (st.posTs || 0) > 15000)) await refreshLivePositions();
+      syncStreamSubscriptions();
+      await decideAndAct({ exitsOnly: false });
+      setErr("");
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      tickingRef.current = false;
+      setLastTick(Date.now()); setTickMs(Math.round(performance.now() - t0));
+    }
+  }
+
+  async function decideAndAct({ exitsOnly }) {
+    if (decidingRef.current) return;
+    decidingRef.current = true;
+    const st = S.current, cfgNow = R.current.cfg;
+    try {
       const pos = currentPositions();
       const now = Date.now();
-      const input = { now, cfg: cfgNow, paused: R.current.paused, killed: st.killed, positions: {}, cooldowns: st.cooldowns,
+      const input = { now, cfg: cfgNow, paused: R.current.paused || exitsOnly, killed: st.killed, positions: {}, cooldowns: st.cooldowns,
                       dailyPnl: sessionPnl(), games: [] };
       for (const [t, p] of Object.entries(pos)) if (!p.unmanaged) input.positions[t] = p;
       for (const g of st.games) {
+        if (exitsOnly && !Object.values(input.positions).some(p => p.gameId === g.id)) continue;
         const gs = st.gameState[g.id] || {};
         input.games.push({ g, pre: st.pre[g.id], dataTs: gs.dataTs, lastScoreChangeTs: gs.lastScoreChangeTs, freezeUntil: gs.freezeUntil,
                            markets: st.markets[g.id] || [], enabled: !!R.current.enabled[g.id] });
@@ -389,12 +518,15 @@ function App() {
           else if (st.meta[ev.ticker]) { st.meta[ev.ticker].peakBid = bid; p.peakBid = bid; }
         }
       }
-      const v = {};
-      for (const G of input.games) v[G.g.id] = { markets: G.markets, proj: G.proj, evals: res.evals.filter(e => e.gameId === G.g.id) };
-      setView(v);
+      if (!exitsOnly) {
+        const v = {};
+        for (const G of input.games) v[G.g.id] = { markets: G.markets, proj: G.proj, evals: res.evals.filter(e => e.gameId === G.g.id) };
+        setView(v);
+      } else setView(prev => ({ ...prev })); // re-render positions with fresh quotes
       if (R.current.running) {
         // exits first, then entries
-        const ordered = [...res.actions].sort((x, y) => (x.type === "sell" ? 0 : 1) - (y.type === "sell" ? 0 : 1));
+        const ordered = [...res.actions].filter(a => !exitsOnly || a.type === "sell")
+          .sort((x, y) => (x.type === "sell" ? 0 : 1) - (y.type === "sell" ? 0 : 1));
         // an entry must survive confirmTicks consecutive ticks (filters one-tick stale quotes), and
         // nothing is bought in the first warm-up seconds after starting (no state history yet)
         const seen = {};
@@ -404,21 +536,99 @@ function App() {
             if (seen[a.ticker] < (cfgNow.confirmTicks || 1)) continue;
             if (Date.now() - st.sessionStart < 15000) continue;
           }
+          if (exitsOnly) addLog("info", `Stream: ${a.ticker} price moved — acting immediately`);
           await execute(a, gamesById()[a.gameId]);
         }
-        st.candSeen = seen;
-        if (st.killed && !res.actions.some(a => a.type === "sell") && Object.keys(input.positions).length === 0) {
+        if (!exitsOnly) st.candSeen = seen;
+        if (!exitsOnly && st.killed && !res.actions.some(a => a.type === "sell") && Object.keys(input.positions).length === 0) {
           st.killed = false; setRunning(false); addLog("info", "Kill switch complete: all bot positions closed, auto mode stopped.");
         }
       }
-      setErr("");
-    } catch (e) {
-      setErr(e.message);
-    } finally {
-      tickingRef.current = false;
-      setLastTick(Date.now()); setTickMs(Math.round(performance.now() - t0));
+    } finally { decidingRef.current = false; }
+  }
+
+  // ── Kalshi WebSocket (via /api/kx-ws relay) ─────────────────────────────────
+  // ticker channel: ~1s price updates for the markets we care about; fill + market_positions in live mode.
+  const stream = useRef({ ws: null, status: "off", tickerSid: null, subTickers: "", backoff: 1000, lastMsg: 0, privateLive: false, msgs: 0, nextId: 1, pending: {} });
+  const [streamInfo, setStreamInfo] = useState({ status: "off" });
+  function hotTickers() {
+    const st = S.current, out = [];
+    for (const g of st.games) {
+      if (g.state !== "in" && !R.current.enabled[g.id]) continue;
+      if (!(R.current.enabled[g.id] || hasPositionInGame(g.id))) continue;
+      for (const m of st.markets[g.id] || []) if (!m.half) out.push(m.ticker);
+    }
+    for (const t of Object.keys(currentPositions())) if (!out.includes(t)) out.push(t);
+    return out.slice(0, 1500);
+  }
+  function wsSend(obj) { const s = stream.current; if (s.ws && s.ws.readyState === 1) { obj.id = s.nextId++; s.ws.send(JSON.stringify(obj)); return obj.id; } return null; }
+  function syncStreamSubscriptions() {
+    const s = stream.current; if (!s.ws || s.ws.readyState !== 1 || s.status !== "live") return;
+    const want = hotTickers(); const key = want.slice().sort().join(",");
+    if (key === s.subTickers) return;
+    if (s.tickerSid != null) wsSend({ cmd: "unsubscribe", params: { sids: [s.tickerSid] } });
+    s.tickerSid = null; s.subTickers = key;
+    if (want.length) { const id = wsSend({ cmd: "subscribe", params: { channels: ["ticker"], market_tickers: want } }); s.pending[id] = "ticker"; }
+  }
+  function connectStream() {
+    const s = stream.current;
+    if (s.ws) return;
+    const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/api/kx-ws";
+    const ws = new WebSocket(url); s.ws = ws; s.status = "connecting"; setStreamInfo({ status: "connecting" });
+    ws.onmessage = (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+      s.lastMsg = Date.now(); s.msgs++;
+      if (m.type === "relay_ready") {
+        s.status = "live"; s.backoff = 1000; s.subTickers = ""; s.tickerSid = null;
+        setStreamInfo({ status: "live" });
+        syncStreamSubscriptions();
+        if (R.current.mode === "live") { const id = wsSend({ cmd: "subscribe", params: { channels: ["fill", "market_positions"] } }); s.pending[id] = "private"; }
+        return;
+      }
+      if (m.type === "relay_error") { s.status = "error"; setStreamInfo({ status: "error", msg: m.msg }); return; }
+      if (m.type === "subscribed") {
+        const what = s.pending[m.id]; delete s.pending[m.id];
+        if (m.msg && m.msg.channel === "ticker") s.tickerSid = m.msg.sid;
+        if (what === "private" || (m.msg && m.msg.channel === "fill")) s.privateLive = true;
+        return;
+      }
+      if (m.type === "error") { addLog("error", `Stream error ${m.msg && m.msg.code}: ${m.msg && m.msg.msg}`); return; }
+      if (m.type === "ticker") return onTicker(m.msg);
+      if (m.type === "fill" || m.type === "market_position") { if (R.current.mode === "live") refreshLivePositions().catch(() => {}); return; }
+    };
+    ws.onclose = (ev) => {
+      s.ws = null; s.privateLive = false; s.tickerSid = null; s.subTickers = "";
+      const wasErr = s.status === "error";
+      s.status = "off"; setStreamInfo(prev => ({ status: wasErr ? "error" : "reconnecting", msg: prev.msg }));
+      s.backoff = Math.min(60000, s.backoff * 2);
+      setTimeout(() => { if (server && server.credentials !== false) connectStream(); }, wasErr ? Math.max(30000, s.backoff) : s.backoff);
+    };
+    ws.onerror = () => {};
+  }
+  const fastTimer = useRef(null);
+  function onTicker(t) {
+    const st = S.current; const tk = t.market_ticker; if (!tk) return;
+    let touched = false;
+    for (const ms of Object.values(st.markets)) {
+      const mk = ms.find(x => x.ticker === tk); if (!mk) continue;
+      const cents = (x) => x == null ? null : Math.round(parseFloat(x) * 100);
+      if (t.yes_bid_dollars != null) mk.yesBid = cents(t.yes_bid_dollars);
+      if (t.yes_ask_dollars != null) mk.yesAsk = cents(t.yes_ask_dollars);
+      mk.noBid = mk.yesAsk != null ? 100 - mk.yesAsk : null; mk.noAsk = mk.yesBid != null ? 100 - mk.yesBid : null;
+      if (t.yes_bid_size_fp != null) mk.yesBidSize = parseFloat(t.yes_bid_size_fp);
+      if (t.yes_ask_size_fp != null) mk.yesAskSize = parseFloat(t.yes_ask_size_fp);
+      if (t.volume_fp != null) mk.volume = parseFloat(t.volume_fp);
+      mk.streamTs = Date.now(); touched = true;
+    }
+    // a held market moved: evaluate exits right away instead of waiting for the next tick
+    if (touched && currentPositions()[tk] && !fastTimer.current) {
+      fastTimer.current = true; sleep(150).then(() => { fastTimer.current = null; decideAndAct({ exitsOnly: true }).catch(() => {}); });
     }
   }
+  useEffect(() => { if (server && server.credentials) connectStream(); }, [server]);
+  useEffect(() => { // (re)subscribe private channels when switching to live
+    if (mode === "live" && stream.current.status === "live" && !stream.current.privateLive) { const id = wsSend({ cmd: "subscribe", params: { channels: ["fill", "market_positions"] } }); stream.current.pending[id] = "private"; }
+  }, [mode]);
 
   function sessionPnl() {
     const st = S.current, pos = currentPositions();
@@ -436,6 +646,24 @@ function App() {
   useEffect(() => {
     let alive = true;
     (async () => { while (alive) { await tick(); await sleep(TICK_MS); } })();
+    // fast lane: ESPN core every ~1.5s (Kalshi live_data every other pass); a score change in a game we hold triggers an exit check
+    (async () => {
+      await sleep(2500);
+      let pass = 0;
+      while (alive) {
+        const t0 = Date.now();
+        try {
+          const st = S.current, before = {};
+          for (const g of st.games) before[g.id] = (st.gameState[g.id] || {}).scoreSig;
+          pass++;
+          await Promise.all([refreshCore(pass).catch(() => {}), pass % 2 === 0 ? refreshKalshiLive().catch(() => {}) : null]);
+          mergeGames();
+          const changed = st.games.some(g => before[g.id] && before[g.id] !== (st.gameState[g.id] || {}).scoreSig && hasPositionInGame(g.id));
+          if (changed) decideAndAct({ exitsOnly: true }).catch(() => {});
+        } catch (e) {}
+        await sleep(Math.max(300, 1500 - (Date.now() - t0)));
+      }
+    })();
     return () => { alive = false; };
   }, []);
 
@@ -508,6 +736,7 @@ function App() {
         <a href="cfb.html" style={{ fontSize: 9, color: T.muted, letterSpacing: 1 }}>CFB SIM</a>
         <div style={{ flex: 1 }} />
         <ServerBadge server={server} />
+        <StreamBadge info={streamInfo} s={stream.current} />
         {mode === "live" && balance != null && <span style={{ fontSize: 10, color: T.muted }}>Kalshi balance <b style={{ color: T.text }}>{fmt$(balance)}</b></span>}
         <span style={{ fontSize: 9, color: T.muted }}>{lastTick ? `tick ${tickMs}ms · ${Math.round((Date.now() - lastTick) / 1000)}s ago` : "starting…"}</span>
       </div>
@@ -684,6 +913,12 @@ function Toggle({ on, onClick }) {
     </button>
   );
 }
+function StreamBadge({ info, s }) {
+  const c = info.status === "live" ? T.green : info.status === "error" ? T.red : T.muted;
+  const label = info.status === "live" ? `stream live${s.lastMsg ? " · " + Math.max(0, Math.round((Date.now() - s.lastMsg) / 1000)) + "s" : ""}`
+    : info.status === "error" ? "stream error" : info.status === "off" ? "stream off (polling)" : "stream " + info.status;
+  return <span title={info.msg || ""} style={{ fontSize: 9, color: c }}>● {label}</span>;
+}
 function ServerBadge({ server }) {
   if (!server) return <span style={{ fontSize: 9, color: T.muted }}>checking server…</span>;
   if (server.error) return <span style={{ fontSize: 9, color: T.red }}>server: {server.error}</span>;
@@ -703,7 +938,9 @@ function GameCard({ g, v, pre, gs, on, toggle }) {
     <div style={{ ...card, borderColor: on ? T.green + "88" : T.border }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
         <Toggle on={on} onClick={toggle} />
-        <div style={{ flex: 1, fontSize: 9, color: T.muted }}>{g.detail}{g.broadcast ? " · " + g.broadcast : ""}</div>
+        <div style={{ flex: 1, fontSize: 9, color: T.muted }}>{g.feed !== "espn" && g.state === "in" && g.statusName !== "STATUS_HALFTIME" ? `Q${g.period} ${g.clock}` : g.detail}{g.broadcast ? " · " + g.broadcast : ""}
+          <span style={{ marginLeft: 6, color: g.feed === "espn" ? T.dim : T.green }}>{g.feed === "core" ? "● espn core" : g.feed === "kalshi" ? "● kalshi feed" : "espn scoreboard"}</span>
+          {g.reviewPending && <span style={{ marginLeft: 6, color: T.gold }}>review/PAT</span>}</div>
         {!gs || !gs.suffix ? <span style={{ fontSize: 8, color: T.red }}>no Kalshi match</span> : freeze ? <span style={{ fontSize: 8, color: T.gold }}>catching up…</span> : null}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr auto", rowGap: 2, fontSize: 13, fontWeight: 700 }}>
@@ -747,7 +984,7 @@ const CFG_FIELDS = [
   ["Entries", [
     ["entryEdge", "Min edge after fees (¢)"], ["minPrice", "Min contract price (¢)"], ["maxPrice", "Max contract price (¢)"],
     ["maxQuoteWidth", "Max bid/ask width (¢)"], ["minVolume", "Min market volume"], ["noEntryLastSecs", "No entries in final (sec)"],
-    ["cooldownSecs", "Re-entry cooldown (sec)"], ["gameTimeoutSecs", "Game timeout after stop-loss (sec)"], ["blowoutMargin", "No 2nd-half entries when lead ≥"], ["reentryEdgeBonus", "Extra edge to re-enter (¢)"], ["maxPositionsPerGame", "Max positions per game"],
+    ["cooldownSecs", "Re-entry cooldown (sec)"], ["gameTimeoutSecs", "Game timeout after stop-loss (sec)"], ["maxStopsPerGame", "Done with a game after N stop-losses"], ["blowoutMargin", "No 2nd-half entries when lead ≥"], ["reentryEdgeBonus", "Extra edge to re-enter (¢)"], ["maxPositionsPerGame", "Max positions per game"],
     ["freezeAfterScoreSecs", "Pause after a score (sec)"], ["confirmTicks", "Edge must hold for N ticks"], ["marketJumpCents", "Market-jump freeze trigger (¢)"], ["alpha", "Weight on own model (0 = pure market)", 0.05],
   ]],
   ["Cash-out rules", [
@@ -780,6 +1017,7 @@ function ConfigPanel({ cfg, setCfg, mode, onResetPaper, server }) {
           <label key={k}><input type="checkbox" checked={!!cfg.kinds[k]} onChange={e => set("kinds", { ...cfg.kinds, [k]: e.target.checked })} /> trade {k === "win" ? "moneyline" : k === "spread" ? "spreads" : "totals"}</label>
         ))}
         <label><input type="checkbox" checked={!!cfg.restingTakeProfit} onChange={e => set("restingTakeProfit", e.target.checked)} /> rest a take-profit sell on Kalshi after each buy</label>
+        <label>game feed <select value={cfg.liveFeed || "auto"} onChange={e => set("liveFeed", e.target.value)} style={{ background: T.bg, color: T.text, border: "1px solid " + T.border, fontSize: 9 }}><option value="auto">Auto (fastest)</option><option value="core">ESPN core</option><option value="kalshi">Kalshi (Stats Perform)</option><option value="espn">ESPN scoreboard</option></select></label>
         <label><input type="checkbox" checked={!!cfg.manageManual} onChange={e => set("manageManual", e.target.checked)} /> also manage CFB positions I opened myself (live)</label>
         <div style={{ flex: 1 }} />
         <button style={{ ...btnBase, padding: "4px 8px", fontSize: 8 }} onClick={() => setCfg({ ...CFB.DEFAULT_CONFIG })}>RESET RULES</button>

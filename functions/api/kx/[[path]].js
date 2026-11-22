@@ -3,7 +3,7 @@
 import { kalshiFetch, checkOrder, hasCredentials } from "../../../lib/kalshi.js";
 
 const PUBLIC_GET = [/^\/markets(\/[A-Z0-9.-]+(\/orderbook|\/trades)?)?$/, /^\/markets\/trades$/, /^\/events(\/[A-Z0-9.-]+)?$/,
-  /^\/series(\/[A-Z0-9.-]+)?$/, /^\/exchange\/status$/, /^\/milestones(\/[\w-]+)?$/, /^\/live_data\/milestone\/[\w-]+(\/game_stats)?$/];
+  /^\/series(\/[A-Z0-9.-]+)?$/, /^\/exchange\/status$/, /^\/milestones(\/[\w-]+)?$/, /^\/live_data\/milestone\/[\w-]+(\/game_stats)?$/, /^\/live_data\/batch$/];
 const PRIVATE_GET = [/^\/portfolio\/(balance|positions|fills|orders|settlements)$/, /^\/portfolio\/events\/orders\/[\w-]+$/];
 const ORDER_CREATE = /^\/portfolio\/events\/orders$/;
 const ORDER_CANCEL = /^\/portfolio\/events\/orders\/[\w-]+$/;

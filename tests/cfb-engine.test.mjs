@@ -96,3 +96,64 @@ test("decide: one entry per game, no entries when paused/stale/frozen/late/delay
   const b = buys[0];
   assert.ok(b.count * b.limit / 100 <= 10 + 1e-9);
 });
+
+test("Kalshi live feed overlay: score, clock, possession and field position", () => {
+  const g = game({ home: team("h", "TXST", "Texas State", "Texas St", 14), away: team("a", "WSU", "Washington State", "Washington St", 7) });
+  const ms = { details: { home_team_id: "K-TXST", away_team_id: "K-WSU" } };
+  const d = { home_points: 21, away_points: 7, quarter: 3, clock: "12:34", status: "inprogress",
+    situation: { possession_team_id: "K-WSU", side_team_id: "K-WSU", yardline: 30, down: 2, yfd: 7 }, last_updated_ts: 1795307700 };
+  const out = CFB.applyKalshiLive(g, d, ms, false);
+  assert.equal(out.home.score, 21); assert.equal(out.period, 3); assert.equal(out.secondsLeft, 900 + 754);
+  assert.equal(out.possession, "away"); assert.equal(out.yardsToGoal, 70); assert.equal(out.down, 2); assert.equal(out.distance, 7);
+  // ball on the opponent's side
+  const out2 = CFB.applyKalshiLive(g, { ...d, situation: { ...d.situation, side_team_id: "K-TXST", yardline: 12 } }, ms, false);
+  assert.equal(out2.yardsToGoal, 12);
+  // flipped orientation (Kalshi home == ESPN away)
+  const out3 = CFB.applyKalshiLive(g, { ...d, home_points: 7, away_points: 21 }, { details: { home_team_id: "K-WSU", away_team_id: "K-TXST" } }, true);
+  assert.equal(out3.home.score, 21); assert.equal(out3.possession, "away");
+  // halftime and pending review
+  assert.equal(CFB.applyKalshiLive(g, { ...d, status: "halftime" }, ms, false).statusName, "STATUS_HALFTIME");
+  assert.ok(CFB.applyKalshiLive(g, { ...d, is_under_review: true }, ms, false).reviewPending);
+});
+
+test("ESPN core overlay: status clock, play score, possession by team $ref", () => {
+  const g = game({ home: team("2390", "MIA", "Miami", "Miami", 3), away: team("259", "VT", "Virginia Tech", "Virginia Tech", 7) });
+  const ref = (id) => ({ $ref: `http://sports.core.api.espn.com/v2/sports/football/leagues/college-football/seasons/2026/teams/${id}?lang=en` });
+  const c = { status: { displayClock: "11:36", period: 2, type: { name: "STATUS_IN_PROGRESS", state: "in" } },
+    situation: { team: ref("2390"), yardLine: 90, down: 2, distance: 8 }, play: { homeScore: 3, awayScore: 14, text: "pass" } };
+  const out = CFB.applyEspnCore(g, c);
+  assert.equal(out.feed, "core"); assert.equal(out.away.score, 14); assert.equal(out.secondsLeft, 2 * 900 + 696);
+  assert.equal(out.possession, "home"); assert.equal(out.yardsToGoal, 10); assert.equal(out.down, 2);
+  const out2 = CFB.applyEspnCore(g, { ...c, situation: { team: ref("259"), yardLine: 30, down: 1, distance: 10 } });
+  assert.equal(out2.possession, "away"); assert.equal(out2.yardsToGoal, 30);
+  assert.equal(CFB.applyEspnCore(g, { ...c, status: { ...c.status, type: { name: "STATUS_HALFTIME", state: "in" } } }).secondsLeft, 1800);
+  // progress picks the feed with the newer score
+  assert.ok(CFB.feedProgress(out) > CFB.feedProgress(g));
+});
+
+test("decide: stops wait out a delayed game or a pulled, wide book", () => {
+  const g = game();
+  const m = mk("spread", "home", 3.5, 40, 62);   // 22¢ wide
+  const run = (gOver, mOver) => CFB.decide({ now: Date.now(), cfg: { alpha: 0 }, positions: { [m.ticker]: { gameId: "1", side: "yes", count: 10, avgCost: 60 } },
+    games: [{ g: { ...g, ...gOver }, pre: { spreadHome: 3, total: 50 }, dataTs: Date.now(), markets: [{ ...m, ...mOver }], enabled: true }] }).actions.filter(a => a.type === "sell");
+  assert.equal(run({ statusName: "STATUS_DELAYED" }, { yesBid: 40, yesAsk: 42, noBid: 58, noAsk: 60 }).length, 0);
+  assert.equal(run({}, { yesBid: 40, yesAsk: 42, noBid: 58, noAsk: 60 }).length, 1);   // tight quote: stop fires
+});
+
+test("decide: feed lead — a fresh score the market hasn't priced yet is tradable; a market that moved first is not", () => {
+  const markets = [mk("win", "home", 0, 59, 61), mk("win", "away", 0, 39, 41), mk("total", "over", 49.5, 49, 51),
+                   mk("spread", "home", 3.5, 44, 46), mk("spread", "home", 7.5, 30, 32)];
+  const base = (id, gOver, mks, now) => ({ g: game({ id, feed: "core", ...gOver }), pre: { spreadHome: 3, total: 50 }, dataTs: now, markets: mks || markets, enabled: true });
+  const run = (id, gOver, mks, now) => CFB.decide({ now, cfg: { alpha: 0 }, positions: {}, games: [base(id, gOver, mks, now)] }).actions.filter(a => a.type === "buy");
+  const t0 = Date.now();
+  run("L1", {}, markets, t0);                         // first sight: anchor fitted at 14-10, home ball
+  run("L1", {}, markets, t0 + 25000);
+  // home scores a TD (21-10, away ball) per the core feed; Kalshi prices unchanged
+  const b = run("L1", { home: team("h", "TENN", "Tennessee", "Tennessee", 21), possession: "away", yardsToGoal: 75 }, markets, t0 + 26000);
+  assert.ok(b.length === 1 && /FEED LEAD/.test(b[0].reason) && b[0].side === "yes", JSON.stringify(b));
+  // same, but the moneyline had already jumped before the feed showed the score: no lead entry
+  run("L2", {}, markets, t0); run("L2", {}, markets, t0 + 25000);
+  const moved = markets.map(m => m.kind === "win" ? { ...m, yesBid: m.side === "home" ? 74 : 24, yesAsk: m.side === "home" ? 76 : 26 } : m);
+  const b2 = run("L2", { home: team("h", "TENN", "Tennessee", "Tennessee", 21), possession: "away", yardsToGoal: 75 }, moved, t0 + 26000);
+  assert.equal(b2.filter(a => /FEED LEAD/.test(a.reason)).length, 0);
+});
