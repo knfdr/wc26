@@ -94,6 +94,9 @@ function App() {
   const [cfg, setCfg] = useState(() => { const c = { ...CFB.DEFAULT_CONFIG, ...load(LS.cfg, {}) }; if (!c.feedV2) { c.liveFeed = "auto"; c.feedV2 = true; } if (!c.cfgV3) { c.sims = CFB.DEFAULT_CONFIG.sims; c.cfgV3 = true; } return c; });
   const [mode, setMode] = useState(() => load(LS.mode, "paper") === "live" ? "paper" : "paper"); // always boot in paper
   const [running, setRunning] = useState(false);
+  const [runnerSt, setRunnerSt] = useState(null);
+  const [showTab, setShowTab] = useState(() => load("sharp_tab_bot_open", false));
+  useEffect(() => save("sharp_tab_bot_open", showTab), [showTab]);
   const [paused, setPaused] = useState(false);
   const [server, setServer] = useState(null);
   const [balance, setBalance] = useState(null);
@@ -682,6 +685,7 @@ function App() {
 
   // ── Controls ──────────────────────────────────────────────────────────────
   function start() {
+    if (runnerSt && runnerSt.running) return alert("The server auto trader is running. Stop it first so the two don't trade the same games.");
     if (mode === "live") {
       if (!server || !server.credentials) return alert("Kalshi credentials aren't configured on the server yet. See the setup panel.");
       if (!server.tradingEnabled) return alert("KALSHI_TRADING_ENABLED is not set to 1 on the server, so orders would be rejected.");
@@ -764,6 +768,21 @@ function App() {
       <div style={{ maxWidth: 1100, margin: "0 auto", padding: "16px 16px 60px" }}>
         {err && <div style={{ background: T.red + "22", border: "1px solid " + T.red + "44", color: T.red, padding: "8px 12px", fontSize: 10, borderRadius: 4, marginBottom: 12 }}>{err}</div>}
 
+        <ServerRunner cfg={cfg} enabled={enabled} liveGames={liveGames} nEnabled={nEnabled} browserRunning={running} onStatus={setRunnerSt} onRules={() => setShowCfg(true)} onAllOn={() => setEnabled(e => { const n = { ...e }; liveGames.forEach(g => n[g.id] = true); return n; })} />
+
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: -8, marginBottom: 12 }}>
+          <button onClick={() => setShowCfg(s => !s)} style={{ ...btnBase, padding: "4px 10px", fontSize: 8, color: showCfg ? T.text : T.muted }}>⚙ {showCfg ? "HIDE RULES" : "RULES"}</button>
+        </div>
+        {showCfg && <ConfigPanel cfg={cfg} setCfg={setCfg} mode={mode} onResetPaper={resetPaper} server={server} />}
+
+
+        {/* In-tab bot: the older way to run, kept for testing */}
+        <div style={{ marginBottom: 16 }}>
+          <div onClick={() => setShowTab(s => !s)} style={{ fontSize: 9, color: T.muted, cursor: "pointer", letterSpacing: 1, padding: "6px 0", borderBottom: "1px solid " + T.border }}>
+            {showTab || running ? "▾" : "▸"} RUN IN THIS BROWSER TAB INSTEAD <span style={{ color: T.dim }}>(advanced · only trades while this tab stays open and awake)</span>
+            {running && <span style={{ color: mode === "live" ? T.red : T.green, marginLeft: 8, fontWeight: 700 }}>● running ({mode})</span>}
+          </div>
+          {(showTab || running) && <div style={{ marginTop: 10 }}>
         {/* Controls */}
         <div style={{ ...card, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12, borderColor: running ? (mode === "live" ? T.red : T.green) : T.border }}>
           <div style={{ display: "flex", border: "1px solid " + T.border, borderRadius: 4, overflow: "hidden" }}>
@@ -781,12 +800,8 @@ function App() {
           <div style={{ flex: 1 }} />
           {running && <span style={{ fontSize: 10, color: mode === "live" ? T.red : T.green, animation: "pulse 1.5s infinite", fontWeight: 700 }}>● {mode === "live" ? "LIVE — REAL MONEY" : "PAPER TRADING"}</span>}
           <span style={{ fontSize: 9, color: T.muted }}>{nEnabled} game{nEnabled === 1 ? "" : "s"} on auto</span>
-          <button onClick={() => setShowCfg(s => !s)} style={{ ...btnBase, color: T.muted }}>⚙ RULES</button>
+          
         </div>
-
-        {showCfg && <ConfigPanel cfg={cfg} setCfg={setCfg} mode={mode} onResetPaper={resetPaper} server={server} />}
-
-        <ServerRunner cfg={cfg} enabled={enabled} />
 
         {/* Stats */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 10, marginBottom: 14 }}>
@@ -826,6 +841,9 @@ function App() {
                 </table>
               </div>}
         </Section>
+
+          </div>}
+        </div>
 
         {/* Games */}
         <Section label={`Live games (${liveGames.length})`} right={liveGames.length > 0 && <button style={{ ...btnBase, padding: "3px 8px", fontSize: 8 }} onClick={() => setEnabled(e => { const n = { ...e }; const all = liveGames.every(g => n[g.id]); liveGames.forEach(g => n[g.id] = !all); return n; })}>{liveGames.every(g => enabled[g.id]) ? "ALL OFF" : "ALL ON"}</button>}>
@@ -1010,70 +1028,137 @@ const CFG_FIELDS = [
 ];
 
 
-// ── Server-side runner (Cloudflare Durable Object) ───────────────────────────
-// Runs the same engine on Cloudflare, so trading doesn't depend on this tab staying open.
-function ServerRunner({ cfg, enabled }) {
-  const [st, setSt] = useState(null), [err, setErr] = useState(""), [open, setOpen] = useState(() => load("sharp_runner_open", true)), [busy, setBusy] = useState(false);
-  const refresh = useCallback(() => getJSON("/api/runner/status").then(d => { setSt(d); setErr(""); }).catch(e => setErr(e.message)), []);
+// ── Auto trader (runs on Cloudflare) ─────────────────────────────────────────
+// The main control: pick games, pick paper or live, press start. It runs on the server, so this tab can close.
+function ServerRunner({ cfg, enabled, liveGames, nEnabled, browserRunning, onStatus, onRules, onAllOn }) {
+  const [st, setSt] = useState(null), [err, setErr] = useState(""), [busy, setBusy] = useState(false);
+  const [pick, setPick] = useState(() => load("sharp_runner_mode", "paper"));
+  const [acct, setAcct] = useState(null), [synced, setSynced] = useState(null), [showLog, setShowLog] = useState(false);
+  const refresh = useCallback(() => getJSON("/api/runner/status").then(d => { setSt(d); setErr(""); onStatus && onStatus(d); }).catch(e => setErr(e.message)), []);
   useEffect(() => { refresh(); const id = setInterval(refresh, 4000); return () => clearInterval(id); }, [refresh]);
-  useEffect(() => save("sharp_runner_open", open), [open]);
-  const enabledMap = () => { const ids = Object.keys(enabled).filter(k => enabled[k]); return ids.length ? Object.fromEntries(ids.map(k => [k, true])) : { all: true }; };
+  useEffect(() => save("sharp_runner_mode", pick), [pick]);
+  const running = !!(st && st.running), mode = running ? st.mode : pick, isLive = mode === "live";
+  // Kalshi connection check whenever live is picked (read-only balance call on the runner)
+  useEffect(() => {
+    if (!isLive) return;
+    let alive = true;
+    const go = () => getJSON("/api/runner/account").then(a => alive && setAcct(a)).catch(e => alive && setAcct({ connected: false, error: e.message }));
+    go(); const id = setInterval(go, 30000); return () => { alive = false; clearInterval(id); };
+  }, [isLive]);
+  const enabledMap = () => Object.fromEntries(Object.keys(enabled).filter(k => enabled[k]).map(k => [k, true]));
+  // while running, rule and game changes on this page go to the server automatically
+  const sig = JSON.stringify([cfg, enabledMap()]);
+  const lastSent = useRef(null);
+  useEffect(() => {
+    if (!running) { lastSent.current = null; return; }
+    if (lastSent.current === null) { lastSent.current = sig; return; }
+    if (lastSent.current === sig) return;
+    const id = setTimeout(() => sendJSON("POST", "/api/runner/config", { cfg, enabled: enabledMap() })
+      .then(() => { lastSent.current = sig; setSynced(Date.now()); }).catch(e => setErr("couldn't send rules: " + e.message)), 1200);
+    return () => clearTimeout(id);
+  }, [sig, running]);
   async function call(path, body) {
     setBusy(true);
-    try { await sendJSON("POST", "/api/runner/" + path, body || {}); setErr(""); refresh(); }
-    catch (e) { setErr(e.message); alert("Server runner: " + e.message); }
+    try { const d = await sendJSON("POST", "/api/runner/" + path, body || {}); setSt(s => ({ ...s, ...d })); setErr(""); refresh(); }
+    catch (e) { setErr(e.message); alert("Auto trader: " + e.message); }
     finally { setBusy(false); }
   }
-  function startLive() {
-    if (!st || !st.credentials) return alert("The runner doesn't have Kalshi credentials yet (KALSHI_PRIVATE_KEY on the wc26-runner Worker).");
-    if (!st.tradingEnabled) return alert("KALSHI_TRADING_ENABLED is not 1 on the wc26-runner Worker, so orders would be rejected.");
-    const typed = prompt("SERVER LIVE MODE places real orders on Kalshi from Cloudflare, even with this tab closed.\n\nMax per entry: $" + Math.min(cfg.maxStake, 25) + " · max open: $" + cfg.maxTotalExposure + " · stop for the night at -$" + cfg.maxDailyLoss + "\n\nType LIVE to start.");
-    if (typed === "LIVE") call("start", { mode: "live", confirm: "LIVE", cfg, enabled: enabledMap() });
+  const checks = [
+    { ok: nEnabled > 0, label: nEnabled > 0 ? `${nEnabled} game${nEnabled === 1 ? "" : "s"} picked` : "Pick games with the toggles below",
+      fix: nEnabled === 0 && liveGames.length > 0 ? <a style={{ color: T.accent, cursor: "pointer" }} onClick={onAllOn}>turn on all live games</a> : null },
+    { ok: true, label: `Rules: up to $${Math.min(cfg.maxStake, 25)} per entry · $${Math.min(cfg.maxTotalExposure, 150)} open · stops for the night at −$${cfg.maxDailyLoss}`,
+      fix: <a style={{ color: T.accent, cursor: "pointer" }} onClick={onRules}>change</a> },
+  ];
+  if (isLive) {
+    checks.push({ ok: !!(acct && acct.connected), label: !acct ? "Checking the Kalshi connection…" : acct.connected ? `Kalshi connected · ${fmt$(acct.cash)} cash` : `Kalshi not connected (${acct.error})` });
+    checks.push({ ok: !!(st && st.tradingEnabled), label: st && st.tradingEnabled ? "Live trading switch is on" : "Live trading switch is off on the server",
+      fix: st && !st.tradingEnabled ? <span style={{ color: T.muted }}>turn it on in a terminal: <code style={{ color: T.text }}>cd ~/Documents/Apps/wc26/runner && echo 1 | npx --yes wrangler@3 secret put KALSHI_TRADING_ENABLED</code></span> : null });
+  }
+  if (browserRunning) checks.push({ ok: false, label: "The in-tab bot below is running. Stop it first so the two don't trade the same games." });
+  const ready = st && checks.every(c => c.ok);
+  function start() {
+    if (!ready) return;
+    if (isLive) {
+      const typed = prompt(`LIVE: the server will place real-money orders on Kalshi, even with this page closed.\n\nUp to $${Math.min(cfg.maxStake, 25)} per entry · $${Math.min(cfg.maxTotalExposure, 150)} open at once · stops for the night at −$${cfg.maxDailyLoss}\n\nType LIVE to start.`);
+      if (typed !== "LIVE") return;
+      call("start", { mode: "live", confirm: "LIVE", cfg, enabled: enabledMap() });
+    } else call("start", { mode: "paper", cfg, enabled: enabledMap() });
   }
   const ago = (ts) => ts ? Math.max(0, Math.round((Date.now() - ts) / 1000)) + "s ago" : "never";
-  const stale = st && st.running && st.lastTick && Date.now() - st.lastTick > 90000;
+  const stale = running && st.lastTick && Date.now() - st.lastTick > 90000;
   const pnl = st ? (st.realized || 0) + (st.open || 0) : 0;
-  const color = st && st.running ? (st.mode === "live" ? T.red : T.green) : T.muted;
+  const accent = running ? (isLive ? T.red : T.green) : T.border;
+  const big = { ...btnBase, padding: "10px 18px", fontSize: 11 };
   return (
-    <div style={{ background: T.navy2, border: "1px solid " + (st && st.running ? color : T.border), borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: T.text, cursor: "pointer" }} onClick={() => setOpen(o => !o)}>{open ? "▾" : "▸"} SERVER RUNNER</span>
-        <span style={{ fontSize: 9, color: T.muted }}>runs on Cloudflare · no tab needed</span>
-        {err && <span style={{ fontSize: 9, color: T.red }}>{err}</span>}
-        {st && <span style={{ fontSize: 9, color, fontWeight: 700 }}>
-          {st.running ? "● " + st.mode.toUpperCase() + (st.killed ? " · KILLING" : "") + " · tick " + ago(st.lastTick) + " (" + st.tickMs + "ms) · " + st.games + " live" : "○ stopped"}{stale ? " · ⚠ no tick for 90s" : ""}</span>}
-        {st && <span style={{ fontSize: 9, color: pnl >= 0 ? T.green : T.red }}>{st.mode} P&L {fmtSigned$(pnl)} · {st.record.n} trades ({st.record.wins}W)</span>}
+    <div style={{ ...card, borderColor: accent, borderWidth: running ? 2 : 1, marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: T.text }}>AUTO TRADER</div>
+          <div style={{ fontSize: 9, color: T.muted, marginTop: 2 }}>Runs on the server. You can close this page once it's started.</div>
+        </div>
         <div style={{ flex: 1 }} />
-        {st && !st.running && <button disabled={busy} onClick={() => call("start", { mode: "paper", cfg, enabled: enabledMap() })} style={{ ...btnBase, color: T.green, borderColor: T.green }}>▶ SERVER PAPER</button>}
-        {st && !st.running && <button disabled={busy} onClick={startLive} style={{ ...btnBase, color: T.red, borderColor: T.red }}>▶ SERVER LIVE $</button>}
-        {st && st.running && <button disabled={busy} onClick={() => call("config", { cfg, enabled: enabledMap() })} style={{ ...btnBase, color: T.muted }}>⇪ SEND RULES</button>}
-        {st && st.running && <button disabled={busy} onClick={() => call("stop")} style={{ ...btnBase, color: T.gold, borderColor: T.gold }}>■ STOP</button>}
-        {st && <button disabled={busy} onClick={() => { if (confirm("Cash out every server-runner position and stop?")) call("kill"); }} style={{ ...btnBase, color: T.red, borderColor: T.red }}>✕ KILL</button>}
+        <div style={{ display: "flex", border: "1px solid " + T.border, borderRadius: 4, overflow: "hidden", opacity: running ? 0.5 : 1 }} title={running ? "Stop before switching" : ""}>
+          {["paper", "live"].map(m => (
+            <button key={m} disabled={running} onClick={() => setPick(m)} style={{ ...btnBase, border: "none", borderRadius: 0, background: mode === m ? (m === "live" ? T.red : T.blue) + "33" : "transparent", color: mode === m ? (m === "live" ? T.red : T.blue) : T.muted }}>
+              {m === "paper" ? "PAPER (practice)" : "LIVE $"}
+            </button>))}
+        </div>
+        {!running && <button disabled={busy || !ready} onClick={start} style={{ ...big, background: (isLive ? T.red : T.green) + (ready ? "33" : "11"), borderColor: isLive ? T.red : T.green, color: isLive ? T.red : T.green, opacity: ready ? 1 : 0.5, cursor: ready ? "pointer" : "not-allowed" }}>
+          ▶ START {isLive ? "LIVE" : "PAPER"}</button>}
+        {running && <button disabled={busy} onClick={() => call("stop")} style={{ ...big, color: T.gold, borderColor: T.gold }}>■ STOP</button>}
+        {(running || (st && st.positions.length > 0)) && <button disabled={busy} onClick={() => { if (confirm("Cash out every auto-trader position now and stop?")) call("kill"); }} style={{ ...big, color: T.red, borderColor: T.red }}>✕ CASH OUT ALL</button>}
       </div>
-      {open && st && (
-        <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 10 }}>
+
+      {err && <div style={{ fontSize: 9, color: T.red, marginTop: 8 }}>{err}</div>}
+      {!st && !err && <div style={{ fontSize: 9, color: T.muted, marginTop: 8 }}>Connecting to the server…</div>}
+
+      {st && !running && (
+        <div style={{ marginTop: 10, display: "grid", gap: 4 }}>
+          {checks.map((c, i) => (
+            <div key={i} style={{ fontSize: 10, color: c.ok ? T.text : T.gold, display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <span style={{ color: c.ok ? T.green : T.gold, width: 12 }}>{c.ok ? "✓" : "○"}</span><span>{c.label}</span>{c.fix && <span style={{ fontSize: 9 }}>· {c.fix}</span>}
+            </div>))}
+        </div>)}
+
+      {st && running && (
+        <div style={{ marginTop: 10, fontSize: 10, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ color: accent, fontWeight: 700, animation: "pulse 1.5s infinite" }}>● {isLive ? "LIVE · REAL MONEY" : "PAPER TRADING"}{st.killed ? " · CASHING OUT" : ""}</span>
+          <span style={{ color: stale ? T.red : T.muted }}>{stale ? "⚠ server hasn't checked in for 90s" : `checking ${st.games} live games · last ${ago(st.lastTick)}`}</span>
+          <span style={{ color: pnl >= 0 ? T.green : T.red, fontWeight: 700 }}>P&L {fmtSigned$(pnl)}</span>
+          <span style={{ color: T.muted }}>{st.record.n} trades · {st.record.wins}W-{st.record.n - st.record.wins}L</span>
+          <span style={{ color: T.muted }}>{nEnabled} games picked{synced ? " · rule changes sent " + new Date(synced).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : " · rule and game changes here are sent automatically"}</span>
+        </div>)}
+
+      {st && (st.positions.length > 0 || st.trades.length > 0 || running) && (
+        <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 12, borderTop: "1px solid " + T.border, paddingTop: 10 }}>
           <div>
-            <div style={{ fontSize: 9, color: T.muted, marginBottom: 4 }}>POSITIONS ({st.positions.length})</div>
-            {st.positions.length === 0 && <div style={{ fontSize: 9, color: T.dim }}>none</div>}
+            <div style={{ fontSize: 8, letterSpacing: 2, color: T.muted, marginBottom: 4 }}>OPEN POSITIONS ({st.positions.length})</div>
+            {st.positions.length === 0 && <div style={{ fontSize: 9, color: T.dim }}>none: waiting for a fresh score to trade</div>}
             {st.positions.map(p => (
-              <div key={p.ticker} style={{ fontSize: 9, color: T.text, display: "flex", gap: 6 }}>
-                <span style={{ flex: 1 }}>{p.label} {p.side.toUpperCase()}{p.lead ? " ⚡" : ""}{p.unmanaged ? " (yours)" : ""}</span>
-                <span>{p.count}× {p.avgCost}¢ → {p.bid == null ? "—" : p.bid}¢</span>
+              <div key={p.ticker} style={{ fontSize: 10, color: T.text, display: "flex", gap: 6 }}>
+                <span style={{ flex: 1 }}>{p.label} {p.side.toUpperCase()}{p.lead ? " ⚡" : ""}{p.unmanaged ? " (yours, not managed)" : ""}</span>
+                <span>{p.count}× {p.avgCost}¢ → {p.bid == null ? "—" : p.bid + "¢"}</span>
                 <span style={{ color: p.bid != null && p.bid >= p.avgCost ? T.green : T.red }}>{p.bid != null ? fmtSigned$((p.bid - p.avgCost) * p.count / 100) : ""}</span>
               </div>))}
-            <div style={{ fontSize: 9, color: T.muted, margin: "8px 0 4px" }}>RECENT TRADES</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 8, letterSpacing: 2, color: T.muted, marginBottom: 4 }}>RECENT TRADES</div>
+            {st.trades.length === 0 && <div style={{ fontSize: 9, color: T.dim }}>none yet</div>}
             {st.trades.slice(0, 8).map((t, i) => (
-              <div key={i} style={{ fontSize: 9, color: T.text, display: "flex", gap: 6 }}>
+              <div key={i} style={{ fontSize: 10, color: T.text, display: "flex", gap: 6 }}>
                 <span style={{ flex: 1 }}>{new Date(t.ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} {t.label}{t.lead ? " ⚡" : ""}</span>
                 <span>{t.entry}→{t.exit}¢</span><span style={{ color: t.pnl >= 0 ? T.green : T.red }}>{fmtSigned$(t.pnl)}</span>
               </div>))}
           </div>
-          <div style={{ maxHeight: 180, overflowY: "auto" }}>
-            <div style={{ fontSize: 9, color: T.muted, marginBottom: 4 }}>SERVER LOG</div>
-            {(st.log || []).slice(0, 40).map((l, i) => (
-              <div key={i} style={{ fontSize: 9, color: l.kind === "error" || l.kind === "loss" ? T.red : l.kind === "win" ? T.green : T.muted }}>
-                {new Date(l.ts).toLocaleTimeString()} {l.msg}</div>))}
-          </div>
+        </div>)}
+
+      {st && (st.log || []).length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <a style={{ fontSize: 9, color: T.muted, cursor: "pointer" }} onClick={() => setShowLog(s => !s)}>{showLog ? "▾ hide server log" : "▸ server log"}</a>
+          {showLog && <div style={{ maxHeight: 180, overflowY: "auto", marginTop: 4 }}>
+            {st.log.slice(0, 60).map((l, i) => (
+              <div key={i} style={{ fontSize: 9, color: l.kind === "error" || l.kind === "loss" ? T.red : l.kind === "win" ? T.green : T.muted }}>{new Date(l.ts).toLocaleTimeString()} {l.msg}</div>))}
+          </div>}
         </div>)}
     </div>
   );

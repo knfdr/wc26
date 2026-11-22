@@ -3,6 +3,7 @@
 //
 // Control API (all require header X-Runner-Token = env.RUNNER_TOKEN; the site reaches it via /api/runner/*):
 //   GET  /status                 state, P&L, positions, recent log
+//   GET  /account                Kalshi connection check + cash balance (read-only)
 //   POST /start   {mode, cfg?, enabled?}   mode "paper" | "live" ("live" also needs confirm:"LIVE")
 //   POST /stop                   stop entries and the loop (positions are kept)
 //   POST /kill                   sell every bot position, then stop
@@ -60,6 +61,16 @@ export class Runner {
     const url = new URL(request.url), path = url.pathname.replace(/^\/+/, "").replace(/^api\/runner\/?/, "");
     const body = request.method === "POST" ? await request.json().catch(() => ({})) : {};
     if (path === "status" || path === "") return json(this.status(url.searchParams.get("log") !== "0"));
+    if (path === "account") {   // read-only: proves the runner's Kalshi key works, for the page's readiness checklist
+      if (!hasCredentials(this.env)) return json({ connected: false, error: "no Kalshi key on the runner" });
+      try {
+        const r = await kalshiFetch(this.env, "GET", "/portfolio/balance");
+        if (r.status !== 200) return json({ connected: false, error: "Kalshi said " + r.status });
+        const b = JSON.parse(r.text);
+        const d = (dollars, cents) => dollars != null ? parseFloat(dollars) : (cents || 0) / 100;
+        return json({ connected: true, cash: d(b.balance_dollars, b.balance), portfolio: d(b.portfolio_value_dollars, b.portfolio_value) });
+      } catch (e) { return json({ connected: false, error: e.message }); }
+    }
     if (request.method !== "POST") return json({ error: "POST required" }, 405);
     if (path === "start") {
       const mode = body.mode === "live" ? "live" : "paper";
