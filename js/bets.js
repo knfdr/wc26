@@ -125,8 +125,10 @@
     function blank() { return { w: 0, l: 0, p: 0, pending: 0, STRONG: { w: 0, l: 0, p: 0, pending: 0 }, GOOD: { w: 0, l: 0, p: 0, pending: 0 } }; }
     for (const b of bets || []) {
       const t = recTier(b.tier); if (!t) continue;
+      // old sportsbook-era picks still pending can never settle now: leave them out
+      if (b.result === "pending" && !b.ticker && (b.gameDate || b.loggedAt) && Date.now() - new Date(b.gameDate || b.loggedAt) > 14 * 864e5) continue;
       const sp = SPORT_KEY[b.sport] || String(b.sport || "").toLowerCase();
-      const k = b.result === "win" ? "w" : b.result === "loss" ? "l" : b.result === "push" ? "p" : "pending";
+      const k =b.result === "win" ? "w" : b.result === "loss" ? "l" : b.result === "push" ? "p" : "pending";
       for (const r of [out.all, out.bySport[sp] || (out.bySport[sp] = blank())]) { r[k]++; r[t][k]++; }
     }
     return out;
