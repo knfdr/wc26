@@ -13,13 +13,27 @@ function page(status, title, body) {
 <body><div class="c"><h1>${esc(title)}</h1>${body}</div></body></html>`, { status, headers: { "Content-Type": "text/html;charset=UTF-8", "Cache-Control": "no-store" } });
 }
 
+// Badge styles use the design system's tokens (css/sharp.css), so it follows the light/dark theme; the fallbacks
+// are the dark theme, for any page that doesn't load the stylesheet. The tiny script applies the saved theme
+// choice (js/ui.js's "sharp_theme") on pages that don't run ui.js.
+const BADGE_HEAD = `<style id="ss-auth-css">
+#ss-auth{position:fixed;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:60;display:flex;gap:10px;align-items:center;max-width:calc(100vw - 24px);box-sizing:border-box;
+background:color-mix(in srgb,var(--surface,#13161b) 92%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
+border:1px solid var(--line-strong,rgba(255,255,255,.14));border-radius:999px;padding:6px 12px;box-shadow:var(--shadow,0 8px 24px rgba(0,0,0,.25));
+font:500 12px/1.3 var(--font,system-ui,-apple-system,sans-serif);color:var(--muted,#7f8896)}
+#ss-auth .ss-auth-email{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+#ss-auth .ss-auth-role{font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--text,#eef1f5);background:var(--surface-3,#232833);border-radius:999px;padding:2px 7px}
+#ss-auth a{color:var(--text-2,#b4bcc8);text-decoration:none;white-space:nowrap;font-weight:600}
+#ss-auth a:hover{color:var(--text,#eef1f5);text-decoration:underline}
+@media (max-width:480px){#ss-auth .ss-auth-email{max-width:38vw}}
+@media print{#ss-auth{display:none}}
+</style><script>try{var t=localStorage.getItem("sharp_theme");if(t==="dark"||t==="light")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>`;
+
 function badge(user, signOut) {
-  const owner = user.role === "owner";
-  return `<div id="ss-auth" style="position:fixed;right:10px;bottom:10px;z-index:2147483000;display:flex;gap:8px;align-items:center;max-width:calc(100vw - 20px);box-sizing:border-box;background:#0b1424ee;border:1px solid #1a2a3e;border-radius:6px;padding:5px 9px;font:10px/1.3 'IBM Plex Mono','Courier New',monospace;color:#9fb0c6">`
-    + `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(user.email)}</span>`
-    + (owner ? `<span style="color:#e8c547;letter-spacing:1px">OWNER</span>` : "")
-    + `<a href="/account" style="color:#38bdf8;text-decoration:underline;white-space:nowrap">Account</a>`
-    + `<a href="${signOut}" style="color:#dde5f0;text-decoration:underline;white-space:nowrap">Sign out</a></div>`;
+  return `<div id="ss-auth" role="navigation" aria-label="Account">`
+    + `<span class="ss-auth-email" title="${esc(user.email)}">${esc(user.email)}</span>`
+    + (user.role === "owner" ? `<span class="ss-auth-role">OWNER</span>` : "")
+    + `<a href="/account">Account</a><a href="${signOut}">Sign out</a></div>`;
 }
 
 export async function onRequest(context) {
@@ -59,7 +73,7 @@ export async function onRequest(context) {
 
   // Pages are now per-person (badge, role), so they must not be cached and shared.
   const out = new HTMLRewriter()
-    .on("head", { element(el) { el.prepend(`<script>window.SS_USER=${JSON.stringify({ email: user.email, role: user.role }).replace(/</g, "\\u003c")}</script>`, { html: true }); } })
+    .on("head", { element(el) { el.prepend(`<script>window.SS_USER=${JSON.stringify({ email: user.email, role: user.role }).replace(/</g, "\\u003c")}</script>`, { html: true }); el.append(BADGE_HEAD, { html: true }); } })
     .on("body", { element(el) { el.append(badge(user, signOut), { html: true }); } })
     .transform(res);
   const h = new Headers(out.headers);
